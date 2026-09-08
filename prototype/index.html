@@ -1,0 +1,4198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OCEAN-X · Ocean Model–Observation Explorer</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Widgets/widgets.css">
+    <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/';</script>
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.119.0/Build/Cesium/Cesium.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+    <style>
+        /* ================================================================
+   OCEAN-X — final design system
+   Calm, precise, scientific. Inter for interface, IBM Plex Mono
+   for technical values. Neutral surfaces; the ocean field
+   supplies the color. The scene is the hero; the UI frames it.
+   ================================================================ */
+        :root {
+            --bg: #05080e;
+            --panel: #0c121d;
+            --panel-2: #111a29;
+            --overlay: rgba(9, 14, 23, .88);
+            --line: rgba(150, 172, 202, .13);
+            --line-strong: rgba(150, 172, 202, .24);
+            --t1: #e8edf4;
+            --t2: #a9b4c5;
+            --t3: #7a879c;
+            --blue: #4da3d8;
+            /* ocean / model / view time        */
+            --blue-dim: rgba(77, 163, 216, .16);
+            --seafoam: #7fd4c1;
+            /* observation                      */
+            --amber: #d9a45b;
+            /* match / matched time             */
+            --green: #58c48a;
+            --red: #d96b57;
+            --font: 'Inter', system-ui, sans-serif;
+            --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+            --r: 8px;
+            --ease: cubic-bezier(.25, .9, .3, 1);
+            --shadow: 0 14px 36px rgba(0, 0, 0, .45);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        [hidden] {
+            display: none !important
+        }
+
+        html,
+        body {
+            height: 100%
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--t1);
+            font: 12.5px/1.5 var(--font);
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased
+        }
+
+        .mono {
+            font-family: var(--mono)
+        }
+
+        ::selection {
+            background: rgba(77, 163, 216, .28)
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(120, 140, 170, .24);
+            border-radius: 4px
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent
+        }
+
+        button {
+            font-family: var(--font);
+            color: inherit
+        }
+
+        svg {
+            display: block
+        }
+
+        /* ---------- motion language ---------- */
+        @keyframes rise {
+            from {
+                opacity: 0;
+                transform: translateY(9px)
+            }
+
+            to {
+                opacity: 1;
+                transform: none
+            }
+        }
+
+        @keyframes softin {
+            from {
+                opacity: 0
+            }
+
+            to {
+                opacity: 1
+            }
+        }
+
+        @keyframes attract {
+            0% {
+                box-shadow: 0 0 0 0 rgba(77, 163, 216, 0)
+            }
+
+            25% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, .30)
+            }
+
+            70% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, .12)
+            }
+
+            100% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, 0)
+            }
+        }
+
+        .reveal-o {
+            opacity: 0;
+            transition: opacity .55s var(--ease)
+        }
+
+        body:not(.intro-on) .reveal-o {
+            opacity: 1
+        }
+
+        /* ---------- scene + atmosphere ---------- */
+        #cesium-container {
+            position: fixed;
+            inset: 0;
+            z-index: 0
+        }
+
+        #shade {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2;
+            background: radial-gradient(120% 90% at 50% 38%, transparent 50%, rgba(2, 5, 10, .5) 100%)
+        }
+
+        #credit-container {
+            position: fixed;
+            right: 10px;
+            bottom: 6px;
+            font: 9px var(--font);
+            color: #48586f;
+            opacity: .55;
+            pointer-events: auto;
+            max-width: 40%;
+            overflow: hidden;
+            text-align: right;
+            z-index: 6
+        }
+
+        #credit-container a {
+            color: #5d6f8a
+        }
+
+        #credit-container .cesium-credit-logoContainer {
+            display: none !important
+        }
+
+        .fatal {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--amber);
+            font: 13px var(--mono);
+            background: rgba(4, 8, 15, .94);
+            z-index: 200;
+            text-align: center;
+            padding: 0 40px
+        }
+
+        /* ---------- header ---------- */
+        #app-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 48px;
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 0 18px;
+            background: rgba(8, 13, 21, .92);
+            border-bottom: 1px solid var(--line);
+            transition: opacity .5s var(--ease) .1s, transform .5s var(--ease) .1s
+        }
+
+        body.intro-on #app-header {
+            opacity: 0;
+            transform: translateY(-8px);
+            pointer-events: none
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 11px
+        }
+
+        .brand-name {
+            font: 600 15px var(--font);
+            letter-spacing: .045em;
+            color: var(--t1)
+        }
+
+        .brand-desc {
+            font: 11px var(--font);
+            color: var(--t3);
+            margin-top: 1px
+        }
+
+        .hdr-meta {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11.5px
+        }
+
+        .hdr-meta .m {
+            color: var(--t3)
+        }
+
+        .hdr-meta .sep {
+            color: #2c3a50
+        }
+
+        .hdr-ds {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--t2)
+        }
+
+        .hdr-var {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--t2)
+        }
+
+        .hdr-var i {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--blue)
+        }
+
+        .icon-btn {
+            width: 28px;
+            height: 28px;
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--t3);
+            cursor: pointer;
+            transition: color 150ms var(--ease), border-color 150ms var(--ease),
+                background 150ms var(--ease), transform 150ms var(--ease)
+        }
+
+        .icon-btn:hover {
+            color: var(--t1);
+            border-color: var(--line-strong);
+            background: var(--panel-2)
+        }
+
+        .icon-btn:active {
+            transform: scale(.95)
+        }
+
+        .icon-btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55);
+            outline-offset: 1px
+        }
+
+        @media (max-width:1050px) {
+
+            .hdr-meta .m,
+            .hdr-meta .sep {
+                display: none
+            }
+        }
+
+        /* prototype status popover — scientific honesty lives here */
+        #info-pop {
+            position: fixed;
+            top: 54px;
+            right: 14px;
+            width: 312px;
+            z-index: 60;
+            background: var(--overlay);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            box-shadow: var(--shadow);
+            padding: 14px 16px;
+            animation: softin 180ms var(--ease)
+        }
+
+        #info-pop h3 {
+            font: 600 12px var(--font);
+            color: var(--t1);
+            margin-bottom: 10px
+        }
+
+        .ip-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 5px 0;
+            border-top: 1px solid var(--line);
+            font-size: 11px
+        }
+
+        .ip-row .k {
+            color: var(--t3)
+        }
+
+        .ip-row .v {
+            font-family: var(--mono);
+            color: var(--t2);
+            text-align: right
+        }
+
+        .ip-row .v.note {
+            color: var(--amber)
+        }
+
+        .ip-foot {
+            font: 10.5px var(--font);
+            color: var(--t3);
+            margin-top: 10px;
+            line-height: 1.55
+        }
+
+        /* ---------- shared control language ---------- */
+        .h-sec {
+            font: 600 12px var(--font);
+            color: var(--t1)
+        }
+
+        .h-sec.minor {
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--t2)
+        }
+
+        .chev {
+            transition: transform 280ms var(--ease)
+        }
+
+        .lbl {
+            font: 500 11px var(--font);
+            color: var(--t3)
+        }
+
+        .val {
+            font: 11px var(--mono);
+            color: var(--t1)
+        }
+
+        .note {
+            font: 10.5px var(--font);
+            color: var(--t3);
+            line-height: 1.5
+        }
+
+        .sel {
+            display: block;
+            position: relative
+        }
+
+        .sel select {
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+            background: var(--panel-2);
+            color: var(--t1);
+            border: 1px solid var(--line);
+            padding: 7px 26px 7px 10px;
+            font: 11.5px var(--font);
+            border-radius: 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 150ms var(--ease)
+        }
+
+        .sel select:hover {
+            border-color: var(--line-strong)
+        }
+
+        .sel select:focus-visible {
+            border-color: rgba(77, 163, 216, .55)
+        }
+
+        .sel::after {
+            content: '';
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            width: 6px;
+            height: 6px;
+            border-right: 1px solid var(--t3);
+            border-bottom: 1px solid var(--t3);
+            transform: translateY(-70%) rotate(45deg);
+            pointer-events: none
+        }
+
+        select option {
+            background: #0d1420
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 20px;
+            background: transparent;
+            cursor: ew-resize;
+            --fill: 0%
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            height: 2px;
+            border-radius: 1px;
+            background: linear-gradient(90deg, rgba(77, 163, 216, .7) var(--fill), rgba(150, 172, 202, .2) var(--fill))
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e6edf5;
+            border: 1px solid #0a121c;
+            margin-top: -5px;
+            transition: box-shadow 150ms var(--ease)
+        }
+
+        input[type=range]:hover::-webkit-slider-thumb {
+            box-shadow: 0 0 0 4px rgba(77, 163, 216, .2)
+        }
+
+        input[type=range]:active::-webkit-slider-thumb {
+            box-shadow: 0 0 0 5px rgba(77, 163, 216, .3)
+        }
+
+        input[type=range]::-moz-range-track {
+            height: 2px;
+            background: rgba(150, 172, 202, .2)
+        }
+
+        input[type=range]::-moz-range-progress {
+            height: 2px;
+            background: rgba(77, 163, 216, .7)
+        }
+
+        input[type=range]::-moz-range-thumb {
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: #e6edf5;
+            border: 1px solid #0a121c
+        }
+
+        .switch {
+            position: relative;
+            width: 30px;
+            height: 17px;
+            flex: none
+        }
+
+        .switch input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            margin: 0
+        }
+
+        .switch i {
+            position: absolute;
+            inset: 0;
+            background: rgba(150, 172, 202, .16);
+            border: 1px solid var(--line-strong);
+            border-radius: 9px;
+            transition: background 150ms var(--ease), border-color 150ms var(--ease)
+        }
+
+        .switch i::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: #8a97ab;
+            transition: left 150ms var(--ease), background 150ms
+        }
+
+        .switch input:checked+i {
+            background: var(--blue-dim);
+            border-color: rgba(77, 163, 216, .5)
+        }
+
+        .switch input:checked+i::after {
+            left: 15px;
+            background: var(--blue)
+        }
+
+        .switch input:focus-visible+i {
+            outline: 1px solid rgba(77, 163, 216, .5);
+            outline-offset: 2px
+        }
+
+        .btn {
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            color: var(--t2);
+            font: 500 11.5px var(--font);
+            padding: 7px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 150ms var(--ease), border-color 150ms var(--ease), transform 150ms var(--ease)
+        }
+
+        .btn:hover {
+            color: var(--t1);
+            border-color: var(--line-strong)
+        }
+
+        .btn:active {
+            transform: scale(.97)
+        }
+
+        .btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55);
+            outline-offset: 1px
+        }
+
+        /* ---------- left exploration rail ---------- */
+        #rail {
+            position: absolute;
+            top: 60px;
+            left: 14px;
+            width: 278px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 76px);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            box-shadow: var(--shadow);
+            transition: transform 340ms var(--ease), opacity .55s var(--ease) .12s
+        }
+
+        body.rail-closed #rail {
+            transform: translateX(-118%);
+            opacity: 0;
+            pointer-events: none
+        }
+
+        body.intro-on #rail {
+            opacity: 0;
+            pointer-events: none
+        }
+
+        .rail-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 14px 9px 16px;
+            flex: none
+        }
+
+        .rail-scroll {
+            overflow-y: auto;
+            min-height: 0;
+            flex: 1;
+            overscroll-behavior: contain
+        }
+
+        #rail-tab {
+            position: absolute;
+            left: 14px;
+            top: 64px;
+            z-index: 11;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .3s .12s
+        }
+
+        body.rail-closed #rail-tab {
+            opacity: 1;
+            pointer-events: auto
+        }
+
+        .sec {
+            border-top: 1px solid var(--line)
+        }
+
+        .sec:first-child {
+            border-top: 0
+        }
+
+        .sec-h {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: none;
+            border: 0;
+            padding: 10px 16px 8px;
+            cursor: pointer;
+            text-align: left
+        }
+
+        .sec-h:hover .h-sec {
+            color: #fff
+        }
+
+        .sec-b {
+            display: grid;
+            grid-template-rows: 1fr;
+            transition: grid-template-rows 280ms var(--ease)
+        }
+
+        .sec.closed .sec-b {
+            grid-template-rows: 0fr
+        }
+
+        .sec.closed .chev {
+            transform: rotate(-90deg)
+        }
+
+        .sec-i {
+            overflow: hidden;
+            min-height: 0;
+            padding: 1px 16px 14px
+        }
+
+        .ctrl {
+            margin-bottom: 13px
+        }
+
+        .ctrl:last-child {
+            margin-bottom: 2px
+        }
+
+        .ctrl-h {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 7px
+        }
+
+        /* time control — view time (blue) vs matched time (amber) */
+        .tl-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0 2px
+        }
+
+        #tl-canvas {
+            position: relative;
+            flex: 1;
+            height: 38px;
+            cursor: ew-resize;
+            touch-action: none;
+            margin: 0 2px;
+            outline: none;
+            border-radius: 4px
+        }
+
+        #tl-canvas:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .4)
+        }
+
+        .tl-base {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 19px;
+            height: 2px;
+            background: rgba(150, 172, 202, .2);
+            border-radius: 1px
+        }
+
+        .tl-fill {
+            position: absolute;
+            left: 0;
+            top: 19px;
+            height: 2px;
+            background: rgba(77, 163, 216, .75);
+            border-radius: 1px;
+            transition: width 220ms var(--ease)
+        }
+
+        .tl-tick {
+            position: absolute;
+            top: 15px;
+            width: 1px;
+            height: 10px;
+            background: rgba(150, 172, 202, .35)
+        }
+
+        .tl-tick span {
+            position: absolute;
+            top: 12px;
+            transform: translateX(-50%);
+            font: 9px var(--mono);
+            color: var(--t3)
+        }
+
+        .tl-head {
+            position: absolute;
+            top: 9px;
+            height: 22px;
+            width: 2px;
+            background: var(--blue);
+            transform: translateX(-50%);
+            transition: left 220ms var(--ease)
+        }
+
+        .tl-head::after {
+            content: '';
+            position: absolute;
+            top: 5px;
+            left: -4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--bg);
+            border: 2px solid var(--blue)
+        }
+
+        .tl-match {
+            position: absolute;
+            top: 4px;
+            height: 30px;
+            width: 2px;
+            background: var(--amber);
+            transform: translateX(-50%)
+        }
+
+        .tl-match::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -3.5px;
+            width: 9px;
+            height: 9px;
+            background: var(--amber);
+            transform: rotate(45deg);
+            border-radius: 1.5px
+        }
+
+        .match-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-top: 7px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--line)
+        }
+
+        .match-row .lbl {
+            color: var(--amber)
+        }
+
+        .match-row .val {
+            color: var(--amber);
+            font-size: 10.5px
+        }
+
+        /* depth navigator — signature control, state-driven */
+        .depth-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 6px
+        }
+
+        .depth-val {
+            font: 500 16px var(--mono);
+            color: var(--t1);
+            letter-spacing: .01em
+        }
+
+        .depth-sub {
+            font: 10.5px var(--mono);
+            color: var(--t3);
+            margin-top: 8px
+        }
+
+        #depth-nav {
+            position: relative;
+            height: 252px;
+            user-select: none;
+            cursor: ns-resize;
+            touch-action: none;
+            outline: none;
+            border-radius: 6px;
+            margin-left: 2px
+        }
+
+        #depth-nav:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .4)
+        }
+
+        #depth-nav.attract {
+            animation: attract 1.9s var(--ease)
+        }
+
+        .dn-axis {
+            position: absolute;
+            left: 58px;
+            top: 22px;
+            bottom: 10px;
+            width: 2px;
+            background: rgba(150, 172, 202, .2);
+            border-radius: 1px
+        }
+
+        .dn-fill {
+            position: absolute;
+            left: 57px;
+            top: 22px;
+            width: 4px;
+            background: rgba(77, 163, 216, .55);
+            border-radius: 2px;
+            transition: height 180ms var(--ease)
+        }
+
+        .dn-surface {
+            position: absolute;
+            left: 0;
+            top: 0;
+            font: 500 10.5px var(--font);
+            color: var(--t3)
+        }
+
+        .dn-tick {
+            position: absolute;
+            left: 50px;
+            width: 10px;
+            height: 1px;
+            background: rgba(150, 172, 202, .4)
+        }
+
+        .dn-tick span {
+            position: absolute;
+            right: 20px;
+            top: -6px;
+            font: 10px var(--mono);
+            color: var(--t3);
+            white-space: nowrap
+        }
+
+        .dn-thumb {
+            position: absolute;
+            left: 56px;
+            transform: translateY(-50%);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--panel-2);
+            border: 1px solid var(--line-strong);
+            border-left: 2px solid var(--blue);
+            border-radius: 5px;
+            padding: 4px 10px 4px 9px;
+            pointer-events: none;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, .4);
+            cursor: grab
+        }
+
+        .dn-thumb.anim {
+            transition: top 180ms var(--ease)
+        }
+
+        .dn-thumb b {
+            font: 500 11px var(--mono);
+            color: var(--t1)
+        }
+
+        .dn-thumb i {
+            font: 9.5px var(--mono);
+            font-style: normal;
+            color: var(--t3)
+        }
+
+        #depth-nav.dragging .dn-thumb {
+            border-color: rgba(77, 163, 216, .7);
+            box-shadow: 0 4px 18px rgba(77, 163, 216, .25)
+        }
+
+        /* layer rows */
+        .layer-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            cursor: pointer
+        }
+
+        .layer-row .n {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            font: 400 12.5px var(--font);
+            color: var(--t2);
+            transition: color 150ms
+        }
+
+        .layer-row:hover .n {
+            color: var(--t1)
+        }
+
+        .layer-row .n svg {
+            color: var(--t3)
+        }
+
+        /* ---------- right inspector ---------- */
+        #inspector {
+            position: absolute;
+            top: 60px;
+            right: 14px;
+            width: 322px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 148px);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            box-shadow: var(--shadow);
+            transition: opacity .55s var(--ease) .2s, transform .55s var(--ease) .2s
+        }
+
+        body.intro-on #inspector {
+            opacity: 0;
+            transform: translateX(10px);
+            pointer-events: none
+        }
+
+        .insp-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 11px 12px 9px 16px;
+            border-bottom: 1px solid var(--line);
+            flex: none
+        }
+
+        .insp-scroll {
+            overflow-y: auto;
+            min-height: 0;
+            flex: 1
+        }
+
+        #insp-empty {
+            padding: 34px 26px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px
+        }
+
+        #insp-empty .glyph {
+            color: #3a4a61;
+            margin-bottom: 4px
+        }
+
+        #insp-empty h3 {
+            font: 600 13px var(--font);
+            color: var(--t2)
+        }
+
+        #insp-empty p {
+            font: 12px var(--font);
+            color: var(--t3);
+            line-height: 1.6;
+            max-width: 232px
+        }
+
+        #insp-count {
+            font: 10.5px var(--mono);
+            color: var(--t3);
+            margin-top: 6px
+        }
+
+        #insp-body {
+            padding: 2px 16px 14px
+        }
+
+        #insp-body.swap {
+            animation: rise 320ms var(--ease)
+        }
+
+        .blk {
+            padding: 12px 0 6px
+        }
+
+        .blk+.blk {
+            border-top: 1px solid var(--line)
+        }
+
+        .blk-t {
+            font: 600 11px var(--font);
+            color: var(--t3);
+            margin-bottom: 10px
+        }
+
+        .prof-id {
+            font: 500 18px var(--mono);
+            color: var(--t1);
+            letter-spacing: .02em
+        }
+
+        .prof-sub {
+            font: 11px var(--font);
+            color: var(--t3);
+            margin: 4px 0 10px
+        }
+
+        .kv {
+            display: grid;
+            grid-template-columns: 112px 1fr;
+            gap: 7px 10px;
+            align-items: baseline
+        }
+
+        .kv .k {
+            font: 11px var(--font);
+            color: var(--t3)
+        }
+
+        .kv .v {
+            font: 11px var(--mono);
+            color: var(--t2);
+            text-align: right
+        }
+
+        .kv .v.hl {
+            color: var(--amber)
+        }
+
+        .chip {
+            display: inline-block;
+            font: 10px var(--mono);
+            padding: 2px 7px;
+            border-radius: 4px;
+            border: 1px solid
+        }
+
+        .chip-d {
+            color: var(--seafoam);
+            border-color: rgba(127, 212, 193, .4)
+        }
+
+        .chip-a {
+            color: var(--amber);
+            border-color: rgba(217, 164, 91, .4)
+        }
+
+        .chip-g {
+            color: var(--green);
+            border-color: rgba(88, 196, 138, .35)
+        }
+
+        .chip-m {
+            color: var(--amber);
+            border-color: rgba(217, 164, 91, .35)
+        }
+
+        .match-block {
+            border-left: 2px solid var(--amber);
+            padding: 2px 0 2px 12px;
+            margin: 2px 0 4px
+        }
+
+        .open-tray-btn {
+            width: 100%;
+            margin-top: 11px;
+            background: var(--blue-dim);
+            border: 1px solid rgba(77, 163, 216, .4);
+            color: #cfe4f4;
+            font: 500 11.5px var(--font);
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 150ms var(--ease)
+        }
+
+        .open-tray-btn:hover {
+            background: rgba(77, 163, 216, .24)
+        }
+
+        .open-tray-btn:active {
+            transform: scale(.98)
+        }
+
+        .open-tray-btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55)
+        }
+
+        .prov {
+            margin-top: 12px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            overflow: hidden
+        }
+
+        .prov-h {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: none;
+            border: 0;
+            color: var(--t3);
+            font: 500 11px var(--font);
+            padding: 9px 11px;
+            cursor: pointer;
+            transition: color 150ms
+        }
+
+        .prov-h:hover {
+            color: var(--t1)
+        }
+
+        .prov-h.open .chev {
+            transform: rotate(180deg)
+        }
+
+        .prov-body {
+            display: none;
+            padding: 4px 12px 11px;
+            border-top: 1px solid var(--line)
+        }
+
+        .prov-body.open {
+            display: block;
+            animation: rise 280ms var(--ease)
+        }
+
+        .prov-body .kv {
+            gap: 6px 10px
+        }
+
+        .prov-body .kv .v {
+            font-size: 10.5px
+        }
+
+        /* ---------- comparison tray ---------- */
+        #tray {
+            position: absolute;
+            left: 302px;
+            right: 348px;
+            bottom: 14px;
+            height: 316px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: var(--r);
+            box-shadow: var(--shadow);
+            transform: translateY(270px);
+            transition: transform 340ms var(--ease), left 340ms var(--ease), opacity .55s var(--ease) .28s
+        }
+
+        body.tray-open #tray {
+            transform: translateY(0)
+        }
+
+        body.rail-closed #tray {
+            left: 64px
+        }
+
+        body.intro-on #tray {
+            opacity: 0;
+            pointer-events: none
+        }
+
+        .tray-bar {
+            flex: none;
+            height: 46px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 0 16px;
+            border-bottom: 1px solid var(--line);
+            cursor: pointer;
+            user-select: none
+        }
+
+        .tray-bar:hover .tray-label {
+            color: var(--t1)
+        }
+
+        .tray-label {
+            font: 600 12px var(--font);
+            color: var(--t2);
+            transition: color 150ms
+        }
+
+        .tray-status {
+            font: 11px var(--mono);
+            color: var(--t3);
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap
+        }
+
+        .tray-status .hl {
+            color: var(--t2)
+        }
+
+        .tray-status .mt {
+            color: var(--amber)
+        }
+
+        .tray-open-btn {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            background: none;
+            border: 0;
+            color: var(--t3);
+            font: 500 11.5px var(--font);
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 150ms, background 150ms
+        }
+
+        .tray-open-btn:hover {
+            color: var(--t1);
+            background: var(--panel-2)
+        }
+
+        .tray-open-btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55)
+        }
+
+        .tray-open-btn .chev {
+            transition: transform 280ms var(--ease)
+        }
+
+        body.tray-open .tray-open-btn .chev {
+            transform: rotate(180deg)
+        }
+
+        .tray-body {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 10px 16px 14px
+        }
+
+        .tray-head {
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px
+        }
+
+        .seg {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 2px;
+            flex: none
+        }
+
+        .seg button {
+            background: none;
+            border: 0;
+            color: var(--t3);
+            font: 500 11px var(--font);
+            padding: 4px 13px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: color 150ms, background 150ms
+        }
+
+        .seg button:hover {
+            color: var(--t2)
+        }
+
+        .seg button:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .5)
+        }
+
+        .seg button.on {
+            background: var(--blue-dim);
+            color: #d8eaf6
+        }
+
+        .tray-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0
+        }
+
+        .tray-title .tt {
+            font: 600 12px var(--font);
+            color: var(--t2);
+            white-space: nowrap
+        }
+
+        .tray-title .tu {
+            font: 11px var(--mono);
+            color: var(--t3)
+        }
+
+        .res-legend {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font: 10px var(--mono);
+            color: var(--t3)
+        }
+
+        .res-legend canvas {
+            width: 96px;
+            height: 6px;
+            border: 1px solid var(--line-strong);
+            border-radius: 2px
+        }
+
+        .tray-main {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            gap: 14px
+        }
+
+        .chart-frame {
+            flex: 1;
+            position: relative;
+            min-width: 0;
+            background: #0a101a;
+            border: 1px solid var(--line);
+            border-radius: 6px
+        }
+
+        .chart-frame.swap {
+            animation: rise 300ms var(--ease)
+        }
+
+        .chart-plot {
+            position: absolute;
+            inset: 4px
+        }
+
+        .chart-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px
+        }
+
+        .chart-empty p {
+            font: 12px var(--font);
+            color: var(--t3)
+        }
+
+        .chart-empty .sub {
+            font: 10.5px var(--font);
+            color: #5a6a82
+        }
+
+        .plot-fallback {
+            font: 11px var(--mono);
+            color: var(--amber);
+            padding: 16px
+        }
+
+        .metric-rail {
+            width: 206px;
+            flex: none;
+            border-left: 1px solid var(--line);
+            padding-left: 15px;
+            display: flex;
+            flex-direction: column
+        }
+
+        #metric-rail.swap .mrow {
+            animation: softin 300ms var(--ease)
+        }
+
+        .mrow {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 5px 0;
+            border-bottom: 1px solid var(--line)
+        }
+
+        .mrow .mk {
+            font: 11px var(--font);
+            color: var(--t3)
+        }
+
+        .mrow .mv {
+            font: 12px var(--mono);
+            color: var(--t1);
+            white-space: nowrap
+        }
+
+        .mrow .mv small {
+            font: 9.5px var(--mono);
+            color: var(--t3);
+            margin-left: 5px
+        }
+
+        .mrail-n {
+            font: 10px var(--mono);
+            color: var(--t3);
+            text-align: right;
+            margin-top: auto;
+            padding-top: 6px
+        }
+
+        /* ---------- scene overlays ---------- */
+        #vz-badge {
+            position: absolute;
+            top: 60px;
+            left: 302px;
+            z-index: 5;
+            font: 10.5px var(--mono);
+            color: var(--t3);
+            background: var(--overlay);
+            border: 1px solid var(--line);
+            padding: 4px 10px;
+            border-radius: 6px;
+            pointer-events: none;
+            transition: left 340ms var(--ease), opacity .55s var(--ease) .36s
+        }
+
+        #vz-badge b {
+            color: var(--blue);
+            font-weight: 500
+        }
+
+        body.rail-closed #vz-badge {
+            left: 64px
+        }
+
+        body.intro-on #vz-badge {
+            opacity: 0
+        }
+
+        #cam-hint {
+            position: fixed;
+            top: 58px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 5;
+            font: 10.5px var(--font);
+            color: var(--t3);
+            background: var(--overlay);
+            border: 1px solid var(--line);
+            padding: 5px 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            transition: opacity .8s
+        }
+
+        #cam-hint.fade {
+            opacity: 0 !important
+        }
+
+        body.intro-on #cam-hint {
+            opacity: 0
+        }
+
+        #legend {
+            position: absolute;
+            left: 302px;
+            bottom: 70px;
+            z-index: 5;
+            background: var(--overlay);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--line);
+            padding: 10px 12px;
+            border-radius: var(--r);
+            pointer-events: none;
+            min-width: 228px;
+            transition: bottom 340ms var(--ease), left 340ms var(--ease), opacity .55s var(--ease) .36s
+        }
+
+        body.tray-open #legend {
+            bottom: 346px
+        }
+
+        body.rail-closed #legend {
+            left: 64px
+        }
+
+        body.intro-on #legend {
+            opacity: 0
+        }
+
+        #legend .lg-t {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            margin-bottom: 7px
+        }
+
+        #legend .lg-name {
+            font: 600 12px var(--font);
+            color: var(--t1)
+        }
+
+        #legend .lg-unit {
+            font: 10.5px var(--mono);
+            color: var(--t3)
+        }
+
+        #lg-canvas {
+            display: block;
+            width: 212px;
+            height: 7px;
+            border: 1px solid var(--line-strong);
+            border-radius: 2px
+        }
+
+        .lg-mm {
+            display: flex;
+            justify-content: space-between;
+            font: 10px var(--mono);
+            color: var(--t2);
+            margin-top: 4px
+        }
+
+        .lg-line {
+            font: 10px var(--mono);
+            color: var(--t3);
+            margin-top: 5px
+        }
+
+        .lg-argo {
+            margin-top: 8px;
+            padding-top: 7px;
+            border-top: 1px solid var(--line);
+            font: 10px var(--font);
+            color: var(--t3);
+            display: flex;
+            gap: 14px
+        }
+
+        .lg-argo i {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            margin-right: 5px
+        }
+
+        .lg-argo .d {
+            background: var(--seafoam)
+        }
+
+        .lg-argo .a {
+            background: var(--amber)
+        }
+
+        /* ---------- toast + observation tooltip ---------- */
+        #toast-stack {
+            position: fixed;
+            top: 58px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            align-items: center;
+            pointer-events: none;
+            z-index: 80
+        }
+
+        .toast {
+            background: var(--overlay);
+            border: 1px solid var(--line-strong);
+            color: var(--t2);
+            font: 11.5px var(--font);
+            padding: 7px 14px;
+            border-radius: 6px;
+            opacity: 0;
+            transform: translateY(-5px);
+            transition: opacity 250ms, transform 250ms;
+            max-width: 520px;
+            text-align: center;
+            box-shadow: var(--shadow)
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: none
+        }
+
+        #argo-tip {
+            position: fixed;
+            z-index: 70;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 160ms var(--ease);
+            background: var(--overlay);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--line-strong);
+            border-radius: 7px;
+            padding: 9px 12px;
+            min-width: 190px;
+            box-shadow: var(--shadow)
+        }
+
+        #argo-tip.show {
+            opacity: 1
+        }
+
+        #argo-tip .at-id {
+            font: 500 12px var(--mono);
+            color: var(--t1);
+            margin-bottom: 6px
+        }
+
+        #argo-tip .at-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            font-size: 10.5px;
+            line-height: 1.8
+        }
+
+        #argo-tip .at-row .k {
+            color: var(--t3);
+            font-family: var(--font)
+        }
+
+        #argo-tip .at-row .v {
+            font-family: var(--mono);
+            color: var(--t2)
+        }
+
+        #argo-tip .v.md {
+            color: var(--seafoam)
+        }
+
+        #argo-tip .v.ma {
+            color: var(--amber)
+        }
+
+        /* ---------- onboarding ---------- */
+        #intro {
+            position: fixed;
+            inset: 0;
+            z-index: 90;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            background: linear-gradient(78deg, rgba(3, 6, 11, .9) 0%, rgba(3, 6, 11, .62) 34%, rgba(3, 6, 11, .08) 68%);
+            transition: opacity .8s var(--ease), visibility 0s .8s
+        }
+
+        #intro.gone {
+            opacity: 0;
+            visibility: hidden
+        }
+
+        .intro-inner {
+            pointer-events: auto;
+            padding-left: 76px;
+            max-width: 560px
+        }
+
+        .intro-mark {
+            margin-bottom: 20px
+        }
+
+        .intro-eyebrow {
+            font: 600 11px var(--font);
+            letter-spacing: .22em;
+            color: var(--t3);
+            text-transform: uppercase;
+            margin-bottom: 10px
+        }
+
+        .intro-place {
+            font: 500 13px var(--font);
+            color: var(--t2);
+            margin-bottom: 8px
+        }
+
+        .intro-inner h1 {
+            font: 600 31px/1.2 var(--font);
+            color: #f2f6fa;
+            letter-spacing: -.015em;
+            margin-bottom: 12px
+        }
+
+        .intro-inner h1 em {
+            font-style: normal;
+            color: var(--blue)
+        }
+
+        .intro-inner p {
+            font: 13px/1.6 var(--font);
+            color: var(--t2);
+            margin-bottom: 24px;
+            max-width: 400px
+        }
+
+        .intro-flow {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font: 11.5px var(--font);
+            color: var(--t3);
+            margin-bottom: 28px
+        }
+
+        .intro-flow svg {
+            color: #3d4d66;
+            flex: none
+        }
+
+        .cta {
+            background: rgba(77, 163, 216, .14);
+            border: 1px solid rgba(77, 163, 216, .55);
+            color: #d9ebf8;
+            font: 500 12.5px var(--font);
+            padding: 11px 26px;
+            border-radius: 7px;
+            cursor: pointer;
+            transition: background 280ms var(--ease), color 280ms var(--ease)
+        }
+
+        .cta:hover {
+            background: rgba(77, 163, 216, .24);
+            color: #fff
+        }
+
+        .cta:active {
+            transform: scale(.98)
+        }
+
+        .cta:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .7);
+            outline-offset: 2px
+        }
+
+        .intro-note {
+            font: 10.5px var(--mono);
+            color: var(--t3);
+            margin-top: 14px
+        }
+
+        /* ---------- responsive ---------- */
+        @media (max-width:1180px) {
+            #inspector {
+                width: 296px
+            }
+
+            #tray {
+                right: 322px
+            }
+
+            .metric-rail {
+                width: 180px
+            }
+        }
+
+        @media (max-width:980px) {
+            #legend {
+                display: none
+            }
+
+            #tray {
+                left: 14px;
+                right: 14px
+            }
+
+            #vz-badge {
+                left: 14px
+            }
+
+            body.rail-closed #tray,
+            body.rail-closed #vz-badge {
+                left: 14px
+            }
+        }
+
+        @media (max-width:860px) {
+            #inspector {
+                top: auto;
+                bottom: 70px;
+                left: 14px;
+                right: 14px;
+                width: auto;
+                max-height: 44vh
+            }
+
+            .intro-inner {
+                padding: 0 24px
+            }
+        }
+    </style>
+</head>
+
+<body class="intro-on">
+
+    <!-- ============ 3D OCEAN SCENE (hero layer) ============ -->
+    <div id="cesium-container"></div>
+    <div id="shade"></div>
+    <div id="credit-container"></div>
+
+    <!-- ============ HEADER ============ -->
+    <header id="app-header">
+        <div class="brand">
+            <svg viewBox="0 0 28 28" width="27" height="27" aria-hidden="true">
+                <path d="M3 5h22" stroke="#7a879c" stroke-width="1.4" stroke-linecap="round" />
+                <path d="M4.5 5v20" stroke="#7a879c" stroke-width="1.1" opacity=".38" />
+                <path d="M6 8.5h3.2c4.8 0 3.3 9.4 8.6 12.5 1.8 1 3.7 1.5 6 1.5" fill="none" stroke="#4da3d8"
+                    stroke-width="1.8" stroke-linecap="round" />
+                <path d="M19.5 6.5v6.5" stroke="#7a879c" stroke-width="1.1" stroke-dasharray="1.5 2.6"
+                    stroke-linecap="round" />
+                <circle cx="19.5" cy="14.5" r="2.1" fill="#7fd4c1" />
+            </svg>
+            <div>
+                <div class="brand-name">OCEAN-X</div>
+                <div class="brand-desc">Ocean Model · Observation Explorer</div>
+            </div>
+        </div>
+        <div class="hdr-meta">
+            <span class="hdr-ds">GLORYS12V1</span>
+            <span class="sep">·</span>
+            <span class="m">Indian Ocean</span>
+            <span class="sep">·</span>
+            <span class="hdr-var"><i id="hdr-var-dot"></i><span id="hdr-var">Temperature</span></span>
+            <button class="icon-btn" id="btn-info" title="Prototype status" aria-label="Prototype status">
+                <svg viewBox="0 0 14 14" width="12" height="12">
+                    <path d="M4.6 5.2c.2-1.6 1.3-2.4 2.6-2.4 1.5 0 2.5 1 2.5 2.2 0 2-2.5 2-2.5 3.8" fill="none"
+                        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                    <circle cx="7.1" cy="11" r=".9" fill="currentColor" />
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <div id="info-pop" hidden>
+        <h3>Prototype status</h3>
+        <div class="ip-row"><span class="k">Mode</span><span class="v note">offline demo · mock data</span></div>
+        <div class="ip-row"><span class="k">Demo grid</span><span class="v">0.5° × 13 levels</span></div>
+        <div class="ip-row"><span class="k">Target dataset</span><span class="v">GLORYS12V1</span></div>
+        <div class="ip-row"><span class="k">Target grid</span><span class="v">≈1/12° × 50 levels</span></div>
+        <div class="ip-row"><span class="k">Observations</span><span class="v">mock Argo profiles</span></div>
+        <div class="ip-foot">Frontend prototype for SIH26067. The displayed field and all Argo
+            profiles are locally generated mock data — no Copernicus Marine or Argo data is streamed.</div>
+    </div>
+
+    <!-- ============ LEFT EXPLORATION RAIL ============ -->
+    <aside id="rail" class="reveal-o">
+        <div class="rail-head">
+            <span class="h-sec">Explorer</span>
+            <button class="icon-btn" id="rail-collapse" title="Hide panel" aria-label="Hide explorer panel">
+                <svg viewBox="0 0 10 10" width="10" height="10">
+                    <path d="M7 1 3 5l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+            </button>
+        </div>
+        <div class="rail-scroll">
+
+            <section class="sec">
+                <button class="sec-h" aria-expanded="true"><span class="h-sec">Explore</span>
+                    <svg class="chev" viewBox="0 0 10 10" width="9" height="9">
+                        <path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <div class="sec-b">
+                    <div class="sec-i">
+                        <div class="ctrl">
+                            <div class="ctrl-h"><span class="lbl">Dataset</span></div>
+                            <span class="sel"><select id="ctl-dataset">
+                                    <option value="glorys" selected>GLORYS12 multi-year reanalysis</option>
+                                    <option value="multiobs">MULTIOBS_GLO_PHY_MYNRT</option>
+                                </select></span>
+                        </div>
+                        <div class="ctrl">
+                            <div class="ctrl-h"><span class="lbl">Variable</span></div>
+                            <span class="sel"><select id="ctl-variable">
+                                    <option value="temperature" selected>Temperature</option>
+                                    <option value="salinity">Salinity · Phase 2</option>
+                                </select></span>
+                            <p class="note" id="var-phase2-note" hidden>Salinity is a Phase 2 extension — not part of
+                                the primary demonstration.</p>
+                        </div>
+                        <div class="ctrl">
+                            <div class="ctrl-h"><span class="lbl">View time</span><span class="val"
+                                    id="val-time">2023-07-01</span></div>
+                            <div class="tl-wrap">
+                                <button class="icon-btn" id="tl-prev" title="Previous day"
+                                    aria-label="Previous model day" style="width:24px;height:24px">
+                                    <svg viewBox="0 0 10 10" width="8" height="8">
+                                        <path d="M7 1 3 5l4 4" fill="none" stroke="currentColor" stroke-width="1.7"
+                                            stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                                <div id="tl-canvas" tabindex="0" title="Model timeline — view time"
+                                    aria-label="View time timeline"></div>
+                                <button class="icon-btn" id="tl-next" title="Next day" aria-label="Next model day"
+                                    style="width:24px;height:24px">
+                                    <svg viewBox="0 0 10 10" width="8" height="8">
+                                        <path d="M3 1l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7"
+                                            stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="match-row" id="match-row" hidden>
+                                <span class="lbl">Matched model time</span><span class="val" id="val-match">—</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="sec">
+                <button class="sec-h" aria-expanded="true"><span class="h-sec">Depth</span>
+                    <svg class="chev" viewBox="0 0 10 10" width="9" height="9">
+                        <path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <div class="sec-b">
+                    <div class="sec-i">
+                        <div class="depth-head">
+                            <span class="lbl">Selected depth</span>
+                            <span class="depth-val" id="val-depth">500 m</span>
+                        </div>
+                        <div id="depth-nav" tabindex="0" title="Model depth — drag or use arrow keys"
+                            aria-label="Depth navigator"></div>
+                        <div class="depth-sub" id="val-depth-sub">model z-level 11 / 13</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="sec">
+                <button class="sec-h" aria-expanded="true"><span class="h-sec minor">Layers</span>
+                    <svg class="chev" viewBox="0 0 10 10" width="9" height="9">
+                        <path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <div class="sec-b">
+                    <div class="sec-i">
+                        <label class="layer-row"><span class="n">
+                                <svg viewBox="0 0 16 16" width="14" height="14">
+                                    <path d="M8 2l6 3-6 3-6-3 6-3zM2 9l6 3 6-3M2 12l6 3 6-3" fill="none"
+                                        stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+                                </svg>
+                                Temperature field</span>
+                            <span class="switch"><input type="checkbox" id="tg-field" checked><i></i></span></label>
+                        <label class="layer-row"><span class="n">
+                                <svg viewBox="0 0 16 16" width="14" height="14">
+                                    <circle cx="8" cy="5.5" r="2.6" fill="none" stroke="currentColor"
+                                        stroke-width="1.3" />
+                                    <path d="M2.5 13.5c1.4-2.4 3.2-3.6 5.5-3.6s4.1 1.2 5.5 3.6" fill="none"
+                                        stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                                </svg>
+                                Argo observations</span>
+                            <span class="switch"><input type="checkbox" id="tg-argo" checked><i></i></span></label>
+                        <label class="layer-row"><span class="n">
+                                <svg viewBox="0 0 16 16" width="14" height="14">
+                                    <path d="M1.5 11.5l3.5-5 3 4 2.5-3.5 4 4.5" fill="none" stroke="currentColor"
+                                        stroke-width="1.2" stroke-linejoin="round" />
+                                    <path d="M1.5 14.2h13" stroke="currentColor" stroke-width="1.2"
+                                        stroke-linecap="round" opacity=".55" />
+                                </svg>
+                                Bathymetry</span>
+                            <span class="switch"><input type="checkbox" id="tg-bathy" checked><i></i></span></label>
+                        <label class="layer-row"><span class="n">
+                                <svg viewBox="0 0 16 16" width="14" height="14">
+                                    <path d="M1.5 5.5q2-2 4 0t4 0 4 0M1.5 10.5q2-2 4 0t4 0 4 0" fill="none"
+                                        stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+                                </svg>
+                                Surface currents</span>
+                            <span class="switch"><input type="checkbox" id="tg-currents"><i></i></span></label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="sec">
+                <button class="sec-h" aria-expanded="true"><span class="h-sec minor">View</span>
+                    <svg class="chev" viewBox="0 0 10 10" width="9" height="9">
+                        <path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <div class="sec-b">
+                    <div class="sec-i">
+                        <div class="ctrl">
+                            <div class="ctrl-h"><span class="lbl">Vertical scale</span><span class="val"
+                                    id="val-vscale">300×</span></div>
+                            <input type="range" id="ctl-vscale" min="0" max="100" step="1" value="92"
+                                aria-label="Vertical scale">
+                            <p class="note" id="val-vscale-note">1× is the true geometric scale.</p>
+                        </div>
+                        <div class="ctrl">
+                            <div class="ctrl-h"><span class="lbl">Field opacity</span><span class="val"
+                                    id="val-opacity">85%</span></div>
+                            <input type="range" id="ctl-opacity" min="0" max="100" step="1" value="85"
+                                aria-label="Field opacity">
+                        </div>
+                        <label class="layer-row"><span class="n">
+                                <svg viewBox="0 0 16 16" width="14" height="14">
+                                    <path d="M2.5 2.5h11v11h-11z" fill="none" stroke="currentColor" stroke-width="1.2"
+                                        stroke-dasharray="3 2.4" />
+                                </svg>
+                                Domain boundaries</span>
+                            <span class="switch"><input type="checkbox" id="tg-bounds" checked><i></i></span></label>
+                        <div class="ctrl" style="margin-top:12px">
+                            <div style="display:flex;gap:8px">
+                                <button class="btn" id="btn-reset-camera" style="flex:1">Reset camera</button>
+                                <button class="btn" id="btn-reset-view" style="flex:1">Reset view</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </aside>
+    <button id="rail-tab" class="icon-btn" title="Open explorer" aria-label="Open explorer panel"
+        style="width:34px;height:42px">
+        <svg viewBox="0 0 16 16" width="15" height="15">
+            <path d="M2 4h8M2 8h12M2 12h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+    </button>
+
+    <!-- ============ RIGHT INSPECTOR ============ -->
+    <aside id="inspector">
+        <div class="insp-head">
+            <span class="h-sec" id="insp-title">Observations</span>
+            <button class="icon-btn" id="btn-clear" title="Clear selection" aria-label="Clear selection" hidden>
+                <svg viewBox="0 0 10 10" width="10" height="10">
+                    <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                </svg>
+            </button>
+        </div>
+        <div class="insp-scroll">
+
+            <div id="insp-empty">
+                <svg class="glyph" viewBox="0 0 30 30" width="30" height="30">
+                    <circle cx="15" cy="15" r="8" fill="none" stroke="currentColor" stroke-width="1.3" />
+                    <path d="M15 3v6M15 21v6M3 15h6M21 15h6" stroke="currentColor" stroke-width="1.3"
+                        stroke-linecap="round" />
+                    <circle cx="15" cy="15" r="1.6" fill="#7fd4c1" />
+                </svg>
+                <h3>Observations</h3>
+                <p>Choose an Argo profile in the scene to compare model and observation.</p>
+                <div id="insp-count">— profiles available</div>
+            </div>
+
+            <div id="insp-body" hidden>
+                <div class="blk">
+                    <div class="blk-t">Profile</div>
+                    <div class="prof-id" id="ip-id">—</div>
+                    <div class="prof-sub" id="ip-sub">—</div>
+                    <div class="kv" id="ip-rows"></div>
+                </div>
+                <div class="blk">
+                    <div class="blk-t">Model match</div>
+                    <div class="match-block">
+                        <div class="kv" id="ip-match"></div>
+                    </div>
+                </div>
+                <div class="blk">
+                    <div class="blk-t">Comparison</div>
+                    <p class="note">Profile, model and Analysis–Observation Residual are shown in the comparison tray.
+                    </p>
+                    <button class="open-tray-btn" id="btn-open-tray">Open comparison tray</button>
+                </div>
+                <div class="blk">
+                    <div class="prov">
+                        <button class="prov-h" id="prov-toggle" aria-expanded="false">
+                            <svg class="chev" viewBox="0 0 10 10" width="9" height="9">
+                                <path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"
+                                    stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            Provenance
+                        </button>
+                        <div class="prov-body" id="prov-body"></div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </aside>
+
+    <!-- ============ COMPARISON TRAY ============ -->
+    <section id="tray" class="reveal-o">
+        <div class="tray-bar" id="tray-bar" title="Open / close comparison">
+            <span class="tray-label">Comparison</span>
+            <span class="tray-status" id="tray-status">No observation selected</span>
+            <button class="tray-open-btn" id="btn-tray-toggle">
+                <span id="btn-tray-txt">Open analysis</span>
+                <svg class="chev" viewBox="0 0 10 10" width="10" height="10">
+                    <path d="M2 6.5l3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+            </button>
+        </div>
+        <div class="tray-body">
+            <div class="tray-head">
+                <div class="seg" id="seg-tabs">
+                    <button data-tab="profile" class="on">Profile</button>
+                    <button data-tab="residual">Residual</button>
+                </div>
+                <div class="tray-title">
+                    <span class="tt" id="tray-title">Temperature · depth profile</span>
+                    <span class="tu" id="tray-unit">°C</span>
+                    <span class="res-legend" id="res-legend" hidden>
+                        <canvas id="res-canvas" width="96" height="6"></canvas>
+                        <span id="res-min">−2.0</span><span>0</span><span id="res-max">+2.0</span>
+                    </span>
+                </div>
+            </div>
+            <div class="tray-main">
+                <div class="chart-frame" id="chart-frame">
+                    <div class="chart-plot" id="chart-profile"></div>
+                    <div class="chart-plot" id="chart-residual" hidden></div>
+                    <div class="chart-empty" id="chart-empty">
+                        <p>No observation selected</p>
+                        <p class="sub">Your selected profile analysis will appear here.</p>
+                    </div>
+                </div>
+                <div class="metric-rail" id="metric-rail">
+                    <div class="mrow"><span class="mk">Bias</span><span class="mv" id="m-bias">—</span></div>
+                    <div class="mrow"><span class="mk">MAE</span><span class="mv" id="m-mae">—</span></div>
+                    <div class="mrow"><span class="mk">RMSE</span><span class="mv" id="m-rmse">—</span></div>
+                    <div class="mrow"><span class="mk">Max |Δ|</span><span class="mv"><span id="m-max">—</span><small
+                                id="m-max-sub"></small></span></div>
+                    <div class="mrow"><span class="mk">Match distance</span><span class="mv" id="m-dist">—</span></div>
+                    <div class="mrow"><span class="mk">Δt</span><span class="mv" id="m-dt">—</span></div>
+                    <div class="mrail-n" id="m-n">n = —</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- scene overlays -->
+    <div id="vz-badge" class="reveal-o">Vertical scale <b>300×</b></div>
+    <div id="cam-hint" class="reveal-o">Drag to rotate · scroll to zoom · right-drag to tilt</div>
+    <div id="legend" class="reveal-o">
+        <div class="lg-t"><span class="lg-name" id="lg-var">Temperature</span><span class="lg-unit"
+                id="lg-unit">°C</span></div>
+        <canvas id="lg-canvas" width="212" height="7"></canvas>
+        <div class="lg-mm"><span id="lg-min">4.0 °C</span><span id="lg-max">30.0 °C</span></div>
+        <div class="lg-line" id="lg-line"></div>
+        <div class="lg-line" id="lg-probe" hidden></div>
+        <div class="lg-argo"><span><i class="d"></i>Argo · delayed</span><span><i class="a"></i>Argo · adjusted
+                RT</span></div>
+    </div>
+    <div id="toast-stack"></div>
+    <div id="argo-tip"></div>
+
+    <!-- ============ ONBOARDING ============ -->
+    <div id="intro">
+        <div class="intro-inner">
+            <div class="intro-mark">
+                <svg viewBox="0 0 28 28" width="36" height="36">
+                    <path d="M3 5h22" stroke="#7a879c" stroke-width="1.4" stroke-linecap="round" />
+                    <path d="M4.5 5v20" stroke="#7a879c" stroke-width="1.1" opacity=".38" />
+                    <path d="M6 8.5h3.2c4.8 0 3.3 9.4 8.6 12.5 1.8 1 3.7 1.5 6 1.5" fill="none" stroke="#4da3d8"
+                        stroke-width="1.8" stroke-linecap="round" />
+                    <path d="M19.5 6.5v6.5" stroke="#7a879c" stroke-width="1.1" stroke-dasharray="1.5 2.6"
+                        stroke-linecap="round" />
+                    <circle cx="19.5" cy="14.5" r="2.1" fill="#7fd4c1" />
+                </svg>
+            </div>
+            <div class="intro-eyebrow">OCEAN-X</div>
+            <div class="intro-place">Indian Ocean</div>
+            <h1>Explore the <em>ocean</em> model</h1>
+            <p>Explore the ocean model and compare it with in-situ observations.</p>
+            <div class="intro-flow">
+                <span>Model</span>
+                <svg viewBox="0 0 12 12" width="11" height="11">
+                    <path d="M1 6h9M7 3l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.4"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>Observe</span>
+                <svg viewBox="0 0 12 12" width="11" height="11">
+                    <path d="M1 6h9M7 3l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.4"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>Match</span>
+                <svg viewBox="0 0 12 12" width="11" height="11">
+                    <path d="M1 6h9M7 3l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.4"
+                        stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>Compare</span>
+            </div>
+            <button class="cta" id="intro-start">Start exploring</button>
+            <div class="intro-note">prototype · mock data · target dataset GLORYS12V1</div>
+        </div>
+    </div>
+
+    <script>
+        'use strict';
+        /* ================================================================
+           OCEAN-X — final single-file iteration.
+           Scientific modules (field engine, Argo, MockApi, co-location,
+           residual statistics, layered 3D field) are preserved.
+           State model: `state` is the single source of truth; every
+           control (depth navigator, timeline) is driven from it and
+           writes back through App setters only.
+           ================================================================ */
+
+        /* ---------------- utilities ---------------- */
+        const $ = id => document.getElementById(id);
+        const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+        function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+        const gs = (x, y, cx, cy, sx, sy) => Math.exp(-(((x - cx) * (x - cx)) / (2 * sx * sx) + ((y - cy) * (y - cy)) / (2 * sy * sy)));
+        function makeNoise(seed, cells) {
+            const r = mulberry32(seed); const g = [];
+            for (let y = 0; y <= cells; y++) { const row = []; for (let x = 0; x <= cells; x++)row.push(r()); g.push(row); }
+            const sm = t => t * t * (3 - 2 * t);
+            return (x, y) => {
+                x = clamp(x, 0, cells); y = clamp(y, 0, cells);
+                const xi = Math.min(cells - 1, Math.floor(x)), yi = Math.min(cells - 1, Math.floor(y));
+                const fx = sm(x - xi), fy = sm(y - yi);
+                const a = g[yi][xi], b = g[yi][xi + 1], c = g[yi + 1][xi], d = g[yi + 1][xi + 1];
+                return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+            };
+        }
+        function parseHex(h) { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
+        function makeRamp(stops) {
+            const S = stops.map(([p, c]) => [p, parseHex(c)]);
+            return t => {
+                t = clamp(t, 0, 1); let i = 0;
+                while (i < S.length - 2 && t > S[i + 1][0]) i++;
+                const [p0, c0] = S[i], [p1, c1] = S[i + 1];
+                const f = clamp((t - p0) / ((p1 - p0) || 1), 0, 1);
+                return [c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f];
+            };
+        }
+        const css = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+        function haversine(lat1, lon1, lat2, lon2) {
+            const R = 6371, d = Math.PI / 180;
+            const dLat = (lat2 - lat1) * d, dLon = (lon2 - lon1) * d;
+            const s = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * d) * Math.cos(lat2 * d) * Math.sin(dLon / 2) ** 2;
+            return 2 * R * Math.asin(Math.sqrt(s));
+        }
+        function interpZ(xs, vs, z) {
+            if (z <= xs[0]) return vs[0];
+            for (let i = 1; i < xs.length; i++) {
+                if (z <= xs[i]) { const f = (z - xs[i - 1]) / (xs[i] - xs[i - 1]); return vs[i - 1] + (vs[i] - vs[i - 1]) * f; }
+            }
+            return vs[vs.length - 1];
+        }
+        const fmtLat = v => Math.abs(v).toFixed(2) + '° ' + (v >= 0 ? 'N' : 'S');
+        const fmtLon = v => Math.abs(v).toFixed(2) + '° ' + (v >= 0 ? 'E' : 'W');
+        const fmtUTC = d => d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+        const fmtDate = d => d.toISOString().slice(0, 10);
+        const fmtHours = h => (h >= 0 ? '+' : '−') + Math.abs(h).toFixed(1) + ' h';
+        function tweenText(el, to, fmt, dur = 420) {
+            const from = (typeof el._v === 'number') ? el._v : 0;
+            const t0 = performance.now(); el._v = to;
+            const step = now => {
+                const k = Math.min(1, (now - t0) / dur);
+                const e = 1 - Math.pow(1 - k, 3);
+                el.textContent = fmt(from + (to - from) * e);
+                if (k < 1) requestAnimationFrame(step);
+            };
+            requestAnimationFrame(step);
+        }
+
+        /* ---------------- colormaps ---------------- */
+        const RAMP_TEMP = makeRamp([[0, '#0d1e42'], [.15, '#1d4e9e'], [.32, '#2b8fd0'], [.46, '#41c1d9'], [.60, '#8fd6b5'], [.72, '#efde8a'], [.84, '#f09c46'], [.93, '#d9582c'], [1, '#b1301c']]);
+        const RAMP_SAL = makeRamp([[0, '#0d2130'], [.22, '#1c4f56'], [.42, '#2a7f72'], [.60, '#5ead8b'], [.78, '#a9cfa0'], [.92, '#e7ddab'], [1, '#f2e3b2']]);
+        const RAMP_DIV = makeRamp([[0, '#4472d8'], [.30, '#2c4a8c'], [.50, '#1c2434'], [.70, '#74341f'], [1, '#e25836']]);
+        const VARS = {
+            temperature: { label: 'Temperature', unit: '°C', ramp: RAMP_TEMP, gridStep: 1, contour: 1 },
+            salinity: { label: 'Salinity', unit: 'PSU', ramp: RAMP_SAL, gridStep: 0.5, contour: 0.2 }
+        };
+
+        /* ================================================================
+           FieldEngine — deterministic mock GLORYS12V1-like scalar fields
+           ================================================================ */
+        const FieldEngine = (() => {
+            const DEPTHS = [0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000];
+            const TIMES = (() => { const a = []; for (let i = 0; i < 7; i++)a.push(new Date(Date.UTC(2023, 6, 1 + i))); return a; })();
+            const nA = makeNoise(117, 10), nB = makeNoise(231, 10), nC = makeNoise(397, 10);
+
+            const sst = (lon, lat, day) => {
+                let v = 27.6;
+                v += 2.3 * gs(lon, lat, 88, -6, 15, 9);
+                v -= 1.9 * gs(lon, lat, 52, -19, 9, 7);
+                v -= 0.9 * gs(lon, lat, 44, -25, 6, 5);
+                v += 1.35 * gs(lon, lat, 66, 20, 9, 5);
+                v -= (0.95 + 0.26 * day) * 2.1 * gs(lon, lat, 53.5, 10.5, 4.5, 3.5);
+                v -= 2.7 * Math.pow(Math.abs(lat) / 30, 2.1);
+                v += 0.5 * (nA(lon / 9, lat / 9) - 0.5) * 2;
+                v += 0.15 * Math.sin(day * 1.1 + 1.2 + lon * 0.13 + lat * 0.07);
+                v += 0.05 * day;
+                return v;
+            };
+            const therm = (lon, lat) => {
+                const eq = Math.exp(-Math.pow(lat / 10, 2));
+                const mld = 35 + 45 * Math.pow(Math.abs(lat) / 30, 1.3) + 10 * (nB(lon / 7, lat / 7) - 0.5) * 2;
+                const zc = mld + 95 + 25 * (nC(lon / 8, lat / 8) - 0.5) * 2 + 20 * eq;
+                const s = 30 + 10 * (nB(lon / 6, lat / 6) - 0.5);
+                return { zc, s };
+            };
+            const temp = (lon, lat, z, day, p = {}) => {
+                const { zc, s } = therm(lon, lat);
+                const zcp = zc + (p.zcOff || 0), sp = s * (p.wFac == null ? 1 : p.wFac);
+                const Ts = sst(lon, lat, day) + (p.sstOff || 0);
+                const Td = 4.1 + 1.7 * Math.exp(-z / 500);
+                const sig = 1 / (1 + Math.exp((z - zcp) / sp));
+                let v = Td + (Ts - Td) * sig;
+                v += 0.4 * Math.exp(-Math.pow((z - (zcp + 40)) / 140, 2)) * Math.sin(z / 55 + (p.phOff || 0) + lon * 0.9 + lat * 0.6);
+                v += (p.noise || 0) * Math.sin(z * 0.7 + lon * 3.1);
+                return v;
+            };
+            const sss = (lon, lat, day) => {
+                let s = 34.55;
+                s += 1.35 * gs(lon, lat, 58, 22, 8, 5.5);
+                s -= 1.9 * gs(lon, lat, 88, 15, 7, 5);
+                s += 0.85 * gs(lon, lat, 64, -22, 10, 6);
+                s -= 0.45 * gs(lon, lat, 86, -6, 12, 7);
+                s += 0.3 * (nA(lon / 7, lat / 7) - 0.5) * 2;
+                s -= 0.02 * day;
+                return s;
+            };
+            const sal = (lon, lat, z, day, p = {}) => {
+                const Ss = sss(lon, lat, day) + (p.sssOff || 0);
+                let s = Ss + 0.65 / (1 + Math.exp(-(z - (170 + (p.szOff || 0))) / 70)) - 0.5 / (1 + Math.exp(-(z - 650) / 160));
+                s += 0.05 * Math.exp(-Math.pow((z - 200) / 180, 2)) * Math.sin(z / 70 + (p.phOff || 0));
+                s += (p.noise || 0) * 0.5 * Math.sin(z * 0.8 + lon * 2.7);
+                return s;
+            };
+            const bathy = (lon, lat) => {
+                let d = 4300;
+                d -= 1900 * gs(lon, lat, 66, -14, 5.5, 10);
+                d -= 1400 * gs(lon, lat, 80, -28, 9, 5);
+                d -= 2600 * gs(lon, lat, 56, -20, 3.5, 3.5);
+                d -= 1600 * gs(lon, lat, 73, 17, 6, 4);
+                d += 2300 * gs(lon, lat, 96.5, -8.5, 3.2, 3.5);
+                d += 300 * (nB(lon / 9, lat / 9) - 0.5) * 2;
+                return Math.max(1300, d);
+            };
+            const value = (variable, lon, lat, z, day, p) => variable === 'temperature' ? temp(lon, lat, z, day, p) : sal(lon, lat, z, day, p);
+            return { DEPTHS, TIMES, temp, sal, value, bathy, noiseC: nC };
+        })();
+
+        /* ================================================================
+           Argo — 24 mock floats; observations = truth + physical offsets
+           ================================================================ */
+        const Argo = (() => {
+            const LAND = [[55.5, 70, 13, 28.5], [40, 51.5, 1.5, 12], [40, 42, -26, 1.5],
+            [43.2, 50.6, -25.6, -12], [68, 89, 8, 28.5], [76, 81, 5.2, 10], [96.4, 100.6, -6.8, 6.2]];
+            const nearLand = (lon, lat) => {
+                for (const a of [0, 1.2, -1.2]) for (const b of [0, 1.2, -1.2])
+                    if (LAND.some(([w, e, s, n]) => lon + a >= w && lon + a <= e && lat + b >= s && lat + b <= n)) return true;
+                return false;
+            };
+            const r = mulberry32(26067);
+            const OBS_DEPTHS = [];
+            for (let z = 0; z <= 50; z += 5)OBS_DEPTHS.push(z);
+            for (let z = 60; z <= 200; z += 10)OBS_DEPTHS.push(z);
+            for (let z = 220; z <= 300; z += 20)OBS_DEPTHS.push(z);
+            for (let z = 350; z <= 1000; z += 50)OBS_DEPTHS.push(z);
+            const usedIds = new Set();
+            const mkId = () => {
+                const pre = ['2902', '2903', '5601', '6901', '6903', '1901'];
+                for (let k = 0; k < 60; k++) {
+                    const id = pre[(r() * pre.length) | 0] + String(1000 + ((r() * 8999) | 0));
+                    if (!usedIds.has(id)) { usedIds.add(id); return id; }
+                }
+                return '2902000';
+            };
+            const profiles = [];
+            const zones = [
+                { c: [70, 2], rad: 26, n: 10 }, { c: [53.5, 9.5], rad: 4, n: 4 },
+                { c: [87, -4], rad: 6, n: 4 }, { c: [62, -22], rad: 6, n: 3 }, { c: [74, -16], rad: 7, n: 3 }
+            ];
+            for (const z of zones) {
+                let placed = 0, guard = 0;
+                while (placed < z.n && guard++ < 4000) {
+                    const lon = z.c[0] + (r() * 2 - 1) * z.rad, lat = z.c[1] + (r() * 2 - 1) * z.rad * 0.9;
+                    if (lon < 42.5 || lon > 97 || lat < -27.5 || lat > 27.5) continue;
+                    if (nearLand(lon, lat)) continue;
+                    if (profiles.some(p => Math.hypot(p.lon - lon, p.lat - lat) < 4.5)) continue;
+                    const jlon = +(lon + (r() * 0.4 - 0.2)).toFixed(2), jlat = +(lat + (r() * 0.4 - 0.2)).toFixed(2);
+                    profiles.push({
+                        id: mkId(), lon: jlon, lat: jlat,
+                        time: new Date(Date.UTC(2023, 6, 1) + (r() * 7.4 - 0.75) * 864e5),
+                        mode: r() < 0.55 ? 'D' : 'A',
+                        qcBad: r() < 0.25 ? 1 + ((r() * 2) | 0) : 0,
+                        cycle: 40 + ((r() * 160) | 0),
+                        platform: ['ARVOR-I', 'PROVOR-II', 'APEX', 'ARVOR-II'][(r() * 4) | 0],
+                        params: {
+                            zcOff: (r() * 2 - 1) * 9, wFac: .85 + r() * .35, sstOff: (r() * 2 - 1) * .35,
+                            sssOff: (r() * 2 - 1) * .12, szOff: (r() * 2 - 1) * 60, phOff: r() * 6.283, noise: .04 + r() * .05
+                        }
+                    });
+                    placed++;
+                }
+            }
+            const cache = new Map();
+            const get = id => {
+                if (cache.has(id)) return cache.get(id);
+                const p = profiles.find(q => q.id === id); if (!p) return null;
+                const matchedDay = FieldEngine.TIMES.reduce((best, t, i) =>
+                    Math.abs(t - p.time) < Math.abs(FieldEngine.TIMES[best] - p.time) ? i : best, 0);
+                const levels = OBS_DEPTHS.map(z => ({
+                    depth: z,
+                    temperature: FieldEngine.temp(p.lon, p.lat, z, matchedDay, p.params),
+                    salinity: FieldEngine.sal(p.lon, p.lat, z, matchedDay, p.params),
+                    qc: 1
+                }));
+                const h = [...p.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+                for (let k = 0; k < p.qcBad; k++)levels[8 + ((h >> (k * 4)) % 28)].qc = 3;
+                const prof = {
+                    meta: {
+                        id: p.id, lon: p.lon, lat: p.lat, time: p.time, mode: p.mode, platform: p.platform,
+                        cycle: p.cycle, matchedDay,
+                        qc: p.qcBad ? 'MIXED' : 'GOOD',
+                        qcDetail: p.qcBad ? p.qcBad + ' level(s) QC=3 (probably bad) — excluded from statistics'
+                            : 'all levels QC=1 (good)'
+                    },
+                    levels
+                };
+                cache.set(id, prof); return prof;
+            };
+            return {
+                OBS_DEPTHS,
+                list: () => profiles.map(p => ({ id: p.id, lon: p.lon, lat: p.lat, time: p.time, mode: p.mode, cycle: p.cycle, platform: p.platform })),
+                get
+            };
+        })();
+
+        /* ================================================================
+           MockApi — future backend surface (UI never touches raw fields)
+           ================================================================ */
+        const MockApi = {
+            getMetadata() {
+                return {
+                    datasetId: 'GLOBAL_MULTIYEAR_PHY_001_030',
+                    datasetLabel: 'GLORYS12V1',
+                    version: 'GLORYS12V1 · v202211',
+                    demoGrid: '0.5° × 13 z-levels (mock)',
+                    targetGrid: '≈1/12° × 50 z-levels',
+                    cadence: 'daily · 00:00 UTC',
+                    domain: '40°E–100°E · 30°S–30°N'
+                };
+            },
+            getModelTimes() { return FieldEngine.TIMES.slice(); },
+            getModelDepths() { return FieldEngine.DEPTHS.slice(); },
+            getModelSlice(depthIdx, timeIdx, variable) {
+                const z = FieldEngine.DEPTHS[depthIdx], NL = 121, DL = 0.5;
+                const vals = new Float32Array(NL * NL);
+                let min = Infinity, max = -Infinity;
+                for (let j = 0; j < NL; j++) {
+                    const lat = -30 + j * DL;
+                    for (let i = 0; i < NL; i++) {
+                        const v = FieldEngine.value(variable, 40 + i * DL, lat, z, timeIdx);
+                        vals[j * NL + i] = v;
+                        if (v < min) min = v; if (v > max) max = v;
+                    }
+                }
+                return { lon0: 40, lat0: -30, d: DL, nl: NL, values: vals, min, max, depth: z, time: FieldEngine.TIMES[timeIdx] };
+            },
+            getArgoProfiles() { return Argo.list(); },
+            getArgoProfile(id) { return Argo.get(id); },
+            getModelProfileAt({ lon, lat, timeIdx, depths, variable }) {
+                return depths.map(z => FieldEngine.value(variable, lon, lat, z, timeIdx));
+            },
+            getComparison(id, variable) {
+                const prof = Argo.get(id); if (!prof) return null;
+                const m = prof.meta, times = FieldEngine.TIMES, tIdx = m.matchedDay, DL = 0.5;
+                const glon = clamp(Math.round((m.lon - 40) / DL) * DL + 40, 40, 100);
+                const glat = clamp(Math.round((m.lat + 30) / DL) * DL - 30, -30, 30);
+                const native = FieldEngine.DEPTHS.map(z => FieldEngine.value(variable, glon, glat, z, tIdx));
+                const lvAll = prof.levels.filter(l => l.depth <= 1000);
+                const lv = lvAll.filter(l => l.qc === 1);
+                const excluded = lvAll.length - lv.length;
+                const modelAt = lv.map(l => interpZ(FieldEngine.DEPTHS, native, l.depth));
+                const obsAt = lv.map(l => l[variable]);
+                const res = lv.map((l, i) => modelAt[i] - obsAt[i]);
+                const n = lv.length; let bias = 0, mae = 0, rmse = 0, maxA = 0, maxI = 0;
+                res.forEach((v, i) => {
+                    bias += v; mae += Math.abs(v); rmse += v * v;
+                    if (Math.abs(v) > maxA) { maxA = Math.abs(v); maxI = i; }
+                });
+                bias /= n; mae /= n; rmse = Math.sqrt(rmse / n);
+                return {
+                    profile: prof, variable,
+                    obsDepths: lv.map(l => l.depth), obsValues: obsAt, modelValues: modelAt, residuals: res,
+                    excluded, stats: { bias, mae, rmse, maxAbs: maxA, maxDepth: lv[maxI].depth, n },
+                    match: {
+                        timeIdx: tIdx, time: times[tIdx], lon: glon, lat: glat,
+                        i: Math.round((glon - 40) / DL), j: Math.round((glat + 30) / DL),
+                        distanceKm: haversine(m.lat, m.lon, glat, glon),
+                        dtHours: (times[tIdx].getTime() - m.time.getTime()) / 3.6e6
+                    }
+                };
+            }
+        };
+
+        /* ---------------- application state (single source of truth) ---------------- */
+        const state = {
+            variable: 'temperature', timeIdx: 0, depthIdx: 10,
+            exaggeration: 300, opacity: 0.85,
+            showArgo: true, showField: true, showBathy: true, showCurrents: false, showBounds: true,
+            selectedId: null, provenanceOpen: false, trayOpen: false, trayTab: 'profile',
+            depth: 500, time: FieldEngine.TIMES[0]
+        };
+
+        /* ---------------- shared UI helpers ---------------- */
+        const UI = {
+            toast(msg) {
+                const st = $('toast-stack');
+                const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+                st.appendChild(t);
+                requestAnimationFrame(() => t.classList.add('show'));
+                setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3400);
+                while (st.children.length > 3) st.firstChild.remove();
+            },
+            updateLegend(range) {
+                const cfg = VARS[state.variable];
+                $('lg-var').textContent = cfg.label + (state.variable === 'salinity' ? ' · Phase 2' : '');
+                $('lg-unit').textContent = cfg.unit;
+                $('lg-min').textContent = range[0].toFixed(1) + ' ' + cfg.unit;
+                $('lg-max').textContent = range[1].toFixed(1) + ' ' + cfg.unit;
+                const c = $('lg-canvas'), ctx = c.getContext('2d');
+                const img = ctx.createImageData(c.width, c.height);
+                for (let x = 0; x < c.width; x++) {
+                    const [r, g, b] = cfg.ramp(x / (c.width - 1));
+                    for (let y = 0; y < c.height; y++) {
+                        const i = (y * c.width + x) * 4;
+                        img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+                    }
+                }
+                ctx.putImageData(img, 0, 0);
+                $('lg-line').textContent = 'depth −' + state.depth + ' m · ' + fmtDate(state.time);
+            },
+            setProbe(lon, lat, v) {
+                const p = $('lg-probe'); p.hidden = false;
+                p.textContent = 'probe ' + fmtLon(lon) + ' ' + fmtLat(lat) + ' · ' + v.toFixed(2) + ' ' +
+                    VARS[state.variable].unit + ' @ −' + state.depth + ' m';
+            }
+        };
+
+        /* ================================================================
+           Particles — mock surface currents (off by default, subordinate)
+           ================================================================ */
+        const Particles = (() => {
+            let refs = [], list = [], last = performance.now(), on = false;
+            const NP = 220, SPEED = 0.14;
+            const psi = (lon, lat) => {
+                let p = -2.4 * Math.atan(lat / 2.2);
+                p += 2.5 * Math.atan((lat + 10) / 3.6);
+                p += -1.7 * Math.atan((lat - 13) / 3.2);
+                p += 0.8 * Math.sin((lon - 40) / 60 * 2 * Math.PI) * Math.sin((lat + 30) / 60 * Math.PI);
+                p += 1.5 * (FieldEngine.noiseC(lon / 5, lat / 5) - 0.5);
+                return p;
+            };
+            const vel = (lon, lat) => {
+                const d = 0.3;
+                return [-(psi(lon, lat + d) - psi(lon, lat - d)) / (2 * d),
+                (psi(lon + d, lat) - psi(lon - d, lat)) / (2 * d)];
+            };
+            const spawn = () => ({ lon: 40 + Math.random() * 60, lat: -30 + Math.random() * 60, life: 12 + Math.random() * 60 });
+            function init(viewer) {
+                const pts = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+                for (let i = 0; i < NP; i++) {
+                    list.push(spawn());
+                    refs.push(pts.add({
+                        position: Cesium.Cartesian3.fromDegrees(list[i].lon, list[i].lat, 250),
+                        pixelSize: 2,
+                        color: Cesium.Color.fromCssColorString('rgba(150,205,230,0.5)'),
+                        scaleByDistance: new Cesium.NearFarScalar(4e5, 1.6, 1.5e7, 0.4),
+                        show: on
+                    }));
+                }
+            }
+            function tick(now) {
+                const dt = Math.min(0.12, (now - last) / 1000); last = now;
+                for (let i = 0; i < NP; i++) {
+                    let p = list[i];
+                    const [u, v] = vel(p.lon, p.lat);
+                    p.lon += u * SPEED * dt; p.lat += v * SPEED * dt; p.life -= dt;
+                    if (p.life <= 0 || p.lon < 40.5 || p.lon > 99.5 || p.lat < -29.5 || p.lat > 29.5) { p = spawn(); list[i] = p; }
+                    refs[i].position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 250);
+                }
+            }
+            function setShow(v) { on = v; last = performance.now(); refs.forEach(r => r.show = v); }
+            return { init, tick, setShow };
+        })();
+
+        /* ================================================================
+           Scene — CesiumJS ocean field
+           Layered stack + boundary cross-sections + observation markers.
+           Selected depth plane stays dominant; other layers recede.
+           ================================================================ */
+        const Scene = (() => {
+            let viewer = null;
+            const DOM_W = 40, DOM_S = -30, DOM_E = 100, DOM_N = 30;
+            const DOM_RECT = Cesium.Rectangle.fromDegrees(DOM_W, DOM_S, DOM_E, DOM_N);
+            const layerEnt = []; let layerCanvases = [], slices = [], sliceKey = '', fieldRange = [0, 1];
+            let boxEnts = [], cursorEnt = null, cursorLabel = null, bathyEnt = null;
+            const argoEnt = {}; let hoverId = null, selected = null;
+            let reticleEnt = null, selLabelEnt = null, profilePrim = null, profilePrimKey = '', matchEnts = [];
+            let basemapWarned = false;
+            const layerFades = [];
+
+            const depthH = z => -z * state.exaggeration;
+
+            /* ---- camera ---- */
+            const HOME = { lon: 54.3, lat: -11.5, alt: 2.95e6, heading: 58, pitch: -61 };
+            function setHome(fly, duration) {
+                const dest = Cesium.Cartesian3.fromDegrees(HOME.lon, HOME.lat, HOME.alt);
+                const ori = {
+                    heading: Cesium.Math.toRadians(HOME.heading),
+                    pitch: Cesium.Math.toRadians(HOME.pitch), roll: 0
+                };
+                if (fly) {
+                    viewer.camera.setView({
+                        destination: Cesium.Cartesian3.fromDegrees(72, -16, 1.5e7),
+                        orientation: { heading: Cesium.Math.toRadians(14), pitch: Cesium.Math.toRadians(-88), roll: 0 }
+                    });
+                    viewer.camera.flyTo({
+                        destination: dest, orientation: ori, duration: duration || 3.4,
+                        easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT
+                    });
+                } else {
+                    viewer.camera.setView({ destination: dest, orientation: ori });
+                }
+            }
+            function flyHome() { setHome(true, 1.8); }
+
+            /* ---- contouring ---- */
+            function drawContours(ctx, V, W, H, levels, style, stride, ox, oy) {
+                ox = ox || 0; oy = oy || 0;
+                if (!levels.length) return;
+                ctx.strokeStyle = style; ctx.lineWidth = 1; ctx.beginPath();
+                for (const lv of levels) {
+                    for (let y = 0; y < H - stride; y += stride)for (let x = 0; x < W - stride; x += stride) {
+                        const a = V[y * W + x], b = V[y * W + x + stride], c = V[(y + stride) * W + x + stride], d = V[(y + stride) * W + x];
+                        const idx = (a > lv ? 8 : 0) | (b > lv ? 4 : 0) | (c > lv ? 2 : 0) | (d > lv ? 1 : 0);
+                        if (idx === 0 || idx === 15) continue;
+                        const t = (p, q) => clamp((lv - p) / ((q - p) || 1e-9), 0, 1);
+                        const T = [ox + x + t(a, b) * stride, oy + y],
+                            R = [ox + x + stride, oy + y + t(b, c) * stride],
+                            B = [ox + x + t(d, c) * stride, oy + y + stride],
+                            L = [ox + x, oy + y + t(a, d) * stride];
+                        const seg = (p, q) => { ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); };
+                        switch (idx) {
+                            case 1: case 14: seg(L, B); break;
+                            case 2: case 13: seg(B, R); break;
+                            case 3: case 12: seg(L, R); break;
+                            case 4: case 11: seg(T, R); break;
+                            case 6: case 9: seg(T, B); break;
+                            case 7: case 8: seg(T, L); break;
+                            case 5: seg(L, B); seg(T, R); break;
+                            case 10: seg(T, B); seg(L, R); break;
+                        }
+                    }
+                }
+                ctx.stroke();
+            }
+            function sampleGrid(s, lon, lat) {
+                const fx = (lon - s.lon0) / s.d, fy = (lat - s.lat0) / s.d;
+                const x0 = clamp(Math.floor(fx), 0, s.nl - 2), y0 = clamp(Math.floor(fy), 0, s.nl - 2);
+                const dx = clamp(fx - x0, 0, 1), dy = clamp(fy - y0, 0, 1);
+                const v = s.values, N = s.nl;
+                const a = v[y0 * N + x0], b = v[y0 * N + x0 + 1], c = v[(y0 + 1) * N + x0], d = v[(y0 + 1) * N + x0 + 1];
+                return a * (1 - dx) * (1 - dy) + b * dx * (1 - dy) + c * (1 - dx) * dy + d * dx * dy;
+            }
+
+            /* ---- horizontal depth slice (depth-darkened for falloff) ---- */
+            function renderSliceCanvas(slice, z) {
+                const W = 192, H = 192;
+                const c = document.createElement('canvas'); c.width = W; c.height = H;
+                const ctx = c.getContext('2d');
+                const img = ctx.createImageData(W, H);
+                const V = new Float32Array(W * H);
+                const [mn, mx] = fieldRange, span = (mx - mn) || 1;
+                const ramp = VARS[state.variable].ramp;
+                const dark = 1 - 0.24 * clamp(z / 1000, 0, 1);
+                for (let y = 0; y < H; y++) {
+                    const lat = DOM_N - (y + 0.5) * 60 / H;
+                    for (let x = 0; x < W; x++) {
+                        const lon = DOM_W + (x + 0.5) * 60 / W;
+                        const v = sampleGrid(slice, lon, lat);
+                        V[y * W + x] = v;
+                        const [r, g, b] = ramp(clamp((v - mn) / span, 0, 1));
+                        const i = (y * W + x) * 4;
+                        img.data[i] = r * dark; img.data[i + 1] = g * dark; img.data[i + 2] = b * dark; img.data[i + 3] = 255;
+                    }
+                }
+                ctx.putImageData(img, 0, 0);
+                /* sparse graticule, quiet isopleths */
+                ctx.strokeStyle = 'rgba(200,225,255,0.06)'; ctx.lineWidth = 1; ctx.beginPath();
+                for (let lon = 55; lon < 100; lon += 15) { const x = (lon - DOM_W) / 60 * W; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+                for (let lat = -15; lat <= 15; lat += 15) { const y = (DOM_N - lat) / 60 * H; ctx.moveTo(0, y); ctx.lineTo(W, y); }
+                ctx.stroke();
+                const step = VARS[state.variable].contour;
+                const levels = [];
+                for (let v = Math.ceil(mn / step) * step; v <= mx; v += step)levels.push(+v.toFixed(4));
+                drawContours(ctx, V, W, H, levels, 'rgba(235,245,255,0.12)', 2);
+                ctx.strokeStyle = 'rgba(150,200,255,0.36)'; ctx.lineWidth = 2;
+                ctx.strokeRect(1, 1, W - 2, H - 2);
+                return c;
+            }
+
+            /* ---- boundary cross-section walls ---- */
+            const AW = 1024, AH = 512, CW = 512, CH = 256;
+            let wallsPrim = null, wallsKey = '', wallsTimer = null, wallsLastRun = 0;
+            let atlasCanvas = null, atlasKey = '';
+            function getWallAtlas() {
+                const k = sliceKey + '|' + Math.round(state.opacity * 100);
+                if (k !== atlasKey) { atlasCanvas = buildWallAtlas(); atlasKey = k; }
+                return atlasCanvas;
+            }
+            function buildWallAtlas() {
+                const c = document.createElement('canvas'); c.width = AW; c.height = AH;
+                const ctx = c.getContext('2d');
+                const img = ctx.createImageData(AW, AH);
+                const depths = MockApi.getModelDepths();
+                const [mn, mx] = fieldRange, span = (mx - mn) || 1;
+                const ramp = VARS[state.variable].ramp;
+                const op = state.opacity;
+                const setPx = (x, y, r, g, b, a) => {
+                    const i = (y * AW + x) * 4;
+                    img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = a;
+                };
+                const cells = [
+                    { cx: 0, cy: 0, mode: 'lon', fixed: -30 }, { cx: 1, cy: 0, mode: 'lon', fixed: 30 },
+                    { cx: 0, cy: 1, mode: 'lat', fixed: 40 }, { cx: 1, cy: 1, mode: 'lat', fixed: 100 }
+                ];
+                const VAll = {};
+                const col = new Float64Array(depths.length);
+                for (const cell of cells) {
+                    const x0 = cell.cx * CW + 3, x1 = (cell.cx + 1) * CW - 3;
+                    const y0 = cell.cy * CH + 2, y1 = (cell.cy + 1) * CH - 2;
+                    const nw = x1 - x0, nh = y1 - y0;
+                    const V = new Float32Array(nw * nh);
+                    for (let ix = 0; ix < nw; ix++) {
+                        const f = (ix + 0.5) / nw;
+                        const lon = cell.mode === 'lon' ? 40 + f * 60 : cell.fixed;
+                        const lat = cell.mode === 'lat' ? -30 + f * 60 : cell.fixed;
+                        for (let i = 0; i < depths.length; i++)col[i] = sampleGrid(slices[i], lon, lat);
+                        for (let iy = 0; iy < nh; iy++) {
+                            const z = (iy + 0.5) / nh * 1000;
+                            const v = interpZ(depths, col, z);
+                            V[iy * nw + ix] = v;
+                            const [r, g, b] = ramp(clamp((v - mn) / span, 0, 1));
+                            setPx(x0 + ix, y0 + iy, r, g, b, (0.8 - 0.45 * clamp(z / 1000, 0, 1)) * op * 255);
+                        }
+                    }
+                    VAll[cell.cx + '_' + cell.cy] = V;
+                }
+                ctx.putImageData(img, 0, 0);
+                const step = VARS[state.variable].contour;
+                const levels = [];
+                for (let v = Math.ceil(mn / step) * step; v <= mx; v += step)levels.push(+v.toFixed(4));
+                for (const cell of cells) {
+                    const x0 = cell.cx * CW + 3, x1 = (cell.cx + 1) * CW - 3;
+                    const y0 = cell.cy * CH + 2, y1 = (cell.cy + 1) * CH - 2;
+                    drawContours(ctx, VAll[cell.cx + '_' + cell.cy], x1 - x0, y1 - y0,
+                        levels, 'rgba(230,240,255,0.22)', 2, x0, y0);
+                }
+                return c;
+            }
+            function buildWallPrimitive() {
+                const depths = MockApi.getModelDepths();
+                const Dsel = depths[state.depthIdx];
+                const hBot = -Dsel * state.exaggeration;
+                if (hBot >= -1) return null;
+                const edges = [
+                    { cell: 0, mode: 'lon', fixed: -30, rev: false },
+                    { cell: 1, mode: 'lon', fixed: 30, rev: true },
+                    { cell: 2, mode: 'lat', fixed: 40, rev: true },
+                    { cell: 3, mode: 'lat', fixed: 100, rev: false }
+                ];
+                const N = 21;
+                const positions = [], sts = [], indices = [];
+                const useFlat = !!Cesium.VertexFormat.POSITION_AND_ST;
+                const vf = useFlat ? Cesium.VertexFormat.POSITION_AND_ST : Cesium.VertexFormat.DEFAULT;
+                const normals = useFlat ? null : [];
+                for (const e of edges) {
+                    const start = positions.length / 3;
+                    const cx = e.cell % 2, cy = (e.cell / 2) | 0;
+                    const x0 = cx * CW + 3, x1 = (cx + 1) * CW - 3, y0 = cy * CH + 2;
+                    const nw = x1 - x0, nh = CH - 4;
+                    const u0 = x0 / AW, u1 = x1 / AW;
+                    const vTop = 1 - y0 / AH;
+                    const vBot = 1 - (y0 + nh * (Dsel / 1000)) / AH;
+                    let nrm = null;
+                    if (normals) {
+                        const midLon = e.mode === 'lon' ? (DOM_W + DOM_E) / 2 : e.fixed;
+                        const midLat = e.mode === 'lat' ? (DOM_S + DOM_N) / 2 : e.fixed;
+                        const m = Cesium.Transforms.eastNorthUpToFixedFrame(
+                            Cesium.Cartesian3.fromDegrees(midLon, midLat, 0));
+                        const east = Cesium.Matrix4.getColumn(m, 0, new Cesium.Cartesian3());
+                        const north = Cesium.Matrix4.getColumn(m, 1, new Cesium.Cartesian3());
+                        nrm = (e.mode === 'lon')
+                            ? (e.fixed < 0 ? Cesium.Cartesian3.negate(north, new Cesium.Cartesian3()) : north)
+                            : (e.fixed < 70 ? Cesium.Cartesian3.negate(east, new Cesium.Cartesian3()) : east);
+                    }
+                    for (let i = 0; i <= N; i++) {
+                        const f = i / N;
+                        const lon = e.mode === 'lon' ? DOM_W + f * (DOM_E - DOM_W) : e.fixed;
+                        const lat = e.mode === 'lat' ? DOM_S + f * (DOM_N - DOM_S) : e.fixed;
+                        const pT = Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+                        const pB = Cesium.Cartesian3.fromDegrees(lon, lat, hBot);
+                        positions.push(pT.x, pT.y, pT.z, pB.x, pB.y, pB.z);
+                        const u = u0 + (u1 - u0) * f;
+                        sts.push(u, vTop, u, vBot);
+                        if (normals) normals.push(nrm.x, nrm.y, nrm.z, nrm.x, nrm.y, nrm.z);
+                    }
+                    for (let i = 0; i < N; i++) {
+                        const a = start + i * 2, b = a + 1, c2 = a + 2, d = a + 3;
+                        if (e.rev) indices.push(a, c2, b, c2, d, b);
+                        else indices.push(a, b, c2, a, c2, d);
+                    }
+                }
+                const attributes = {
+                    position: new Cesium.GeometryAttribute({
+                        componentDatatype: Cesium.ComponentDatatype.DOUBLE,
+                        componentsPerAttribute: 3, values: new Float64Array(positions)
+                    }),
+                    st: new Cesium.GeometryAttribute({
+                        componentDatatype: Cesium.ComponentDatatype.FLOAT,
+                        componentsPerAttribute: 2, values: new Float32Array(sts)
+                    })
+                };
+                if (normals) {
+                    attributes.normal = new Cesium.GeometryAttribute({
+                        componentDatatype: Cesium.ComponentDatatype.FLOAT,
+                        componentsPerAttribute: 3, values: new Float32Array(normals)
+                    });
+                }
+                const geometry = new Cesium.Geometry({
+                    attributes, indices: new Uint16Array(indices),
+                    boundingSphere: Cesium.BoundingSphere.fromVertices(positions)
+                });
+                const material = Cesium.Material.fromType('Image', { image: getWallAtlas() });
+                return new Cesium.Primitive({
+                    geometryInstances: new Cesium.GeometryInstance({ geometry }),
+                    appearance: new Cesium.MaterialAppearance({
+                        flat: useFlat, translucent: true, closed: false, material, vertexFormat: vf
+                    }),
+                    asynchronous: false, allowPicking: false
+                });
+            }
+            function rebuildWalls() {
+                const want = state.showField;
+                const key = want
+                    ? sliceKey + '|' + state.depthIdx + '|' + state.exaggeration + '|' + Math.round(state.opacity * 100)
+                    : 'off';
+                if (key === wallsKey) return;
+                wallsKey = key;
+                if (wallsPrim) { viewer.scene.primitives.remove(wallsPrim); wallsPrim = null; }
+                if (!want) return;
+                const p = buildWallPrimitive();
+                if (p) wallsPrim = viewer.scene.primitives.add(p);
+            }
+            function scheduleWalls() {
+                const now = performance.now();
+                if (now - wallsLastRun > 70) { wallsLastRun = now; rebuildWalls(); return; }
+                if (wallsTimer) return;
+                wallsTimer = setTimeout(() => { wallsTimer = null; wallsLastRun = performance.now(); rebuildWalls(); }, 70);
+            }
+
+            /* ---- bathymetry (subtle, supportive) ---- */
+            function buildBathyCanvas() {
+                const W = 384, H = 384;
+                const c = document.createElement('canvas'); c.width = W; c.height = H;
+                const ctx = c.getContext('2d');
+                const img = ctx.createImageData(W, H);
+                const V = new Float32Array(W * H);
+                for (let y = 0; y < H; y++) {
+                    const lat = DOM_N - (y + 0.5) * 60 / H;
+                    for (let x = 0; x < W; x++) {
+                        const lon = DOM_W + (x + 0.5) * 60 / W;
+                        const d = FieldEngine.bathy(lon, lat);
+                        V[y * W + x] = d;
+                        const t = clamp((d - 1500) / 4500, 0, 1);
+                        const i = (y * W + x) * 4;
+                        img.data[i] = 20 + (5 - 20) * t; img.data[i + 1] = 60 + (10 - 60) * t; img.data[i + 2] = 84 + (18 - 84) * t; img.data[i + 3] = 255;
+                    }
+                }
+                ctx.putImageData(img, 0, 0);
+                drawContours(ctx, V, W, H, [3000, 5000], 'rgba(110,160,185,0.20)', 4);
+                ctx.font = '600 11px "IBM Plex Mono", monospace';
+                ctx.fillStyle = 'rgba(150,195,215,0.42)';
+                const put = (txt, lon, lat) => ctx.fillText(txt, (lon - DOM_W) / 60 * W, (DOM_N - lat) / 60 * H);
+                put('CARLSBERG RIDGE', 60.5, -5);
+                put('CENTRAL INDIAN RIDGE', 69, -21.5);
+                put('JAVA TRENCH', 92.5, -10.5);
+                put('SOMALI BASIN', 47, 3.5);
+                put('CENTRAL INDIAN BASIN', 74, -6);
+                ctx.strokeStyle = 'rgba(150,200,255,0.2)'; ctx.lineWidth = 2;
+                ctx.strokeRect(1, 1, W - 2, H - 2);
+                return c;
+            }
+
+            /* ---- observation markers (calm, scientific) ---- */
+            const _sprites = {};
+            function argoSprite(mode) {
+                if (_sprites[mode]) return _sprites[mode];
+                const c = document.createElement('canvas'); c.width = c.height = 40;
+                const ctx = c.getContext('2d');
+                const col = mode === 'D' ? '127,212,193' : '217,164,91';
+                const g = ctx.createRadialGradient(20, 20, 2, 20, 20, 14);
+                g.addColorStop(0, 'rgba(' + col + ',0.28)');
+                g.addColorStop(1, 'rgba(' + col + ',0)');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(20, 20, 14, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = 'rgba(' + col + ',0.95)'; ctx.lineWidth = 1.6;
+                ctx.beginPath(); ctx.arc(20, 20, 6, 0, Math.PI * 2); ctx.stroke();
+                ctx.fillStyle = 'rgba(' + col + ',1)';
+                ctx.beginPath(); ctx.arc(20, 20, 2.1, 0, Math.PI * 2); ctx.fill();
+                _sprites[mode] = c; return c;
+            }
+            let _reticle = null;
+            function reticleSprite() {
+                if (_reticle) return _reticle;
+                const c = document.createElement('canvas'); c.width = c.height = 84;
+                const ctx = c.getContext('2d');
+                ctx.strokeStyle = 'rgba(127,212,193,0.9)'; ctx.lineWidth = 1.4;
+                ctx.beginPath(); ctx.arc(42, 42, 24, 0, Math.PI * 2); ctx.stroke();
+                ctx.strokeStyle = 'rgba(127,212,193,0.28)';
+                ctx.beginPath(); ctx.arc(42, 42, 16, 0, Math.PI * 2); ctx.stroke();
+                ctx.strokeStyle = 'rgba(127,212,193,0.9)';
+                [[42, 8, 42, 18], [42, 66, 42, 76], [8, 42, 18, 42], [66, 42, 76, 42]]
+                    .forEach(([a, b, x, y]) => { ctx.beginPath(); ctx.moveTo(a, b); ctx.lineTo(x, y); ctx.stroke(); });
+                _reticle = c; return c;
+            }
+
+            /* ---- entity builders ---- */
+            function ensureLayer(i) {
+                if (layerEnt[i]) return layerEnt[i];
+                layerEnt[i] = viewer.entities.add({
+                    id: 'field-layer-' + i, show: false,
+                    rectangle: {
+                        coordinates: DOM_RECT, height: -5,
+                        material: new Cesium.ColorMaterialProperty(Cesium.Color.TRANSPARENT)
+                    }
+                });
+                layerEnt[i]._alpha = 0; layerEnt[i]._wasShown = false;
+                return layerEnt[i];
+            }
+            function buildBathy() {
+                bathyEnt = viewer.entities.add({
+                    id: 'bathy-plate', show: false,
+                    rectangle: {
+                        coordinates: DOM_RECT, height: depthH(4200),
+                        material: new Cesium.ImageMaterialProperty({
+                            image: buildBathyCanvas(), transparent: true,
+                            color: Cesium.Color.WHITE.withAlpha(0.82)
+                        })
+                    }
+                });
+            }
+            function buildArgo() {
+                MockApi.getArgoProfiles().forEach(m => {
+                    const modeCol = m.mode === 'D'
+                        ? Cesium.Color.fromCssColorString('#7fd4c1')
+                        : Cesium.Color.fromCssColorString('#d9a45b');
+                    argoEnt[m.id] = viewer.entities.add({
+                        id: 'argo-' + m.id,
+                        position: Cesium.Cartesian3.fromDegrees(m.lon, m.lat, 0),
+                        billboard: {
+                            image: argoSprite(m.mode), scale: 1,
+                            verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                            disableDepthTestDistance: 1e7
+                        },
+                        polyline: {
+                            positions: [
+                                Cesium.Cartesian3.fromDegrees(m.lon, m.lat, 0),
+                                Cesium.Cartesian3.fromDegrees(m.lon, m.lat, depthH(1000))],
+                            material: modeCol.withAlpha(0.16), width: 1
+                        }
+                    });
+                    const ent = argoEnt[m.id];
+                    ent._s = 1; ent._sTarget = 1;
+                });
+            }
+            function buildBox() {
+                const c = [[DOM_W, DOM_S], [DOM_E, DOM_S], [DOM_E, DOM_N], [DOM_W, DOM_N]];
+                boxEnts = [];
+                for (let k = 0; k < 4; k++) {
+                    const [lon, lat] = c[k];
+                    boxEnts.push(viewer.entities.add({
+                        show: false,
+                        polyline: {
+                            positions: [
+                                Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+                                Cesium.Cartesian3.fromDegrees(lon, lat, 0)],
+                            material: new Cesium.PolylineDashMaterialProperty({
+                                color: Cesium.Color.fromCssColorString('#4da3d8').withAlpha(0.38), dashLength: 14
+                            }),
+                            width: 1
+                        }
+                    }));
+                }
+                cursorEnt = viewer.entities.add({
+                    show: false,
+                    polyline: {
+                        positions: [],
+                        material: Cesium.Color.fromCssColorString('#7fc4e8').withAlpha(0.9), width: 2
+                    }
+                });
+                cursorLabel = viewer.entities.add({
+                    show: false,
+                    position: Cesium.Cartesian3.fromDegrees(DOM_W, 0, 0),
+                    label: {
+                        text: '', font: '12px "IBM Plex Mono"',
+                        fillColor: Cesium.Color.fromCssColorString('#9fcfe8'),
+                        showBackground: true,
+                        backgroundColor: new Cesium.Color(0.02, 0.05, 0.1, 0.75),
+                        backgroundPadding: new Cesium.Cartesian2(6, 3),
+                        pixelOffset: new Cesium.Cartesian2(-10, 0),
+                        horizontalOrigin: Cesium.HorizontalOrigin.RIGHT,
+                        disableDepthTestDistance: 1e7
+                    }
+                });
+            }
+
+            /* ---- geometry updates ---- */
+            function updateFieldGeometry() {
+                const depths = MockApi.getModelDepths();
+                const z = depths[state.depthIdx], h1 = depthH(z);
+                const c = [[DOM_W, DOM_S], [DOM_E, DOM_S], [DOM_E, DOM_N], [DOM_W, DOM_N]];
+                const showB = state.showBounds;
+                for (let i = 0; i < 4; i++) {
+                    const [lon, lat] = c[i];
+                    boxEnts[i].show = showB;
+                    boxEnts[i].polyline.positions = [
+                        Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+                        Cesium.Cartesian3.fromDegrees(lon, lat, h1)];
+                }
+                const ring = c.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat, h1));
+                ring.push(ring[0]);
+                cursorEnt.show = showB;
+                cursorEnt.polyline.positions = ring;
+                cursorLabel.show = showB;
+                cursorLabel.position = Cesium.Cartesian3.fromDegrees(DOM_W, 0, h1);
+                cursorLabel.label.text = '−' + z + ' m';
+                for (let i = 0; i < 13; i++)ensureLayer(i).rectangle.height = i === 0 ? -3 : depthH(depths[i]);
+                bathyEnt.rectangle.height = depthH(4200);
+                MockApi.getArgoProfiles().forEach(m => {
+                    if (argoEnt[m.id]) argoEnt[m.id].polyline.positions = [
+                        Cesium.Cartesian3.fromDegrees(m.lon, m.lat, 0),
+                        Cesium.Cartesian3.fromDegrees(m.lon, m.lat, depthH(1000))];
+                });
+                rebuildProfileLine();
+                scheduleWalls();
+            }
+
+            /* ---- layer materials: dominant active plane, receding others ---- */
+            function dropFade(ent) {
+                for (let j = layerFades.length - 1; j >= 0; j--)if (layerFades[j].ent === ent) layerFades.splice(j, 1);
+            }
+            function setAlpha(ent, a) {
+                ent._alpha = a;
+                if (ent._mat) ent._mat.color = Cesium.Color.WHITE.withAlpha(a);
+            }
+            function layerAlpha(i, k) {
+                if (i === k) return 0.95;
+                if (i === 0) return 0.30;
+                return Math.max(0.14, 0.34 - 0.17 * ((k - i) / Math.max(1, k)));
+            }
+            function refreshField() {
+                const depths = MockApi.getModelDepths();
+                const key = state.variable + ':' + state.timeIdx;
+                if (sliceKey !== key) {
+                    slices = depths.map((z, i) => MockApi.getModelSlice(i, state.timeIdx, state.variable));
+                    let mn = Infinity, mx = -Infinity;
+                    slices.forEach(s => { mn = Math.min(mn, s.min); mx = Math.max(mx, s.max); });
+                    const cfg = VARS[state.variable];
+                    fieldRange = [Math.floor(mn / cfg.gridStep) * cfg.gridStep, Math.ceil(mx / cfg.gridStep) * cfg.gridStep];
+                    layerCanvases = slices.map((s, i) => renderSliceCanvas(s, depths[i]));
+                    sliceKey = key;
+                }
+                const k = state.depthIdx, now = performance.now();
+                for (let i = 0; i < 13; i++) {
+                    const ent = ensureLayer(i);
+                    const on = state.showField && i <= k;
+                    const was = ent._wasShown;
+                    ent.show = on; ent._wasShown = on;
+                    if (!on) { dropFade(ent); continue; }
+                    const alpha = layerAlpha(i, k) * state.opacity;
+                    const newCanvas = ent._matImage !== layerCanvases[i];
+                    if (newCanvas) {
+                        dropFade(ent);
+                        ent._mat = new Cesium.ImageMaterialProperty({
+                            image: layerCanvases[i], transparent: true,
+                            color: Cesium.Color.WHITE.withAlpha(alpha)
+                        });
+                        ent.rectangle.material = ent._mat; ent._matImage = layerCanvases[i];
+                        ent._alpha = alpha;
+                    } else if (on && !was) {
+                        dropFade(ent);
+                        setAlpha(ent, 0.02);
+                        layerFades.push({ ent, from: 0.02, to: alpha, t0: now });
+                    } else if (Math.abs((ent._alpha == null ? alpha : ent._alpha) - alpha) > 0.003) {
+                        dropFade(ent);
+                        setAlpha(ent, alpha);
+                    }
+                    ent.rectangle.height = i === 0 ? -3 : depthH(depths[i]);
+                }
+                bathyEnt.show = state.showBathy;
+                updateFieldGeometry();
+                UI.updateLegend(fieldRange);
+                scheduleWalls();
+            }
+
+            /* ---- selection visuals ---- */
+            function removeProfile() {
+                if (profilePrim) { viewer.scene.primitives.remove(profilePrim); profilePrim = null; }
+                profilePrimKey = '';
+            }
+            function rebuildProfileLine() {
+                if (!state.selectedId) { removeProfile(); return; }
+                const key = state.selectedId + '|' + state.exaggeration + '|' + sliceKey;
+                if (key === profilePrimKey) return;
+                profilePrimKey = key;
+                removeProfile();
+                const prof = MockApi.getArgoProfile(state.selectedId);
+                const lv = prof.levels.filter(l => l.depth <= 1000);
+                const m = prof.meta;
+                const positions = lv.map(l => Cesium.Cartesian3.fromDegrees(m.lon, m.lat, depthH(l.depth)));
+                const [mn, mx] = fieldRange, span = (mx - mn) || 1;
+                const ramp = VARS[state.variable].ramp;
+                const colors = lv.map(l => {
+                    const [r, g, b] = ramp(clamp((l[state.variable] - mn) / span, 0, 1));
+                    return new Cesium.Color(r / 255, g / 255, b / 255, 1);
+                });
+                profilePrim = viewer.scene.primitives.add(new Cesium.Primitive({
+                    geometryInstances: new Cesium.GeometryInstance({
+                        geometry: new Cesium.PolylineGeometry({
+                            positions, width: 5,
+                            vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT, colors
+                        })
+                    }),
+                    appearance: new Cesium.PolylineColorAppearance(),
+                    asynchronous: false
+                }));
+            }
+            function clearMatchOverlay() {
+                matchEnts.forEach(e => viewer.entities.remove(e));
+                matchEnts = [];
+            }
+            function buildMatchOverlay() {
+                clearMatchOverlay();
+                const comp = App.comp; if (!comp) return;
+                const { lon: glon, lat: glat } = comp.match;
+                const m = comp.profile.meta;
+                const half = 0.25, hAnn = 6000;
+                const corners = [[glon - half, glat - half], [glon + half, glat - half],
+                [glon + half, glat + half], [glon - half, glat + half]];
+                const pos = corners.map(([lo, la]) => Cesium.Cartesian3.fromDegrees(lo, la, hAnn));
+                pos.push(pos[0]);
+                matchEnts.push(viewer.entities.add({
+                    polyline: {
+                        positions: pos,
+                        material: Cesium.Color.fromCssColorString('#d9a45b').withAlpha(0.85), width: 1.6
+                    }
+                }));
+                matchEnts.push(viewer.entities.add({
+                    polyline: {
+                        positions: [
+                            Cesium.Cartesian3.fromDegrees(m.lon, m.lat, hAnn),
+                            Cesium.Cartesian3.fromDegrees(glon, glat, hAnn)],
+                        material: new Cesium.PolylineDashMaterialProperty({
+                            color: Cesium.Color.fromCssColorString('#d9a45b').withAlpha(0.5), dashLength: 10
+                        }),
+                        width: 1.2
+                    }
+                }));
+                matchEnts.push(viewer.entities.add({
+                    position: Cesium.Cartesian3.fromDegrees(glon, glat, hAnn),
+                    label: {
+                        text: 'GLORYS12 cell ' + comp.match.i + ',' + comp.match.j,
+                        font: '10px "IBM Plex Mono"',
+                        fillColor: Cesium.Color.fromCssColorString('#e8c98f'),
+                        showBackground: true,
+                        backgroundColor: new Cesium.Color(0.05, 0.04, 0.01, 0.75),
+                        backgroundPadding: new Cesium.Cartesian2(6, 3),
+                        pixelOffset: new Cesium.Cartesian2(0, 16),
+                        disableDepthTestDistance: 1e7
+                    }
+                }));
+            }
+            function deselectVisuals() {
+                if (selected) {
+                    const ent = argoEnt[selected];
+                    if (ent) { ent._sTarget = 1; }
+                }
+                if (reticleEnt) { viewer.entities.remove(reticleEnt); reticleEnt = null; }
+                if (selLabelEnt) { viewer.entities.remove(selLabelEnt); selLabelEnt = null; }
+                clearMatchOverlay();
+                removeProfile();
+                selected = null;
+            }
+            /* deliberate camera move — enough zoom to focus, context preserved */
+            function focusOn(lon, lat) {
+                const cam = viewer.camera;
+                const carto = cam.positionCartographic;
+                const alt = clamp(carto.height * 0.6, 9e5, 3.2e6);
+                cam.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(lon, lat - 3, alt),
+                    orientation: {
+                        heading: cam.heading,
+                        pitch: Math.min(cam.pitch, Cesium.Math.toRadians(-40)), roll: 0
+                    },
+                    duration: 1.4,
+                    easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT
+                });
+            }
+            function select(id) {
+                deselectVisuals();
+                const m = MockApi.getArgoProfiles().find(p => p.id === id);
+                if (!m || !argoEnt[id]) return;
+                selected = id;
+                const ent = argoEnt[id];
+                ent._sTarget = 1.4;
+                reticleEnt = viewer.entities.add({
+                    position: Cesium.Cartesian3.fromDegrees(m.lon, m.lat, 0),
+                    billboard: {
+                        image: reticleSprite(), scale: 1, verticalOrigin: Cesium.VerticalOrigin.CENTER,
+                        disableDepthTestDistance: 1e7
+                    }
+                });
+                selLabelEnt = viewer.entities.add({
+                    position: Cesium.Cartesian3.fromDegrees(m.lon, m.lat, 0),
+                    label: {
+                        text: m.id + ' · cycle ' + m.cycle,
+                        font: '12px "IBM Plex Mono"',
+                        fillColor: Cesium.Color.fromCssColorString('#eaf6f2'),
+                        showBackground: true,
+                        backgroundColor: new Cesium.Color(0.03, 0.06, 0.11, 0.85),
+                        backgroundPadding: new Cesium.Cartesian2(7, 5),
+                        pixelOffset: new Cesium.Cartesian2(0, -32),
+                        disableDepthTestDistance: 1e7
+                    }
+                });
+                rebuildProfileLine();
+                buildMatchOverlay();
+                focusOn(m.lon, m.lat);
+            }
+            function setHover(id) {
+                hoverId = id;
+                for (const k in argoEnt) {
+                    const ent = argoEnt[k];
+                    ent._sTarget = (k === id) ? 1.3 : (k === selected) ? 1.4 : 1;
+                }
+            }
+
+            /* ---- picking, hover, probe ---- */
+            function setupPicking() {
+                const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+                viewer.screenSpaceEventHandler.removeInputAction(Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+                handler.setInputAction(evt => {
+                    const picked = viewer.scene.pick(evt.position);
+                    const ent = picked && picked.id;
+                    if (ent && typeof ent.id === 'string' && ent.id.indexOf('argo-') === 0) {
+                        App.select(ent.id.slice(5));
+                        return;
+                    }
+                    const carto = viewer.camera.pickEllipsoid(evt.position, viewer.scene.globe.ellipsoid);
+                    if (carto) {
+                        const cc = Cesium.Cartographic.fromCartesian(carto);
+                        const lon = Cesium.Math.toDegrees(cc.longitude), lat = Cesium.Math.toDegrees(cc.latitude);
+                        if (lon >= DOM_W && lon <= DOM_E && lat >= DOM_S && lat <= DOM_N && slices.length) {
+                            UI.setProbe(lon, lat, sampleGrid(slices[state.depthIdx], lon, lat));
+                        }
+                    }
+                    if (state.selectedId) App.deselect();
+                }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+                handler.setInputAction(evt => {
+                    const picked = viewer.scene.pick(evt.endPosition);
+                    const ent = picked && picked.id;
+                    const isArgo = ent && typeof ent.id === 'string' && ent.id.indexOf('argo-') === 0;
+                    const id = isArgo ? ent.id.slice(5) : null;
+                    viewer.canvas.style.cursor = isArgo ? 'pointer' : 'default';
+                    if (id !== hoverId) { setHover(id); App.hoverArgo(id, evt.endPosition); }
+                    else if (id) { App.moveArgoTip(evt.endPosition); }
+                }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+                /* hover + tooltip clear when the pointer moves onto UI panels */
+                document.addEventListener('mousemove', e => {
+                    if (e.target !== viewer.canvas && hoverId !== null) {
+                        setHover(null);
+                        App.hoverArgo(null);
+                    }
+                });
+            }
+
+            /* ---- per-frame: hover tween, layer fades, particles ---- */
+            function processLayerFades(now) {
+                for (let i = layerFades.length - 1; i >= 0; i--) {
+                    const f = layerFades[i];
+                    const k = Math.min(1, (now - f.t0) / 320);
+                    const e = 1 - Math.pow(1 - k, 3);
+                    setAlpha(f.ent, f.from + (f.to - f.from) * e);
+                    if (k >= 1) layerFades.splice(i, 1);
+                }
+            }
+            function onFrame() {
+                const now = performance.now();
+                for (const id in argoEnt) {
+                    const ent = argoEnt[id];
+                    if (Math.abs(ent._s - ent._sTarget) > 0.004) {
+                        ent._s += (ent._sTarget - ent._s) * 0.2;
+                        ent.billboard.scale = ent._s;
+                    }
+                }
+                processLayerFades(now);
+                if (state.showCurrents) Particles.tick(now);
+            }
+
+            /* ---- init ---- */
+            function init() {
+                const imagery = new Cesium.UrlTemplateImageryProvider({
+                    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                    subdomains: ['a', 'b', 'c', 'd'],
+                    credit: new Cesium.Credit('© OpenStreetMap contributors · © CARTO', true),
+                    maximumLevel: 18
+                });
+                viewer = new Cesium.Viewer('cesium-container', {
+                    baseLayer: new Cesium.ImageryLayer(imagery),
+                    animation: false, timeline: false, baseLayerPicker: false, geocoder: false,
+                    homeButton: false, sceneModePicker: false, navigationHelpButton: false,
+                    fullscreenButton: false, selectionIndicator: false, infoBox: false,
+                    creditContainer: $('credit-container')
+                });
+                const scene = viewer.scene, globe = scene.globe;
+                globe.baseColor = Cesium.Color.fromCssColorString('#071018');
+                globe.enableLighting = false;
+                globe.showGroundAtmosphere = false;
+                globe.depthTestAgainstTerrain = false;
+                const tr = globe.translucency;
+                tr.enabled = true; tr.frontFaceAlpha = 0.48;
+                try { tr.backFaceAlpha = 0.05; } catch (e) { }
+                scene.skyAtmosphere.show = true;
+                try {
+                    scene.skyAtmosphere.hueShift = 0.03;
+                    scene.skyAtmosphere.brightnessShift = -0.12;
+                    scene.skyAtmosphere.saturationShift = 0.12;
+                } catch (e) { }
+                scene.fog.enabled = true;
+                try { scene.fog.density = 2.2e-4; } catch (e) { }
+                try { scene.sun.show = false; } catch (e) { }
+                try { scene.moon.show = false; } catch (e) { }
+                try { scene.msaaSamples = 4; } catch (e) { }
+                try { scene.postProcessStages.fxaa.enabled = true; } catch (e) { }
+                try {
+                    const base = viewer.imageryLayers.get(0);
+                    base.brightness = 0.92; base.saturation = 0.72; base.gamma = 1.05;
+                } catch (e) { }
+                scene.screenSpaceCameraController.minimumZoomDistance = 8e4;
+                scene.screenSpaceCameraController.maximumZoomDistance = 4.2e7;
+                setHome(true, 3.4);
+                buildBathy(); buildArgo(); buildBox();
+                Particles.init(viewer);
+                scene.preRender.addEventListener(onFrame);
+                setupPicking();
+                imagery.errorEvent.addEventListener(() => {
+                    if (!basemapWarned) {
+                        basemapWarned = true;
+                        UI.toast('Basemap tiles unavailable — continuing with a solid globe.');
+                    }
+                });
+                const hint = $('cam-hint'), fade = () => hint.classList.add('fade');
+                viewer.canvas.addEventListener('pointerdown', fade, { once: true });
+                viewer.canvas.addEventListener('wheel', fade, { once: true });
+            }
+
+            function setArgoVisible(on) {
+                Object.values(argoEnt).forEach(e => e.show = on);
+                if (reticleEnt) reticleEnt.show = on;
+                if (selLabelEnt) selLabelEnt.show = on;
+                if (profilePrim) profilePrim.show = on;
+                matchEnts.forEach(e => e.show = on);
+            }
+
+            return {
+                init, refreshField, flyHome,
+                select, deselect: deselectVisuals,
+                setArgoVisible, setParticles: on => Particles.setShow(on),
+                updateGeometry: updateFieldGeometry
+            };
+        })();
+
+        /* ================================================================
+           Instruments — state-driven timeline & depth navigator.
+           Both receive their initial index from `state` and write back
+           only through App setters, so they can never disagree with it.
+           ================================================================ */
+        function makeTimeline(mount, initialIdx, onChange) {
+            const N = 6, times = MockApi.getModelTimes();
+            mount.innerHTML = '';
+            const base = document.createElement('div'); base.className = 'tl-base'; mount.appendChild(base);
+            const fillEl = document.createElement('div'); fillEl.className = 'tl-fill'; mount.appendChild(fillEl);
+            times.forEach((t, i) => {
+                const tick = document.createElement('div'); tick.className = 'tl-tick';
+                tick.style.left = (i / N * 100) + '%';
+                tick.innerHTML = '<span>' + fmtDate(t).slice(5) + '</span>';
+                mount.appendChild(tick);
+            });
+            const head = document.createElement('div'); head.className = 'tl-head'; mount.appendChild(head);
+            const matchEl = document.createElement('div'); matchEl.className = 'tl-match';
+            matchEl.hidden = true;
+            matchEl.title = 'Matched model time — anchored to the selected profile';
+            mount.appendChild(matchEl);
+            let idx = clamp(initialIdx, 0, N), dragging = false;
+            function place(animate) {
+                const pct = idx / N * 100;
+                head.style.transition = animate && !dragging ? 'left 220ms var(--ease)' : 'none';
+                head.style.left = pct + '%';
+                fillEl.style.width = pct + '%';
+            }
+            function fromX(clientX) {
+                const r = mount.getBoundingClientRect();
+                return Math.round(clamp((clientX - r.left) / r.width, 0, 1) * N);
+            }
+            mount.addEventListener('pointerdown', e => {
+                dragging = true; mount.setPointerCapture(e.pointerId);
+                const i = fromX(e.clientX);
+                if (i !== idx) { idx = i; place(false); onChange(i); }
+            });
+            mount.addEventListener('pointermove', e => {
+                if (!dragging) return;
+                const i = fromX(e.clientX);
+                if (i !== idx) { idx = i; place(false); onChange(i); }
+            });
+            mount.addEventListener('pointerup', () => { dragging = false; place(true); });
+            mount.addEventListener('keydown', e => {
+                if (e.key === 'ArrowRight' && idx < N) { idx++; place(true); onChange(idx); e.preventDefault(); }
+                if (e.key === 'ArrowLeft' && idx > 0) { idx--; place(true); onChange(idx); e.preventDefault(); }
+            });
+            place(false);
+            return {
+                set(i, animate) { idx = clamp(i, 0, N); place(animate); },
+                setMatch(mi) { matchEl.hidden = mi == null; if (mi != null) matchEl.style.left = (mi / N * 100) + '%'; }
+            };
+        }
+
+        function makeDepthNav(mount, levels, initialIdx, onChange) {
+            const P = z => Math.pow(z / 1000, 0.6);
+            const H = 252, TOP = 22, BOT = 10;
+            const labels = [0, 100, 300, 500, 1000];
+            mount.innerHTML = '';
+            const surface = document.createElement('div'); surface.className = 'dn-surface';
+            surface.textContent = 'Surface'; mount.appendChild(surface);
+            const axis = document.createElement('div'); axis.className = 'dn-axis'; mount.appendChild(axis);
+            const fill = document.createElement('div'); fill.className = 'dn-fill'; mount.appendChild(fill);
+            levels.forEach(z => {
+                const t = document.createElement('div'); t.className = 'dn-tick';
+                t.style.top = (TOP + P(z) * (H - TOP - BOT)) + 'px';
+                if (labels.includes(z)) t.innerHTML = '<span>' + (z === 1000 ? '1000 m' : z) + '</span>';
+                mount.appendChild(t);
+            });
+            const thumb = document.createElement('div'); thumb.className = 'dn-thumb';
+            thumb.innerHTML = '<b></b><i></i>';
+            mount.appendChild(thumb);
+            let idx = clamp(initialIdx, 0, levels.length - 1), dragging = false;
+            function place(animate) {
+                const z = levels[idx];
+                const y = TOP + P(z) * (H - TOP - BOT);
+                thumb.classList.toggle('anim', !!animate && !dragging);
+                thumb.style.top = y + 'px';
+                fill.style.height = (y - TOP) + 'px';
+                thumb.querySelector('b').textContent = z + ' m';
+                thumb.querySelector('i').textContent = 'z' + (idx + 1);
+                mount.classList.toggle('dragging', dragging);
+            }
+            function fromY(clientY) {
+                const r = mount.getBoundingClientRect();
+                const p = clamp((clientY - r.top - TOP) / (H - TOP - BOT), 0, 1);
+                const z = 1000 * Math.pow(p, 1 / 0.6);
+                let best = 0, bd = Infinity;
+                levels.forEach((l, i) => { const d = Math.abs(l - z); if (d < bd) { bd = d; best = i; } });
+                return best;
+            }
+            mount.addEventListener('pointerdown', e => {
+                dragging = true; mount.setPointerCapture(e.pointerId);
+                const i = fromY(e.clientY);
+                if (i !== idx) { idx = i; place(false); onChange(i); }
+            });
+            mount.addEventListener('pointermove', e => {
+                if (!dragging) return;
+                const i = fromY(e.clientY);
+                if (i !== idx) { idx = i; place(false); onChange(i); }
+            });
+            mount.addEventListener('pointerup', () => { dragging = false; place(true); });
+            mount.addEventListener('keydown', e => {
+                if ((e.key === 'ArrowDown' || e.key === 'ArrowRight') && idx < levels.length - 1) {
+                    idx++; place(true); onChange(idx); e.preventDefault();
+                }
+                if ((e.key === 'ArrowUp' || e.key === 'ArrowLeft') && idx > 0) {
+                    idx--; place(true); onChange(idx); e.preventDefault();
+                }
+            });
+            place(false);
+            return { set(i, animate) { idx = clamp(i, 0, levels.length - 1); place(animate); } };
+        }
+
+        function paintRange(el) {
+            const min = +el.min, max = +el.max, v = +el.value;
+            el.style.setProperty('--fill', ((v - min) / (max - min) * 100) + '%');
+        }
+
+        /* ================================================================
+           Charts — comparison tray figures
+           "Analysis–Observation Residual" — never "model error".
+           Observation line is visually dominant (seafoam).
+           ================================================================ */
+        const Charts = {
+            ready: !!window.Plotly,
+            tab: 'profile', _xr: null, _rmax: null,
+            setTab(t) {
+                state.trayTab = t;
+                this.tab = t;
+                document.querySelectorAll('#seg-tabs button')
+                    .forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+                this.refreshHead();
+                if (App.comp) this.render();
+                else {
+                    $('chart-profile').hidden = true;
+                    $('chart-residual').hidden = true;
+                    $('chart-empty').hidden = false;
+                }
+            },
+            refreshHead() {
+                const cfg = VARS[state.variable];
+                $('tray-title').textContent = this.tab === 'profile'
+                    ? cfg.label + ' · depth profile' : 'Analysis–Observation Residual';
+                $('tray-unit').textContent = cfg.unit;
+                $('res-legend').hidden = this.tab !== 'residual' || !App.comp;
+            },
+            render() {
+                const hasComp = !!App.comp;
+                $('chart-profile').hidden = !hasComp || this.tab !== 'profile';
+                $('chart-residual').hidden = !hasComp || this.tab !== 'residual';
+                $('chart-empty').hidden = hasComp;
+                this.refreshHead();
+                if (!hasComp) return;
+                if (!this.ready) {
+                    const e = $('chart-empty');
+                    e.hidden = false;
+                    e.innerHTML = '<p class="plot-fallback">Plotly.js could not be loaded — charts unavailable.</p>';
+                    return;
+                }
+                const comp = App.comp, cfg = VARS[state.variable], unit = cfg.unit;
+                const yd = comp.obsDepths;
+                const viewVals = MockApi.getModelProfileAt({
+                    lon: comp.profile.meta.lon, lat: comp.profile.meta.lat,
+                    timeIdx: state.timeIdx, depths: comp.obsDepths, variable: state.variable
+                });
+                const all = comp.obsValues.concat(comp.modelValues, viewVals);
+                const pad = state.variable === 'temperature' ? 1.5 : 0.4;
+                const xr = [Math.floor(Math.min(...all) - pad), Math.ceil(Math.max(...all) + pad)];
+                this._xr = xr;
+                const frame = $('chart-frame');
+                frame.classList.remove('swap'); void frame.offsetWidth; frame.classList.add('swap');
+
+                const tickFont = { family: '"IBM Plex Mono", monospace', size: 9.5, color: '#7a879c' };
+                const titleFont = { family: '"Inter", sans-serif', size: 11, color: '#7a879c' };
+                const grid = 'rgba(150,172,202,.10)';
+                const spikes = {
+                    showspikes: true, spikemode: 'across', spikethickness: 1,
+                    spikedash: 'dot', spikecolor: 'rgba(150,172,202,.35)'
+                };
+                const hoverlabel = {
+                    bgcolor: '#0d1626', bordercolor: '#2c3a50',
+                    font: { family: '"IBM Plex Mono"', size: 10.5, color: '#dce8f8' }
+                };
+                const common = {
+                    margin: { l: 52, r: 18, t: 10, b: 36 },
+                    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                    font: { family: '"IBM Plex Mono", monospace', size: 9.5, color: '#7a879c' },
+                    hovermode: 'closest', dragmode: false,
+                    yaxis: Object.assign({
+                        title: { text: 'Depth (m)', font: titleFont },
+                        range: [1030, 0], dtick: 250, gridcolor: grid, zeroline: false, tickfont: tickFont
+                    }, spikes),
+                    hoverlabel
+                };
+
+                if (this.tab === 'profile') {
+                    Plotly.react('chart-profile', [
+                        {
+                            x: comp.obsValues, y: yd, mode: 'lines+markers', name: 'Argo observation',
+                            line: { color: '#7fd4c1', width: 2.2 }, marker: { size: 3.5, color: '#7fd4c1' },
+                            hovertemplate: '%{x:.2f} ' + unit + ' · %{y} m<extra>Observation</extra>'
+                        },
+                        {
+                            x: comp.modelValues, y: yd, mode: 'lines+markers', name: 'GLORYS12 · matched',
+                            line: { color: '#d9a45b', width: 1.6 }, marker: { size: 3, color: '#d9a45b' },
+                            hovertemplate: '%{x:.2f} ' + unit + ' · %{y} m<extra>Analysis (matched)</extra>'
+                        },
+                        {
+                            x: viewVals, y: yd, mode: 'lines', name: 'GLORYS12 · view time',
+                            line: { color: '#4da3d8', width: 1.1, dash: 'dash' },
+                            hovertemplate: '%{x:.2f} ' + unit + ' · %{y} m<extra>Analysis (view time)</extra>'
+                        }
+                    ], Object.assign({}, common, {
+                        xaxis: Object.assign({
+                            title: { text: cfg.label + ' (' + unit + ')', font: titleFont },
+                            range: xr, gridcolor: grid, zeroline: false, tickfont: tickFont
+                        }, spikes),
+                        legend: {
+                            x: 0.02, y: 0.99, yanchor: 'top', bgcolor: 'rgba(8,14,23,.6)',
+                            bordercolor: 'rgba(150,172,202,.18)', borderwidth: 1,
+                            font: { family: '"Inter", sans-serif', size: 10, color: '#a9b4c5' }
+                        },
+                        shapes: [{
+                            type: 'line', x0: xr[0], x1: xr[1], y0: state.depth, y1: state.depth,
+                            line: { color: 'rgba(77,163,216,.45)', width: 1, dash: 'dot' }
+                        }]
+                    }), { displayModeBar: false, responsive: true });
+                } else {
+                    let maxR = 0; comp.residuals.forEach(v => maxR = Math.max(maxR, Math.abs(v)));
+                    const steps = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10];
+                    const rmax = steps.find(s => s >= maxR * 1.2) || Math.ceil(maxR * 1.2);
+                    this._rmax = rmax;
+                    const rcolors = comp.residuals.map(v => {
+                        const [r, g, b] = RAMP_DIV(clamp((v + rmax) / (2 * rmax), 0, 1));
+                        return css([r, g, b]);
+                    });
+                    Plotly.react('chart-residual', [{
+                        x: comp.residuals, y: yd, mode: 'lines+markers', name: 'Residual',
+                        line: { color: 'rgba(150,172,202,.45)', width: 1.1 },
+                        marker: { size: 4, color: rcolors },
+                        fill: 'tozerox', fillcolor: 'rgba(150,172,202,.07)',
+                        hovertemplate: '%{x:+.2f} ' + unit + ' · %{y} m<extra>Analysis − Obs</extra>'
+                    }], Object.assign({}, common, {
+                        xaxis: Object.assign({
+                            title: { text: 'Residual (' + unit + ')', font: titleFont },
+                            range: [-rmax, rmax], gridcolor: grid,
+                            zeroline: true, zerolinecolor: 'rgba(200,212,228,.4)', zerolinewidth: 1.4,
+                            tickfont: tickFont
+                        }, spikes),
+                        showlegend: false,
+                        shapes: [{
+                            type: 'line', x0: -rmax, x1: rmax, y0: state.depth, y1: state.depth,
+                            line: { color: 'rgba(77,163,216,.45)', width: 1, dash: 'dot' }
+                        }]
+                    }), { displayModeBar: false, responsive: true });
+                    const c = $('res-canvas'), ctx = c.getContext('2d');
+                    const img = ctx.createImageData(c.width, c.height);
+                    for (let x = 0; x < c.width; x++) {
+                        const [r, g, b] = RAMP_DIV(x / (c.width - 1));
+                        for (let y = 0; y < c.height; y++) {
+                            const i = (y * c.width + x) * 4;
+                            img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+                        }
+                    }
+                    ctx.putImageData(img, 0, 0);
+                    $('res-min').textContent = '−' + rmax.toFixed(1);
+                    $('res-max').textContent = '+' + rmax.toFixed(1);
+                }
+            },
+            updateDepthLine() {
+                if (!App.comp || !this.ready || !this._xr) return;
+                const z = state.depth;
+                const line = {
+                    type: 'line', y0: z, y1: z,
+                    line: { color: 'rgba(77,163,216,.45)', width: 1, dash: 'dot' }
+                };
+                if (this.tab === 'profile') {
+                    Plotly.relayout('chart-profile',
+                        { shapes: [Object.assign({ x0: this._xr[0], x1: this._xr[1] }, line)] });
+                } else {
+                    Plotly.relayout('chart-residual',
+                        { shapes: [Object.assign({ x0: -this._rmax, x1: this._rmax }, line)] });
+                }
+            },
+            resize() {
+                if (!this.ready || !App.comp) return;
+                const el = this.tab === 'profile' ? $('chart-profile') : $('chart-residual');
+                if (el && !el.hidden) Plotly.Plots.resize(el);
+            }
+        };
+
+        /* ---------------- metric rail (animated values) ---------------- */
+        const Metrics = {
+            render(comp) {
+                const rail = $('metric-rail');
+                rail.classList.remove('swap'); void rail.offsetWidth; rail.classList.add('swap');
+                if (!comp) {
+                    ['m-bias', 'm-mae', 'm-rmse', 'm-max', 'm-dist', 'm-dt'].forEach(id => {
+                        const el = $(id); el._v = 0; el.textContent = '—';
+                    });
+                    $('m-max-sub').textContent = '';
+                    $('m-n').textContent = 'n = —';
+                    return;
+                }
+                const u = VARS[state.variable].unit, s = comp.stats;
+                tweenText($('m-bias'), s.bias, v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2) + ' ' + u);
+                tweenText($('m-mae'), s.mae, v => v.toFixed(2) + ' ' + u);
+                tweenText($('m-rmse'), s.rmse, v => v.toFixed(2) + ' ' + u);
+                tweenText($('m-max'), s.maxAbs, v => v.toFixed(2) + ' ' + u);
+                $('m-max-sub').textContent = 'at ' + s.maxDepth + ' m';
+                tweenText($('m-dist'), comp.match.distanceKm, v => v.toFixed(1) + ' km');
+                tweenText($('m-dt'), comp.match.dtHours, v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1) + ' h');
+                $('m-n').textContent = 'n = ' + s.n + (comp.excluded ? ' · ' + comp.excluded + ' QC-excluded' : '');
+            }
+        };
+
+        /* ================================================================
+           Inspector rendering
+           ================================================================ */
+        const kv = rows => rows.map(([k, v]) => '<div class="k">' + k + '</div><div class="v">' + v + '</div>').join('');
+
+        function renderInspector() {
+            const empty = $('insp-empty'), body = $('insp-body'), clear = $('btn-clear');
+            if (!state.selectedId || !App.comp) {
+                empty.hidden = false; body.hidden = true; clear.hidden = true;
+                $('insp-title').textContent = 'Observations';
+                $('insp-count').textContent = MockApi.getArgoProfiles().length + ' profiles available · mock';
+                return;
+            }
+            empty.hidden = true; body.hidden = false; clear.hidden = false;
+            $('insp-title').textContent = 'Inspector';
+            const comp = App.comp, m = comp.profile.meta, mt = comp.match;
+            const valid = MockApi.getArgoProfile(m.id).levels.filter(l => l.qc === 1).length;
+            $('ip-id').textContent = m.id;
+            $('ip-sub').textContent = m.platform + ' · cycle ' + m.cycle;
+            $('ip-rows').innerHTML = kv([
+                ['Location', fmtLat(m.lat) + ' · ' + fmtLon(m.lon)],
+                ['Observation time', fmtUTC(m.time)],
+                ['Data mode', m.mode === 'D'
+                    ? '<span class="chip chip-d">D · delayed</span>'
+                    : '<span class="chip chip-a">A · adjusted RT</span>'],
+                ['QC', m.qc === 'GOOD'
+                    ? '<span class="chip chip-g">GOOD</span>'
+                    : '<span class="chip chip-m">MIXED</span>'],
+                ['Valid levels', valid + ' / 45']
+            ]);
+            $('ip-match').innerHTML = kv([
+                ['Matched model time', '<span class="hl">' + fmtUTC(mt.time) + '</span>'],
+                ['Current view time', '<span id="ip-view">' + fmtUTC(state.time) + '</span>'],
+                ['Temporal difference', fmtHours(mt.dtHours)],
+                ['Grid cell', fmtLon(mt.lon) + ', ' + fmtLat(mt.lat)],
+                ['Spatial distance', mt.distanceKm.toFixed(1) + ' km']
+            ]);
+            renderProvenance(comp);
+            body.classList.remove('swap'); void body.offsetWidth; body.classList.add('swap');
+        }
+
+        function renderProvenance(comp) {
+            const meta = MockApi.getMetadata(), m = comp.profile.meta, mt = comp.match;
+            $('prov-body').innerHTML = kv([
+                ['Dataset ID', '<span style="font-size:10px">' + meta.datasetId + '</span>'],
+                ['Dataset version', meta.version],
+                ['Demo grid', meta.demoGrid],
+                ['Target grid', meta.targetGrid],
+                ['Model timestamp', fmtUTC(mt.time)],
+                ['Model coordinates', fmtLon(mt.lon) + ', ' + fmtLat(mt.lat) + ' (' + mt.i + ', ' + mt.j + ')'],
+                ['Observation timestamp', fmtUTC(m.time)],
+                ['Observation coordinates', fmtLon(m.lon) + ', ' + fmtLat(m.lat)],
+                ['Spatial distance', mt.distanceKm.toFixed(1) + ' km'],
+                ['Time difference', fmtHours(mt.dtHours) + ' (model − obs)'],
+                ['Argo data mode', m.mode === 'D' ? 'delayed mode (D)' : 'adjusted real-time (A)'],
+                ['QC', m.qcDetail],
+                ['Pressure-to-depth', 'gsw_z_from_p(p, lat) · TEOS-10'],
+                ['Temperature conversion', state.variable === 'temperature'
+                    ? 'in-situ T (ITS-90) → potential temperature θ'
+                    : 'PSS-78 · TEOS-10 checks'],
+                ['Vertical interpolation', 'linear in depth, z-levels → obs levels'],
+                ['Comparison depths', comp.stats.n + ' levels · 0–1000 m']
+            ]);
+        }
+
+        /* ================================================================
+           App — orchestration. `state` is authoritative; every control
+           path routes through these setters.
+           ================================================================ */
+        const exagMax = 500;
+        const exagFromSlider = v => Math.max(1, Math.round(Math.pow(exagMax, v / 100)));
+        let TL = null, DepthNav = null;
+        let introDone = false, depthTouched = false;
+
+        function dismissIntro() {
+            if (introDone) return;
+            introDone = true;
+            document.body.classList.remove('intro-on');
+            $('intro').classList.add('gone');
+            /* one quiet first-time cue on the signature control */
+            if (!depthTouched) {
+                setTimeout(() => {
+                    const dn = $('depth-nav');
+                    if (dn && !depthTouched) {
+                        dn.classList.add('attract');
+                        setTimeout(() => dn.classList.remove('attract'), 2000);
+                    }
+                }, 900);
+            }
+        }
+
+        function updateReadouts() {
+            const times = MockApi.getModelTimes(), depths = MockApi.getModelDepths();
+            $('val-time').textContent = fmtDate(times[state.timeIdx]);
+            const mr = $('match-row');
+            if (App.comp) { mr.hidden = false; $('val-match').textContent = fmtUTC(App.comp.match.time); }
+            else mr.hidden = true;
+            $('val-depth').textContent = state.depth + ' m';
+            $('val-depth-sub').textContent = 'model z-level ' + (state.depthIdx + 1) + ' / ' + depths.length;
+            $('val-vscale').textContent = state.exaggeration + '×';
+            $('val-vscale-note').textContent = state.exaggeration === 1
+                ? '1× is the true geometric scale.'
+                : '1× is the true geometric scale; geometry is exaggerated for legibility.';
+            $('val-opacity').textContent = Math.round(state.opacity * 100) + '%';
+            const badge = $('vz-badge');
+            badge.innerHTML = state.exaggeration === 1
+                ? 'Vertical scale <b>true 1×</b>'
+                : 'Vertical scale <b>' + state.exaggeration + '×</b>';
+            $('lg-line').textContent = 'depth −' + state.depth + ' m · ' + fmtDate(state.time);
+            const ts = $('tray-status');
+            if (App.comp) {
+                ts.innerHTML = '<span class="hl">' + App.comp.profile.meta.id + '</span>' +
+                    ' · matched <span class="mt">' + fmtUTC(App.comp.match.time) + '</span>';
+            } else {
+                ts.textContent = 'No observation selected';
+            }
+            $('btn-tray-txt').textContent = state.trayOpen ? 'Close' : 'Open analysis';
+            $('hdr-var').textContent = VARS[state.variable].label + (state.variable === 'salinity' ? ' · P2' : '');
+            $('hdr-var-dot').style.background = state.variable === 'temperature' ? 'var(--blue)' : 'var(--seafoam)';
+        }
+
+        const App = {
+            comp: null,
+            init() {
+                state.exaggeration = exagFromSlider(+$('ctl-vscale').value);
+                Scene.init();
+                Scene.setParticles(state.showCurrents);
+                /* instruments are created FROM state, so they can never disagree */
+                TL = makeTimeline($('tl-canvas'), state.timeIdx, i => App.setTime(i, 'tl'));
+                DepthNav = makeDepthNav($('depth-nav'), MockApi.getModelDepths(), state.depthIdx,
+                    i => App.setDepth(i, 'nav'));
+                if (window.innerWidth < 1240) document.body.classList.add('rail-closed');
+                Scene.refreshField();
+                renderInspector();
+                Charts.setTab(state.trayTab);
+                Metrics.render(null);
+                updateReadouts();
+            },
+
+            /* --- field controls --- */
+            setDepth(i, src) {
+                state.depthIdx = i; state.depth = MockApi.getModelDepths()[i];
+                if (src !== 'nav' && DepthNav) DepthNav.set(i, true);
+                $('lg-probe').hidden = true;
+                depthTouched = true;
+                Scene.refreshField();
+                Charts.updateDepthLine();
+                updateReadouts();
+                dismissIntro();
+            },
+            setTime(i, src) {
+                /* view time only — the matched model time never moves here */
+                state.timeIdx = i; state.time = FieldEngine.TIMES[i];
+                if (src !== 'tl' && TL) TL.set(i, true);
+                $('lg-probe').hidden = true;
+                Scene.refreshField();
+                if (App.comp) {
+                    Charts.render();
+                    const v = $('ip-view'); if (v) v.textContent = fmtUTC(state.time);
+                }
+                updateReadouts();
+                dismissIntro();
+            },
+            setVariable(v) {
+                state.variable = v;
+                $('lg-probe').hidden = true;
+                $('var-phase2-note').hidden = v !== 'salinity';
+                if (v === 'salinity') UI.toast('Salinity is a Phase 2 extension — mock field shown.');
+                Scene.refreshField();
+                if (state.selectedId) App.comp = MockApi.getComparison(state.selectedId, v);
+                renderInspector();
+                Charts.render();
+                if (App.comp) Metrics.render(App.comp);
+                updateReadouts();
+                dismissIntro();
+            },
+            setExaggeration(v) {
+                state.exaggeration = Math.max(1, Math.round(v));
+                Scene.updateGeometry();
+                updateReadouts();
+            },
+            setOpacity(v) {
+                state.opacity = clamp(v, 0, 1);
+                Scene.refreshField();
+                updateReadouts();
+            },
+            setToggle(key, on) {
+                state[key] = on;
+                if (key === 'showArgo') Scene.setArgoVisible(on);
+                if (key === 'showField' || key === 'showBathy') Scene.refreshField();
+                if (key === 'showBounds') Scene.updateGeometry();
+                if (key === 'showCurrents') Scene.setParticles(on);
+            },
+
+            /* --- selection: a deliberate, sequenced workflow (~900 ms) --- */
+            select(id) {
+                state.selectedId = id;
+                App.comp = MockApi.getComparison(id, state.variable);
+                $('argo-tip').classList.remove('show');
+                /* 1 — marker + camera + match overlay */
+                Scene.select(id);
+                /* 2 — inspector state change */
+                setTimeout(() => { if (state.selectedId === id) renderInspector(); }, 150);
+                /* 3 — tray begins opening, figure animates in with it */
+                setTimeout(() => {
+                    if (state.selectedId !== id) return;
+                    App.setTray(true);
+                    Charts.render();
+                }, 430);
+                /* 4 — metrics interpolate into place */
+                setTimeout(() => {
+                    if (state.selectedId === id) Metrics.render(App.comp);
+                }, 580);
+                if (TL) TL.setMatch(App.comp.match.timeIdx);
+                updateReadouts();
+                dismissIntro();
+            },
+            deselect() {
+                if (!state.selectedId) return;
+                state.selectedId = null; App.comp = null; state.provenanceOpen = false;
+                $('prov-body').classList.remove('open');
+                $('prov-toggle').classList.remove('open');
+                $('prov-toggle').setAttribute('aria-expanded', 'false');
+                Scene.deselect();
+                renderInspector();
+                Charts.render();
+                Metrics.render(null);
+                App.setTray(false);
+                if (TL) TL.setMatch(null);
+                updateReadouts();
+            },
+            toggleProvenance() {
+                state.provenanceOpen = !state.provenanceOpen;
+                $('prov-body').classList.toggle('open', state.provenanceOpen);
+                $('prov-toggle').classList.toggle('open', state.provenanceOpen);
+                $('prov-toggle').setAttribute('aria-expanded', String(state.provenanceOpen));
+            },
+
+            /* --- comparison tray --- */
+            setTray(open) {
+                state.trayOpen = open;
+                document.body.classList.toggle('tray-open', open);
+                updateReadouts();
+            },
+            resetView() {
+                Object.assign(state, {
+                    variable: 'temperature', timeIdx: 0, depthIdx: 10, opacity: 0.85,
+                    showArgo: true, showField: true, showBathy: true, showCurrents: false, showBounds: true,
+                    selectedId: null, provenanceOpen: false, trayOpen: false, trayTab: 'profile',
+                    depth: 500, time: FieldEngine.TIMES[0]
+                });
+                state.exaggeration = exagFromSlider($('ctl-vscale').value = 92);
+                App.comp = null;
+                $('ctl-variable').value = 'temperature';
+                $('ctl-opacity').value = 85;
+                paintRange($('ctl-vscale')); paintRange($('ctl-opacity'));
+                $('var-phase2-note').hidden = true;
+                ['argo', 'field', 'bathy', 'bounds'].forEach(k => $('tg-' + k).checked = true);
+                $('tg-currents').checked = false;
+                $('prov-body').classList.remove('open');
+                $('prov-toggle').classList.remove('open');
+                $('prov-toggle').setAttribute('aria-expanded', 'false');
+                $('lg-probe').hidden = true;
+                $('info-pop').hidden = true;
+                Scene.deselect();
+                Scene.setArgoVisible(true);
+                Scene.setParticles(false);
+                DepthNav.set(state.depthIdx, true);
+                TL.set(state.timeIdx, true);
+                TL.setMatch(null);
+                Scene.refreshField();
+                Scene.flyHome();
+                renderInspector();
+                Charts.setTab('profile');
+                Metrics.render(null);
+                App.setTray(false);
+                updateReadouts();
+                UI.toast('View reset to the default state.');
+            },
+
+            /* --- observation hover tooltip --- */
+            hoverArgo(id, pos) {
+                const tip = $('argo-tip');
+                if (!id) { tip.classList.remove('show'); return; }
+                const p = MockApi.getArgoProfile(id);
+                if (!p) { tip.classList.remove('show'); return; }
+                const m = p.meta;
+                const valid = p.levels.filter(l => l.qc === 1).length;
+                tip.innerHTML =
+                    '<div class="at-id">' + m.id + '</div>' +
+                    '<div class="at-row"><span class="k">Location</span><span class="v">' +
+                    fmtLat(m.lat) + ' · ' + fmtLon(m.lon) + '</span></div>' +
+                    '<div class="at-row"><span class="k">Observed</span><span class="v">' +
+                    fmtUTC(m.time) + '</span></div>' +
+                    '<div class="at-row"><span class="k">Valid levels</span><span class="v">' +
+                    valid + ' / 45</span></div>' +
+                    '<div class="at-row"><span class="k">Data mode</span><span class="v ' +
+                    (m.mode === 'D' ? 'md' : 'ma') + '">' + (m.mode === 'D' ? 'delayed (D)' : 'adjusted RT (A)') + '</span></div>';
+                tip.classList.add('show');
+                this.moveArgoTip(pos);
+            },
+            moveArgoTip(pos) {
+                const tip = $('argo-tip');
+                let x = pos.x + 16, y = pos.y + 18;
+                if (x + 230 > innerWidth) x = pos.x - 246;
+                if (y + 130 > innerHeight) y = pos.y - 140;
+                tip.style.left = Math.max(8, x) + 'px';
+                tip.style.top = Math.max(8, y) + 'px';
+            }
+        };
+
+        /* ---------------- control bindings ---------------- */
+        function bindControls() {
+            /* onboarding */
+            $('intro-start').addEventListener('click', dismissIntro);
+
+            /* prototype status popover */
+            const pop = $('info-pop');
+            $('btn-info').addEventListener('click', e => {
+                e.stopPropagation();
+                pop.hidden = !pop.hidden;
+            });
+            document.addEventListener('click', e => {
+                if (!pop.hidden && !pop.contains(e.target) && e.target.id !== 'btn-info') pop.hidden = true;
+            });
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape' && !pop.hidden) pop.hidden = true;
+            });
+
+            /* rail */
+            $('rail-collapse').addEventListener('click', () => {
+                document.body.classList.add('rail-closed');
+                setTimeout(() => Charts.resize(), 420);
+            });
+            $('rail-tab').addEventListener('click', () => {
+                document.body.classList.remove('rail-closed');
+                setTimeout(() => Charts.resize(), 420);
+            });
+
+            /* rail sections */
+            document.querySelectorAll('#rail .sec-h').forEach(h => {
+                h.addEventListener('click', () => {
+                    const sec = h.parentElement;
+                    sec.classList.toggle('closed');
+                    h.setAttribute('aria-expanded', String(!sec.classList.contains('closed')));
+                });
+            });
+
+            /* data */
+            $('ctl-dataset').addEventListener('change', e => {
+                if (e.target.value !== 'glorys') {
+                    UI.toast('MULTIOBS_GLO_PHY_MYNRT is not part of the offline demo — GLORYS12 retained.');
+                    e.target.value = 'glorys';
+                }
+            });
+            $('ctl-variable').addEventListener('change', e => App.setVariable(e.target.value));
+
+            /* time transport */
+            $('tl-prev').addEventListener('click', () => { if (state.timeIdx > 0) App.setTime(state.timeIdx - 1); });
+            $('tl-next').addEventListener('click', () => { if (state.timeIdx < 6) App.setTime(state.timeIdx + 1); });
+
+            /* layers */
+            $('tg-argo').addEventListener('change', e => App.setToggle('showArgo', e.target.checked));
+            $('tg-field').addEventListener('change', e => App.setToggle('showField', e.target.checked));
+            $('tg-bathy').addEventListener('change', e => App.setToggle('showBathy', e.target.checked));
+            $('tg-currents').addEventListener('change', e => App.setToggle('showCurrents', e.target.checked));
+            $('tg-bounds').addEventListener('change', e => App.setToggle('showBounds', e.target.checked));
+
+            /* view */
+            const vS = $('ctl-vscale');
+            vS.addEventListener('input', () => {
+                paintRange(vS); App.setExaggeration(exagFromSlider(+vS.value));
+            });
+            paintRange(vS);
+            const oS = $('ctl-opacity');
+            oS.addEventListener('input', () => {
+                paintRange(oS); App.setOpacity(+oS.value / 100);
+            });
+            paintRange(oS);
+
+            $('btn-reset-camera').addEventListener('click', () => {
+                Scene.flyHome(); UI.toast('Camera reset to the Indian Ocean overview.');
+            });
+            $('btn-reset-view').addEventListener('click', () => App.resetView());
+
+            /* comparison tray */
+            $('tray-bar').addEventListener('click', () => App.setTray(!state.trayOpen));
+            $('btn-tray-toggle').addEventListener('click', e => {
+                e.stopPropagation(); App.setTray(!state.trayOpen);
+            });
+            document.querySelectorAll('#seg-tabs button').forEach(b => {
+                b.addEventListener('click', () => Charts.setTab(b.dataset.tab));
+            });
+            $('btn-open-tray').addEventListener('click', () => App.setTray(true));
+
+            /* inspector */
+            $('btn-clear').addEventListener('click', () => App.deselect());
+            $('prov-toggle').addEventListener('click', () => App.toggleProvenance());
+
+            /* keep figures crisp after layout changes */
+            window.addEventListener('resize', () => setTimeout(() => Charts.resize(), 220));
+        }
+
+        /* ---------------- boot ---------------- */
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!window.Cesium) {
+                document.body.insertAdjacentHTML('beforeend',
+                    '<div class="fatal">CesiumJS failed to load from CDN — the 3D scene is unavailable.<br>Check network access and reload.</div>');
+                return;
+            }
+            bindControls();
+            App.init();
+            /* the scene is always live; interacting with it enters the instrument */
+            $('cesium-container').addEventListener('pointerdown', dismissIntro);
+            $('cesium-container').addEventListener('wheel', dismissIntro, { passive: true });
+        });
+    </script>
+</body>
+
+</html>

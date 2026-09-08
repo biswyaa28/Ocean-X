@@ -1,0 +1,23 @@
+{
+  "name": "ocean-x",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "OCEAN-X · Ocean Model–Observation Explorer (SIH26067) — React/Vite conversion of the frozen single-file prototype",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cesium": "1.119.0",
+    "plotly.js-dist-min": "2.32.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.8",
+    "vite-plugin-cesium": "^1.2.23"
+  }
+}

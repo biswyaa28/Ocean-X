@@ -1,0 +1,342 @@
+/* OCEAN-X — base element styles, motion language, shared control language. Extracted verbatim from the frozen prototype. */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        [hidden] {
+            display: none !important
+        }
+
+        html,
+        body {
+            height: 100%
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--t1);
+            font: 12.5px/1.5 var(--font);
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased
+        }
+
+        .mono {
+            font-family: var(--mono)
+        }
+
+        ::selection {
+            background: rgba(77, 163, 216, .28)
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(120, 140, 170, .24);
+            border-radius: 4px
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent
+        }
+
+        button {
+            font-family: var(--font);
+            color: inherit
+        }
+
+        svg {
+            display: block
+        }
+
+        /* ---------- motion language ---------- */
+        @keyframes rise {
+            from {
+                opacity: 0;
+                transform: translateY(9px)
+            }
+
+            to {
+                opacity: 1;
+                transform: none
+            }
+        }
+
+        @keyframes softin {
+            from {
+                opacity: 0
+            }
+
+            to {
+                opacity: 1
+            }
+        }
+
+        @keyframes attract {
+            0% {
+                box-shadow: 0 0 0 0 rgba(77, 163, 216, 0)
+            }
+
+            25% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, .30)
+            }
+
+            70% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, .12)
+            }
+
+            100% {
+                box-shadow: 0 0 0 3px rgba(77, 163, 216, 0)
+            }
+        }
+
+        .reveal-o {
+            opacity: 0;
+            transition: opacity .55s var(--ease)
+        }
+
+        body:not(.intro-on) .reveal-o {
+            opacity: 1
+        }
+
+
+        .icon-btn {
+            width: 28px;
+            height: 28px;
+            flex: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--t3);
+            cursor: pointer;
+            transition: color 150ms var(--ease), border-color 150ms var(--ease),
+                background 150ms var(--ease), transform 150ms var(--ease)
+        }
+
+        .icon-btn:hover {
+            color: var(--t1);
+            border-color: var(--line-strong);
+            background: var(--panel-2)
+        }
+
+        .icon-btn:active {
+            transform: scale(.95)
+        }
+
+        .icon-btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55);
+            outline-offset: 1px
+        }
+
+        /* ---------- shared control language ---------- */
+        .h-sec {
+            font: 600 12px var(--font);
+            color: var(--t1)
+        }
+
+        .h-sec.minor {
+            font-size: 11.5px;
+            font-weight: 500;
+            color: var(--t2)
+        }
+
+        .chev {
+            transition: transform 280ms var(--ease)
+        }
+
+        .lbl {
+            font: 500 11px var(--font);
+            color: var(--t3)
+        }
+
+        .val {
+            font: 11px var(--mono);
+            color: var(--t1)
+        }
+
+        .note {
+            font: 10.5px var(--font);
+            color: var(--t3);
+            line-height: 1.5
+        }
+
+        .sel {
+            display: block;
+            position: relative
+        }
+
+        .sel select {
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+            background: var(--panel-2);
+            color: var(--t1);
+            border: 1px solid var(--line);
+            padding: 7px 26px 7px 10px;
+            font: 11.5px var(--font);
+            border-radius: 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 150ms var(--ease)
+        }
+
+        .sel select:hover {
+            border-color: var(--line-strong)
+        }
+
+        .sel select:focus-visible {
+            border-color: rgba(77, 163, 216, .55)
+        }
+
+        .sel::after {
+            content: '';
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            width: 6px;
+            height: 6px;
+            border-right: 1px solid var(--t3);
+            border-bottom: 1px solid var(--t3);
+            transform: translateY(-70%) rotate(45deg);
+            pointer-events: none
+        }
+
+        select option {
+            background: #0d1420
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 20px;
+            background: transparent;
+            cursor: ew-resize;
+            --fill: 0%
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            height: 2px;
+            border-radius: 1px;
+            background: linear-gradient(90deg, rgba(77, 163, 216, .7) var(--fill), rgba(150, 172, 202, .2) var(--fill))
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e6edf5;
+            border: 1px solid #0a121c;
+            margin-top: -5px;
+            transition: box-shadow 150ms var(--ease)
+        }
+
+        input[type=range]:hover::-webkit-slider-thumb {
+            box-shadow: 0 0 0 4px rgba(77, 163, 216, .2)
+        }
+
+        input[type=range]:active::-webkit-slider-thumb {
+            box-shadow: 0 0 0 5px rgba(77, 163, 216, .3)
+        }
+
+        input[type=range]::-moz-range-track {
+            height: 2px;
+            background: rgba(150, 172, 202, .2)
+        }
+
+        input[type=range]::-moz-range-progress {
+            height: 2px;
+            background: rgba(77, 163, 216, .7)
+        }
+
+        input[type=range]::-moz-range-thumb {
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: #e6edf5;
+            border: 1px solid #0a121c
+        }
+
+        .switch {
+            position: relative;
+            width: 30px;
+            height: 17px;
+            flex: none
+        }
+
+        .switch input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            margin: 0
+        }
+
+        .switch i {
+            position: absolute;
+            inset: 0;
+            background: rgba(150, 172, 202, .16);
+            border: 1px solid var(--line-strong);
+            border-radius: 9px;
+            transition: background 150ms var(--ease), border-color 150ms var(--ease)
+        }
+
+        .switch i::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: #8a97ab;
+            transition: left 150ms var(--ease), background 150ms
+        }
+
+        .switch input:checked+i {
+            background: var(--blue-dim);
+            border-color: rgba(77, 163, 216, .5)
+        }
+
+        .switch input:checked+i::after {
+            left: 15px;
+            background: var(--blue)
+        }
+
+        .switch input:focus-visible+i {
+            outline: 1px solid rgba(77, 163, 216, .5);
+            outline-offset: 2px
+        }
+
+        .btn {
+            background: var(--panel-2);
+            border: 1px solid var(--line);
+            color: var(--t2);
+            font: 500 11.5px var(--font);
+            padding: 7px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color 150ms var(--ease), border-color 150ms var(--ease), transform 150ms var(--ease)
+        }
+
+        .btn:hover {
+            color: var(--t1);
+            border-color: var(--line-strong)
+        }
+
+        .btn:active {
+            transform: scale(.97)
+        }
+
+        .btn:focus-visible {
+            outline: 1px solid rgba(77, 163, 216, .55);
+            outline-offset: 1px
+        }

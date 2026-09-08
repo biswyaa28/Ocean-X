@@ -1,0 +1,32 @@
+/* OCEAN-X — design tokens. Extracted verbatim from the frozen prototype (prototype/index.html). */
+        /* ================================================================
+   OCEAN-X — final design system
+   Calm, precise, scientific. Inter for interface, IBM Plex Mono
+   for technical values. Neutral surfaces; the ocean field
+   supplies the color. The scene is the hero; the UI frames it.
+   ================================================================ */
+        :root {
+            --bg: #05080e;
+            --panel: #0c121d;
+            --panel-2: #111a29;
+            --overlay: rgba(9, 14, 23, .88);
+            --line: rgba(150, 172, 202, .13);
+            --line-strong: rgba(150, 172, 202, .24);
+            --t1: #e8edf4;
+            --t2: #a9b4c5;
+            --t3: #7a879c;
+            --blue: #4da3d8;
+            /* ocean / model / view time        */
+            --blue-dim: rgba(77, 163, 216, .16);
+            --seafoam: #7fd4c1;
+            /* observation                      */
+            --amber: #d9a45b;
+            /* match / matched time             */
+            --green: #58c48a;
+            --red: #d96b57;
+            --font: 'Inter', system-ui, sans-serif;
+            --mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+            --r: 8px;
+            --ease: cubic-bezier(.25, .9, .3, 1);
+            --shadow: 0 14px 36px rgba(0, 0, 0, .45);
+        }
