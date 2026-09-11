@@ -1,0 +1,58 @@
+{
+  "dataset": "OceanLens Bay of Bengal Ocean Conditions",
+  "status": "REAL",
+  "provider": "INCOIS",
+  "source_product": "RSMC HYCOM",
+  "source_file": "RSMC_hycom_20260908.nc",
+  "source_date": "2026-09-08",
+  "region": {
+    "min_lat": 5.0,
+    "max_lat": 25.0,
+    "min_lon": 80.0,
+    "max_lon": 100.0
+  },
+  "surface_depth_m": 0.0,
+  "time_start": "2026-09-07T06:00:00.000000000",
+  "time_end": "2026-09-14T00:00:00.000000000",
+  "time_steps": 28,
+  "variables": {
+    "UVEL": {
+      "meaning": "Eastward ocean current",
+      "units": "m/s"
+    },
+    "VVEL": {
+      "meaning": "Northward ocean current",
+      "units": "m/s"
+    },
+    "CURRENT_SPEED": {
+      "meaning": "Ocean current speed",
+      "units": "m/s"
+    },
+    "CURRENT_DIRECTION": {
+      "meaning": "Current direction",
+      "units": "degrees"
+    },
+    "TEMP": {
+      "meaning": "Ocean temperature at surface layer",
+      "units": "as provided by source"
+    },
+    "SALN": {
+      "meaning": "Ocean salinity at surface layer",
+      "units": "as provided by source"
+    },
+    "SSH": {
+      "meaning": "Sea surface height",
+      "units": "m"
+    },
+    "TCHP": {
+      "meaning": "Tropical Cyclone Heat Potential",
+      "units": "KJ/cm2"
+    },
+    "MLD": {
+      "meaning": "Mixed Layer Depth",
+      "units": "as provided by source"
+    }
+  },
+  "original_file": "O:\\Hackthons\\OceanLens\\backend\\data\\raw\\ocean\\currents\\RSMC_hycom_20260908.nc",
+  "processed_file": "O:\\Hackthons\\OceanLens\\backend\\data\\processed\\ocean\\incois_hycom_bob_surface.nc"
+}

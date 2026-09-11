@@ -1,0 +1,1061 @@
+'use client';
+
+import React, { useEffect, useRef, useState } from 'react';
+import * as Cesium from 'cesium';
+import 'cesium/Build/Cesium/Widgets/widgets.css';
+import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import { FlowCanvasOverlay } from './FlowCanvasOverlay';
+import { apiProvider } from '../services/ApiProvider';
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
+}
+
+export function safeJulianDate(timestampStr: string): Cesium.JulianDate {
+  if (!timestampStr) return Cesium.JulianDate.now();
+  try {
+    let formatted = timestampStr.trim();
+    if (!formatted.includes('T')) {
+      formatted = formatted.replace(' ', 'T');
+    }
+    if (!formatted.endsWith('Z') && !formatted.includes('+') && !formatted.includes('-')) {
+      formatted += 'Z';
+    }
+    return Cesium.JulianDate.fromIso8601(formatted);
+  } catch {
+    try {
+      const parsed = new Date(timestampStr);
+      if (isNaN(parsed.getTime())) return Cesium.JulianDate.now();
+      return Cesium.JulianDate.fromDate(parsed);
+    } catch {
+      return Cesium.JulianDate.now();
+    }
+  }
+}
+
+export function computeAstronomicalData(timestampStr: string, latDeg: number, lonDeg: number): AstronomicalData {
+  const julianDate = safeJulianDate(timestampStr);
+
+  const cartesian = Cesium.Cartesian3.fromDegrees(lonDeg, latDeg, 0);
+  const enuTransform = Cesium.Transforms.eastNorthUpToFixedFrame(cartesian);
+  const fixedToEnu = Cesium.Matrix4.inverse(enuTransform, new Cesium.Matrix4());
+  const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
+
+  // 1. SUN CALCULATIONS
+  const sunPosIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
+  const sunPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, sunPosIcrf, new Cesium.Cartesian3());
+  const sunPosEnu = Cesium.Matrix4.multiplyByPoint(fixedToEnu, sunPosEcef, new Cesium.Cartesian3());
+
+  const sunDistance = Cesium.Cartesian3.magnitude(sunPosEnu);
+  const sunElevationRad = Math.asin(sunPosEnu.z / Math.max(1, sunDistance));
+  const sunAzimuthRad = Math.atan2(sunPosEnu.x, sunPosEnu.y);
+
+  const sunElevationDeg = Math.round(((sunElevationRad * 180) / Math.PI) * 100) / 100;
+  const sunAzimuthDeg = Math.round((((sunAzimuthRad * 180) / Math.PI + 360) % 360) * 100) / 100;
+  const isDaylight = sunElevationDeg > -0.833;
+
+  // Compute Sunrise & Sunset for target location on simulation date (UTC)
+  const dateObj = new Date(timestampStr);
+  const year = dateObj.getUTCFullYear();
+  const month = dateObj.getUTCMonth();
+  const day = dateObj.getUTCDate();
+
+  let sunriseUtc = 'N/A';
+  let sunsetUtc = 'N/A';
+
+  let prevElev: number | null = null;
+  for (let min = 0; min <= 1440; min += 20) {
+    const testDate = new Date(Date.UTC(year, month, day, 0, min, 0));
+    const testJulian = Cesium.JulianDate.fromDate(testDate);
+    const testIcrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(testJulian) || new Cesium.Matrix3();
+    const testSunIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(testJulian);
+    const testSunEcef = Cesium.Matrix3.multiplyByVector(testIcrfToFixed, testSunIcrf, new Cesium.Cartesian3());
+    const testSunEnu = Cesium.Matrix4.multiplyByPoint(fixedToEnu, testSunEcef, new Cesium.Cartesian3());
+    const testElev = (Math.asin(testSunEnu.z / Math.max(1, Cesium.Cartesian3.magnitude(testSunEnu))) * 180) / Math.PI;
+
+    if (prevElev !== null) {
+      if (prevElev < -0.833 && testElev >= -0.833 && sunriseUtc === 'N/A') {
+        sunriseUtc = testDate.toISOString().substring(11, 16) + ' UTC';
+      } else if (prevElev >= -0.833 && testElev < -0.833 && sunsetUtc === 'N/A') {
+        sunsetUtc = testDate.toISOString().substring(11, 16) + ' UTC';
+      }
+    }
+    prevElev = testElev;
+  }
+
+  // 2. MOON CALCULATIONS
+  const moonPosIcrf = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(julianDate);
+  const moonPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, moonPosIcrf, new Cesium.Cartesian3());
+  const moonPosEnu = Cesium.Matrix4.multiplyByPoint(fixedToEnu, moonPosEcef, new Cesium.Cartesian3());
+
+  const moonDistance = Cesium.Cartesian3.magnitude(moonPosEnu);
+  const moonElevationRad = Math.asin(moonPosEnu.z / Math.max(1, moonDistance));
+  const moonAzimuthRad = Math.atan2(moonPosEnu.x, moonPosEnu.y);
+
+  const moonElevationDeg = Math.round(((moonElevationRad * 180) / Math.PI) * 100) / 100;
+  const moonAzimuthDeg = Math.round((((moonAzimuthRad * 180) / Math.PI + 360) % 360) * 100) / 100;
+
+  const sunNorm = Cesium.Cartesian3.normalize(sunPosIcrf, new Cesium.Cartesian3());
+  const moonNorm = Cesium.Cartesian3.normalize(moonPosIcrf, new Cesium.Cartesian3());
+  const cosAngle = Cesium.Cartesian3.dot(sunNorm, moonNorm);
+  const elongationAngleRad = Math.acos(Math.max(-1, Math.min(1, cosAngle)));
+  const illuminationPercent = Math.round(0.5 * (1 - Math.cos(elongationAngleRad)) * 1000) / 10;
+
+  let phaseName = 'New Moon';
+  if (illuminationPercent < 5) phaseName = 'New Moon';
+  else if (illuminationPercent < 45) phaseName = 'Waxing / Waning Crescent';
+  else if (illuminationPercent < 55) phaseName = 'Quarter Moon';
+  else if (illuminationPercent < 95) phaseName = 'Waxing / Waning Gibbous';
+  else phaseName = 'Full Moon';
+
+  return {
+    sun: {
+      elevationDeg: sunElevationDeg,
+      azimuthDeg: sunAzimuthDeg,
+      sunriseUtc,
+      sunsetUtc,
+      isDaylight,
+    },
+    moon: {
+      elevationDeg: moonElevationDeg,
+      azimuthDeg: moonAzimuthDeg,
+      phaseName,
+      illuminationPercent,
+    },
+    timestamp: timestampStr,
+    location: {
+      lat: latDeg,
+      lon: lonDeg,
+    },
+  };
+}
+
+function generateLayerImageDataUrl(
+  layerType: 'sst' | 'salinity' | 'tchp',
+  latitudes: number[],
+  longitudes: number[],
+  values: number[][]
+): string {
+  const nLat = latitudes.length;
+  const nLon = longitudes.length;
+  if (!nLat || !nLon || !values) return '';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = nLon;
+  canvas.height = nLat;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  const imgData = ctx.createImageData(nLon, nLat);
+
+  for (let i = 0; i < nLat; i++) {
+    const row = nLat - 1 - i;
+    for (let j = 0; j < nLon; j++) {
+      const val = values[i][j];
+      const idx = (row * nLon + j) * 4;
+      if (val === null || val === undefined || isNaN(val) || val === 0) {
+        imgData.data[idx + 3] = 0;
+        continue;
+      }
+
+      let r = 0, g = 0, b = 0, a = 180;
+      if (layerType === 'sst') {
+        const norm = Math.max(0, Math.min(1, (val - 25.0) / 7.0));
+        if (norm < 0.5) {
+          const t = norm * 2;
+          r = Math.round(30 + t * (45 - 30));
+          g = Math.round(78 + t * (212 - 78));
+          b = Math.round(216 + t * (191 - 216));
+        } else {
+          const t = (norm - 0.5) * 2;
+          r = Math.round(45 + t * (244 - 45));
+          g = Math.round(212 + t * (63 - 212));
+          b = Math.round(191 + t * (94 - 191));
+        }
+      } else if (layerType === 'salinity') {
+        const norm = Math.max(0, Math.min(1, (val - 28.0) / 7.0));
+        if (norm < 0.5) {
+          const t = norm * 2;
+          r = Math.round(30 + t * (13 - 30));
+          g = Math.round(27 + t * (148 - 27));
+          b = Math.round(75 + t * (136 - 75));
+        } else {
+          const t = (norm - 0.5) * 2;
+          r = Math.round(13 + t * (245 - 13));
+          g = Math.round(148 + t * (158 - 148));
+          b = Math.round(136 + t * (11 - 136));
+        }
+      } else {
+        const norm = Math.max(0, Math.min(1, (val - 10.0) / 100.0));
+        r = Math.round(168 + norm * (244 - 168));
+        g = Math.round(85 - norm * 60);
+        b = Math.round(247 - norm * 200);
+      }
+
+      imgData.data[idx] = r;
+      imgData.data[idx + 1] = g;
+      imgData.data[idx + 2] = b;
+      imgData.data[idx + 3] = a;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  const scaleCanvas = document.createElement('canvas');
+  scaleCanvas.width = 512;
+  scaleCanvas.height = 512;
+  const scaleCtx = scaleCanvas.getContext('2d');
+  if (scaleCtx) {
+    scaleCtx.imageSmoothingEnabled = true;
+    scaleCtx.imageSmoothingQuality = 'high';
+    scaleCtx.drawImage(canvas, 0, 0, 512, 512);
+    return scaleCanvas.toDataURL();
+  }
+  return canvas.toDataURL();
+}
+
+interface CesiumViewerInnerProps {
+  cyclone: Cyclone | null;
+  currentTrackIndex: number;
+  stations: Station[];
+  layers: GISLayer[];
+  argoProfiles?: ArgoProfile[];
+  onSelectStation: (station: Station) => void;
+  onSelectArgoProfile?: (profile: ArgoProfile) => void;
+  onInspectPoint?: (lat: number, lon: number) => void;
+  onAstronomicalUpdate?: (data: AstronomicalData) => void;
+  targetLocation?: { lat: number; lon: number; height?: number } | null;
+  timestamp?: string;
+}
+
+export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
+  cyclone,
+  currentTrackIndex,
+  stations,
+  layers,
+  argoProfiles = [],
+  onSelectStation,
+  onSelectArgoProfile,
+  onInspectPoint,
+  onAstronomicalUpdate,
+  targetLocation,
+  timestamp,
+}) => {
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<Cesium.Viewer | null>(null);
+  const [viewerInstance, setViewerInstance] = useState<Cesium.Viewer | null>(null);
+  const onInspectPointRef = useRef(onInspectPoint);
+  onInspectPointRef.current = onInspectPoint;
+  const rasterLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+
+  // Dynamic Mouse Hover Tooltip State
+  const [hoverTooltip, setHoverTooltip] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    title: string;
+    cycloneName?: string;
+    category?: string;
+    maxWindKts?: number;
+    centralPressureMb?: number;
+    lat?: number;
+    lon?: number;
+    timestamp?: string;
+    source?: string;
+    dataStatus?: string;
+  } | null>(null);
+
+  const isLayerActive = (id: string) => layers.find((l) => l.id === id)?.active ?? false;
+
+  // Initialize 3D Globe with Living Atmospheric Visual Depth, Real Astronomical Engine, HD Satellite Imagery & Place Names Overlay
+  useEffect(() => {
+    if (!containerRef.current || viewerRef.current) return;
+
+    Cesium.Ion.defaultAccessToken = process.env.NEXT_PUBLIC_CESIUM_TOKEN || '';
+
+    try {
+      const viewer = new Cesium.Viewer(containerRef.current, {
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+        baseLayer: new Cesium.ImageryLayer(
+          new Cesium.UrlTemplateImageryProvider({
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            maximumLevel: 19,
+            credit: 'Esri World Imagery',
+          })
+        ),
+        baseLayerPicker: false,
+        geocoder: false,
+        homeButton: false,
+        infoBox: false,
+        sceneModePicker: false,
+        selectionIndicator: false,
+        timeline: false,
+        animation: false,
+        navigationHelpButton: false,
+        fullscreenButton: false,
+      });
+
+      // Add Place Names & Geographic Labels Overlay (Requirement 2)
+      try {
+        const placeNamesProvider = new Cesium.UrlTemplateImageryProvider({
+          url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 19,
+          credit: 'Esri World Boundaries & Places',
+        });
+        viewer.imageryLayers.addImageryProvider(placeNamesProvider);
+      } catch (err) {
+        console.warn('Place names imagery overlay initialization:', err);
+      }
+
+      // Real Astronomical Scene & Atmospheric Environment (Requirement 3: Accurate Sun Light, Dark Night Shading & Space Stars)
+      viewer.scene.light = new Cesium.SunLight();
+      viewer.scene.globe.enableLighting = true;
+      viewer.scene.globe.dynamicAtmosphereLighting = true;
+      viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
+      viewer.scene.globe.showGroundAtmosphere = true;
+      viewer.scene.globe.atmosphereHueShift = -0.05;
+      viewer.scene.globe.atmosphereSaturationShift = 0.15;
+      viewer.scene.globe.atmosphereBrightnessShift = 0.05;
+
+      // Enable Space Background Starfield SkyBox & Astronomical Bodies
+      if (viewer.scene.skyBox) {
+        viewer.scene.skyBox.show = true;
+      }
+      viewer.scene.backgroundColor = Cesium.Color.TRANSPARENT;
+
+      if (!viewer.scene.sun) {
+        viewer.scene.sun = new Cesium.Sun();
+      }
+      viewer.scene.sun.show = true;
+      viewer.scene.sun.glowFactor = 3.5;
+
+      if (!viewer.scene.moon) {
+        viewer.scene.moon = new Cesium.Moon();
+      }
+      viewer.scene.moon.show = true;
+      viewer.scene.moon.onlySunLighting = true;
+
+      if (viewer.scene.skyAtmosphere) {
+        viewer.scene.skyAtmosphere.show = true;
+        viewer.scene.skyAtmosphere.brightnessShift = 0.1;
+      }
+      if (viewer.scene.fog) {
+        viewer.scene.fog.enabled = true;
+        viewer.scene.fog.density = 0.00012;
+      }
+
+      // Overhead Centered Frame: Bay of Bengal (Visual Anchor)
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(88.0, 18.0, 3600000.0),
+        orientation: {
+          heading: Cesium.Math.toRadians(0.0),
+          pitch: Cesium.Math.toRadians(-88.0),
+          roll: 0.0,
+        },
+        duration: 1.6,
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewerRef.current = viewer;
+      setViewerInstance(viewer);
+
+      // Event Handler for Station/Argo Clicks, Inspection & Dynamic Canvas Tooltips
+      const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+      // Click Handler
+      handler.setInputAction((click: { position: Cesium.Cartesian2 }) => {
+        const pickedObject = viewer.scene.pick(click.position);
+        if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
+          const props = pickedObject.id.properties;
+          if (props.stationData) {
+            onSelectStation(props.stationData.getValue());
+            return;
+          } else if (props.argoData && onSelectArgoProfile) {
+            onSelectArgoProfile(props.argoData.getValue());
+            return;
+          }
+        }
+
+        // Convert Map Click to Cartographic Lat/Lon for Scientific Inspector
+        if (onInspectPointRef.current) {
+          const ray = viewer.camera.getPickRay(click.position);
+          if (ray) {
+            const cartesian = viewer.scene.globe.pick(ray, viewer.scene);
+            if (cartesian) {
+              const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+              const lat = Cesium.Math.toDegrees(cartographic.latitude);
+              const lon = Cesium.Math.toDegrees(cartographic.longitude);
+              onInspectPointRef.current(lat, lon);
+            }
+          }
+        }
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+      // Mouse Move Handler for Dynamic Interactive Map Tooltips (Requirement 1)
+      handler.setInputAction((movement: { endPosition: Cesium.Cartesian2 }) => {
+        if (!movement.endPosition) {
+          setHoverTooltip(null);
+          return;
+        }
+        const pickedObject = viewer.scene.pick(movement.endPosition);
+        if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
+          const props = pickedObject.id.properties;
+          if (props.trackNodeData) {
+            const node = props.trackNodeData.getValue();
+            const nodeIdx = props.nodeIndex ? props.nodeIndex.getValue() : 1;
+            const cName = props.cycloneName ? props.cycloneName.getValue() : 'AMPHAN';
+
+            setHoverTooltip({
+              visible: true,
+              x: movement.endPosition.x,
+              y: movement.endPosition.y,
+              title: `TRACK NODE #${nodeIdx}`,
+              cycloneName: cName,
+              category: node.category || 'Cyclonic Storm',
+              maxWindKts: node.maxWindKts,
+              centralPressureMb: node.centralPressureMb,
+              lat: node.latitude,
+              lon: node.longitude,
+              timestamp: node.timestamp,
+              source: 'NOAA IBTrACS v04r01',
+              dataStatus: 'HISTORICAL RECORD',
+            });
+            return;
+          } else if (props.stationData) {
+            const st = props.stationData.getValue();
+            setHoverTooltip({
+              visible: true,
+              x: movement.endPosition.x,
+              y: movement.endPosition.y,
+              title: `STATION: ${st.name}`,
+              lat: st.latitude,
+              lon: st.longitude,
+              source: 'INCOIS Coastal Buoy Network',
+              dataStatus: 'LIVE TELEMETRY',
+            });
+            return;
+          } else if (props.argoData) {
+            const argo = props.argoData.getValue();
+            setHoverTooltip({
+              visible: true,
+              x: movement.endPosition.x,
+              y: movement.endPosition.y,
+              title: `ARGO FLOAT ${argo.float_id}`,
+              lat: argo.latitude,
+              lon: argo.longitude,
+              timestamp: argo.observation_time,
+              source: `Argo GDAC (${argo.institution})`,
+              dataStatus: 'IN-SITU OBSERVATION',
+            });
+            return;
+          }
+        }
+
+        setHoverTooltip(null);
+      }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+      return () => {
+        handler.destroy();
+        if (viewerRef.current && !viewerRef.current.isDestroyed()) {
+          viewerRef.current.destroy();
+          viewerRef.current = null;
+          setViewerInstance(null);
+        }
+      };
+    } catch (err) {
+      console.error('Cesium Globe initialization fallback:', err);
+    }
+  }, [onSelectStation]);
+
+  // Handle Dynamic Camera FlyTo on Target Location Selection (including Sun & Moon targeting)
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || !targetLocation) return;
+
+    if ((targetLocation as { isSun?: boolean }).isSun && timestamp) {
+      const julianDate = safeJulianDate(timestamp);
+      const sunPosIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
+      const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
+      const sunPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, sunPosIcrf, new Cesium.Cartesian3());
+      const sunNorm = Cesium.Cartesian3.normalize(sunPosEcef, new Cesium.Cartesian3());
+
+      const camPos = Cesium.Cartesian3.multiplyByScalar(sunNorm, 22000000.0, new Cesium.Cartesian3());
+      viewer.camera.flyTo({
+        destination: camPos,
+        orientation: {
+          direction: Cesium.Cartesian3.negate(sunNorm, new Cesium.Cartesian3()),
+          up: Cesium.Cartesian3.UNIT_Z,
+        },
+        duration: 2.0,
+      });
+      return;
+    }
+
+    if ((targetLocation as { isMoon?: boolean }).isMoon && timestamp) {
+      const julianDate = safeJulianDate(timestamp);
+      const moonPosIcrf = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(julianDate);
+      const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
+      const moonPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, moonPosIcrf, new Cesium.Cartesian3());
+      const moonNorm = Cesium.Cartesian3.normalize(moonPosEcef, new Cesium.Cartesian3());
+
+      const camPos = Cesium.Cartesian3.multiplyByScalar(moonNorm, 22000000.0, new Cesium.Cartesian3());
+      viewer.camera.flyTo({
+        destination: camPos,
+        orientation: {
+          direction: Cesium.Cartesian3.negate(moonNorm, new Cesium.Cartesian3()),
+          up: Cesium.Cartesian3.UNIT_Z,
+        },
+        duration: 2.0,
+      });
+      return;
+    }
+
+    const targetHeight = targetLocation.height || 1800000.0;
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(targetLocation.lon, targetLocation.lat, targetHeight),
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0),
+        pitch: Cesium.Math.toRadians(-88.0),
+        roll: 0.0,
+      },
+      duration: 1.5,
+    });
+  }, [targetLocation, timestamp]);
+
+  // Synchronize Cesium JulianDate Clock with OceanLens Timeline Timestamp (Requirements 2, 3, 4)
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed() || !timestamp) return;
+
+    try {
+      const julianDate = safeJulianDate(timestamp);
+      viewer.clock.currentTime = julianDate;
+      viewer.clock.shouldAnimate = false;
+    } catch (err) {
+      console.error('Error synchronizing Cesium JulianDate clock:', err);
+    }
+  }, [timestamp]);
+
+  // Compute Real-time Astronomical Positions (Sun & Moon) for active location & timestamp
+  useEffect(() => {
+    if (!onAstronomicalUpdate) return;
+
+    const currentTs = timestamp || '2026-09-08T12:00:00Z';
+    const lat = targetLocation?.lat ?? 18.2247;
+    const lon = targetLocation?.lon ?? 88.4000;
+
+    try {
+      const astroData = computeAstronomicalData(currentTs, lat, lon);
+      onAstronomicalUpdate(astroData);
+    } catch (err) {
+      console.error('Error computing astronomical positions:', err);
+    }
+  }, [timestamp, targetLocation, onAstronomicalUpdate]);
+
+  // Render Cyclone Anchor, Concentric Rings, Forecast Cone, & Spatial Layers
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    viewer.entities.removeAll();
+
+    // 1. CYCLONE STORM VISUAL ANCHOR
+    if (cyclone && isLayerActive('cyclone')) {
+      const positions: Cesium.Cartesian3[] = [];
+      const trackPoints = cyclone.track;
+
+      trackPoints.forEach((pt) => {
+        positions.push(Cesium.Cartesian3.fromDegrees(pt.longitude, pt.latitude));
+      });
+
+      // Forecast Track Vector Line (Muted Cyan Dashed)
+      viewer.entities.add({
+        name: `${cyclone.name} Forecast Track`,
+        polyline: {
+          positions: positions,
+          width: 2.5,
+          material: new Cesium.PolylineDashMaterialProperty({
+            color: Cesium.Color.CYAN.withAlpha(0.65),
+            dashLength: 10.0,
+          }),
+        },
+      });
+
+      // Historical Observed Track Line (Smooth Crimson Red)
+      if (currentTrackIndex > 0) {
+        const historyPositions = positions.slice(0, currentTrackIndex + 1);
+        viewer.entities.add({
+          name: `${cyclone.name} Historical Track`,
+          polyline: {
+            positions: historyPositions,
+            width: 3.5,
+            material: Cesium.Color.fromCssColorString('#f43f5e'),
+          },
+        });
+      }
+
+      // Track Nodes
+      trackPoints.forEach((pt, idx) => {
+        const isCurrent = idx === currentTrackIndex;
+
+        viewer.entities.add({
+          name: `Track Node ${idx + 1}`,
+          position: Cesium.Cartesian3.fromDegrees(pt.longitude, pt.latitude),
+          point: {
+            pixelSize: isCurrent ? 12 : 7,
+            color: isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85),
+            outlineColor: isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK,
+            outlineWidth: isCurrent ? 3 : 1.5,
+          },
+          properties: {
+            trackNodeData: pt,
+            nodeIndex: idx + 1,
+            cycloneName: cyclone.name,
+          },
+        });
+      });
+
+      // 3D Solar System Space Celestial Bodies (Sun, Moon & Solar Beam Vector in Space)
+      try {
+        const julianDate = safeJulianDate(timestamp || '2026-09-08T12:00:00Z');
+        const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
+
+        // 3D Sun Entity in Space
+        const sunPosIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
+        const sunPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, sunPosIcrf, new Cesium.Cartesian3());
+        const sunMag = Cesium.Cartesian3.magnitude(sunPosEcef);
+
+        if (sunMag > 100.0) {
+          const sunNorm = Cesium.Cartesian3.normalize(sunPosEcef, new Cesium.Cartesian3());
+          const sunSpacePos = Cesium.Cartesian3.multiplyByScalar(sunNorm, 40000000.0, new Cesium.Cartesian3());
+          const earthSurfacePoint = Cesium.Cartesian3.multiplyByScalar(sunNorm, 6371000.0, new Cesium.Cartesian3());
+
+          viewer.entities.add({
+            name: 'Sun 3D Celestial Body',
+            position: sunSpacePos,
+            point: {
+              pixelSize: 28,
+              color: Cesium.Color.fromCssColorString('#fbbf24'),
+              outlineColor: Cesium.Color.fromCssColorString('#f59e0b'),
+              outlineWidth: 5,
+            },
+            label: {
+              text: '☉ THE SUN\nSOLAR SYSTEM CORE LIGHT SOURCE',
+              font: '10px IBM Plex Mono, monospace',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineWidth: 2,
+              outlineColor: Cesium.Color.BLACK,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -18),
+              fillColor: Cesium.Color.fromCssColorString('#fef08a'),
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
+              backgroundPadding: new Cesium.Cartesian2(8, 5),
+            },
+          });
+
+          // Solar Rays Polyline (From Sun position to Earth surface position)
+          viewer.entities.add({
+            name: 'Solar Rays Vector Beam',
+            polyline: {
+              positions: [sunSpacePos, earthSurfacePoint],
+              width: 2.0,
+              material: new Cesium.PolylineGlowMaterialProperty({
+                glowPower: 0.3,
+                taperPower: 0.8,
+                color: Cesium.Color.fromCssColorString('#fde047').withAlpha(0.35),
+              }),
+            },
+          });
+        }
+
+        // 3D Moon Entity in Space
+        const moonPosIcrf = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(julianDate);
+        const moonPosEcef = Cesium.Matrix3.multiplyByVector(icrfToFixed, moonPosIcrf, new Cesium.Cartesian3());
+        const moonMag = Cesium.Cartesian3.magnitude(moonPosEcef);
+
+        if (moonMag > 100.0) {
+          const moonNorm = Cesium.Cartesian3.normalize(moonPosEcef, new Cesium.Cartesian3());
+          const moonSpacePos = Cesium.Cartesian3.multiplyByScalar(moonNorm, 24000000.0, new Cesium.Cartesian3());
+
+          viewer.entities.add({
+            name: 'Moon 3D Celestial Body',
+            position: moonSpacePos,
+            point: {
+              pixelSize: 14,
+              color: Cesium.Color.fromCssColorString('#e2e8f0'),
+              outlineColor: Cesium.Color.fromCssColorString('#94a3b8'),
+              outlineWidth: 3,
+            },
+            label: {
+              text: '☽ THE MOON\nEARTH NATURAL SATELLITE',
+              font: '10px IBM Plex Mono, monospace',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineWidth: 2,
+              outlineColor: Cesium.Color.BLACK,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -14),
+              fillColor: Cesium.Color.fromCssColorString('#cbd5e1'),
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
+              backgroundPadding: new Cesium.Cartesian2(8, 5),
+            },
+          });
+        }
+      } catch (e) {
+        console.warn('3D Celestial bodies rendering:', e);
+      }
+
+      // Active Cyclone Eye Core Anchor & Concentric Intensity Rings
+      const activePt = trackPoints[Math.min(currentTrackIndex, trackPoints.length - 1)];
+      if (activePt) {
+        // Core Eye Circle (Storm Visual Center Anchor)
+        viewer.entities.add({
+          name: 'Cyclone Eye Core Anchor',
+          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
+          ellipse: {
+            semiMajorAxis: 35000,
+            semiMinorAxis: 35000,
+            material: Cesium.Color.WHITE.withAlpha(0.25),
+            outline: true,
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2.0,
+          },
+        });
+
+        // Inner Core Wind Radius Ring (50kt Concentric Ring)
+        viewer.entities.add({
+          name: 'Inner Core Intensity Ring (50kt)',
+          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
+          ellipse: {
+            semiMajorAxis: cyclone.windRadius.r50ktsKm * 1000,
+            semiMinorAxis: cyclone.windRadius.r50ktsKm * 1000,
+            material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
+            outlineWidth: 1.5,
+          },
+        });
+
+        // Outer Wind Radius Ring (34kt Concentric Ring)
+        viewer.entities.add({
+          name: 'Outer Wind Intensity Ring (34kt)',
+          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
+          ellipse: {
+            semiMajorAxis: cyclone.windRadius.r34ktsKm * 1000,
+            semiMinorAxis: cyclone.windRadius.r34ktsKm * 1000,
+            material: Cesium.Color.TEAL.withAlpha(0.06),
+            outline: true,
+            outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
+            outlineWidth: 1.0,
+          },
+        });
+
+        // Directional Movement Vector Indicator Tag Pin
+        viewer.entities.add({
+          name: 'Cyclone Eye Pin Callout',
+          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
+          label: {
+            text: `EYE OF STORM: ${cyclone.name}\n${activePt.category.toUpperCase()} · ${activePt.maxWindKts} KT`,
+            font: '10px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(40, -20),
+            fillColor: Cesium.Color.WHITE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
+            backgroundPadding: new Cesium.Cartesian2(8, 5),
+          },
+        });
+      }
+
+      // Forecast Uncertainty Region Circles
+      cyclone.forecastCone.forEach((conePt) => {
+        viewer.entities.add({
+          name: 'Forecast Cone Circle',
+          position: Cesium.Cartesian3.fromDegrees(conePt.longitude, conePt.latitude),
+          ellipse: {
+            semiMajorAxis: conePt.radiusKm * 1000,
+            semiMinorAxis: conePt.radiusKm * 1000,
+            material: Cesium.Color.CYAN.withAlpha(0.04),
+            outline: true,
+            outlineColor: Cesium.Color.CYAN.withAlpha(0.25),
+            outlineWidth: 1.0,
+          },
+        });
+      });
+    }
+
+    // 2. COASTAL HAZARD SECTOR POLYGONS
+    if (isLayerActive('risk_zones')) {
+      viewer.entities.add({
+        name: 'Sundarbans Risk Sector',
+        polygon: {
+          hierarchy: Cesium.Cartesian3.fromDegreesArray([
+            87.5, 21.2,
+            89.8, 21.2,
+            90.5, 22.6,
+            88.0, 22.6,
+          ]),
+          material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.15),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.6),
+        },
+      });
+    }
+
+    // 3. MONITORING STATIONS
+    if (isLayerActive('stations')) {
+      stations.forEach((st) => {
+        viewer.entities.add({
+          name: `${st.name} Outer Halo`,
+          position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
+          ellipse: {
+            semiMajorAxis: 18000,
+            semiMinorAxis: 18000,
+            material: Cesium.Color.WHITE.withAlpha(0.04),
+            outline: true,
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.4),
+            outlineWidth: 1.0,
+          },
+        });
+
+        viewer.entities.add({
+          name: st.name,
+          position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
+          point: {
+            pixelSize: 6,
+            color: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1.5,
+          },
+          properties: {
+            stationData: st,
+          },
+        });
+      });
+    }
+
+    // 4. REAL ARGO OBSERVATIONS LAYER
+    if (isLayerActive('argo') && argoProfiles) {
+      argoProfiles.forEach((p) => {
+        viewer.entities.add({
+          name: `Argo Float ${p.float_id} Halo`,
+          position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
+          ellipse: {
+            semiMajorAxis: 24000,
+            semiMinorAxis: 24000,
+            material: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.08),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.6),
+            outlineWidth: 1.5,
+          },
+        });
+
+        viewer.entities.add({
+          name: `Argo Float ${p.float_id}`,
+          position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
+          point: {
+            pixelSize: 8,
+            color: Cesium.Color.fromCssColorString('#22d3ee'),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+          },
+          label: {
+            text: `ARGO FLOAT ${p.float_id}\nREAL SOURCE • INGESTION PENDING`,
+            font: '9px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -12),
+            fillColor: Cesium.Color.fromCssColorString('#38bdf8'),
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
+            backgroundPadding: new Cesium.Cartesian2(6, 4),
+          },
+          properties: {
+            argoData: p,
+          },
+        });
+      });
+    }
+  }, [cyclone, currentTrackIndex, stations, layers, argoProfiles]);
+
+  // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity)
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    const showSST = isLayerActive('sst');
+    const showSaln = isLayerActive('salinity');
+    const showTCHP = isLayerActive('tchp');
+
+    if (rasterLayerRef.current) {
+      viewer.imageryLayers.remove(rasterLayerRef.current);
+      rasterLayerRef.current = null;
+    }
+
+    if (!showSST && !showSaln && !showTCHP) return;
+
+    const targetLayer: 'sst' | 'salinity' | 'tchp' = showSST ? 'sst' : showSaln ? 'salinity' : 'tchp';
+
+    let active = true;
+
+    async function loadRasterOverlay() {
+      const data = await apiProvider.getLayerData(targetLayer, timestamp);
+      if (!active || !data || !data.grid || !data.grid.values || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+
+      const dataUrl = generateLayerImageDataUrl(
+        targetLayer,
+        data.grid.latitudes,
+        data.grid.longitudes,
+        data.grid.values
+      );
+
+      if (!dataUrl || !active) return;
+
+      const provider = new Cesium.SingleTileImageryProvider({
+        url: dataUrl,
+        rectangle: Cesium.Rectangle.fromDegrees(
+          data.bounds.minLon,
+          data.bounds.minLat,
+          data.bounds.maxLon,
+          data.bounds.maxLat
+        ),
+        tileWidth: 512,
+        tileHeight: 512,
+      });
+
+      if (!active || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+
+      if (rasterLayerRef.current) {
+        viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
+      }
+
+      rasterLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
+      rasterLayerRef.current.alpha = 0.65;
+    }
+
+    loadRasterOverlay();
+
+    return () => {
+      active = false;
+      if (viewerRef.current && !viewerRef.current.isDestroyed() && rasterLayerRef.current) {
+        viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
+      }
+    };
+  }, [layers, timestamp]);
+
+
+  const showWind = isLayerActive('wind');
+  const showCurrents = isLayerActive('currents');
+  const activePt = cyclone?.track[Math.min(currentTrackIndex, (cyclone?.track.length || 1) - 1)];
+
+  return (
+    <div className="w-full h-full absolute inset-0 bg-[#05070a] relative">
+      <div ref={containerRef} className="w-full h-full absolute inset-0 bg-[#05070a]" />
+
+      {/* Dynamic Map Hover Tooltip Overlay (Requirement 1) */}
+      {hoverTooltip && hoverTooltip.visible && (
+        <div
+          className="absolute z-40 pointer-events-none transition-all duration-75 transform -translate-x-1/2 -translate-y-full mb-4"
+          style={{ left: `${hoverTooltip.x}px`, top: `${hoverTooltip.y}px` }}
+        >
+          <div className="bg-[#080c14]/95 backdrop-blur-xl border border-cyan-500/40 rounded-xl p-3 shadow-2xl w-64 space-y-2 font-mono text-[10px] text-slate-100">
+            <div className="flex items-center justify-between border-b border-cyan-500/20 pb-1.5 font-bold">
+              <span className="text-cyan-300 truncate max-w-[140px] uppercase font-bold">{hoverTooltip.title}</span>
+              <span className="text-[8px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase font-mono shrink-0">
+                {hoverTooltip.dataStatus || 'SIMULATED'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5 text-[9.5px]">
+              {hoverTooltip.category && (
+                <div>
+                  <span className="text-[8px] text-slate-400 block uppercase">CATEGORY</span>
+                  <span className="text-rose-400 font-bold">{hoverTooltip.category}</span>
+                </div>
+              )}
+              {hoverTooltip.maxWindKts !== undefined && (
+                <div className="text-right">
+                  <span className="text-[8px] text-slate-400 block uppercase">MAX WIND</span>
+                  <span className="text-cyan-300 font-bold">{hoverTooltip.maxWindKts} KTS</span>
+                </div>
+              )}
+              {hoverTooltip.centralPressureMb !== undefined && (
+                <div>
+                  <span className="text-[8px] text-slate-400 block uppercase">PRESSURE</span>
+                  <span className="text-slate-200 font-bold">{hoverTooltip.centralPressureMb} MB</span>
+                </div>
+              )}
+              {hoverTooltip.lat !== undefined && hoverTooltip.lon !== undefined && (
+                <div className="text-right">
+                  <span className="text-[8px] text-slate-400 block uppercase">COORDINATES</span>
+                  <span className="text-amber-300 font-bold">{hoverTooltip.lat.toFixed(2)}°N, {hoverTooltip.lon.toFixed(2)}°E</span>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-white/10 pt-1 text-[8.5px] text-slate-400 space-y-0.5">
+              <div className="flex justify-between">
+                <span>SOURCE:</span>
+                <span className="text-slate-200 font-bold">{hoverTooltip.source || 'NOAA IBTrACS v04r01'}</span>
+              </div>
+              {hoverTooltip.timestamp && (
+                <div className="flex justify-between">
+                  <span>TIMESTAMP:</span>
+                  <span className="text-cyan-300">{hoverTooltip.timestamp}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scientific Flow Vector Particle Animation Canvas */}
+      <FlowCanvasOverlay
+        viewer={viewerInstance}
+        showWind={showWind}
+        showCurrents={showCurrents}
+        cycloneLat={activePt?.latitude || 18.2}
+        cycloneLon={activePt?.longitude || 88.4}
+        maxWindKts={activePt?.maxWindKts || 125}
+        timestamp={activePt?.timestamp || '2026-09-08T12:00:00Z'}
+      />
+
+      {/* Section 11 & Section 7 Compact Data Context Legends (Corrected Source Label) */}
+      {(showWind || showCurrents) && (
+        <div className="absolute left-6 bottom-24 z-20 flex items-center gap-2 font-mono text-[9px] tracking-wider select-none pointer-events-none">
+          {showWind && (
+            <div className="px-2.5 py-1 rounded-xl bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 text-cyan-300 shadow-2xl flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="font-bold">WIND FIELD</span>
+              <span className="text-slate-500">│</span>
+              <span className="text-slate-300">m/s</span>
+              <span className="text-slate-500">│</span>
+              <span className="text-amber-400 font-semibold">SURFACE WIND — SIMULATED VECTOR FIELD</span>
+            </div>
+          )}
+
+          {showCurrents && (
+            <div className="px-2.5 py-1 rounded-xl bg-[#080c14]/90 backdrop-blur-xl border border-teal-500/30 text-teal-300 shadow-2xl flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+              <span className="font-bold">OCEAN CURRENT</span>
+              <span className="text-slate-500">│</span>
+              <span className="text-slate-300">m/s</span>
+              <span className="text-slate-500">│</span>
+              <span className="text-emerald-400 font-semibold">INCOIS HYCOM — REAL VECTOR FIELD</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CesiumViewerInner;

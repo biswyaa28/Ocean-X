@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+:root {
+  --font-sans: var(--font-inter), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-manrope), var(--font-inter), sans-serif;
+  --font-mono: var(--font-mono-custom), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --bg-deep: #05070a;
+}
+
+body {
+  background-color: var(--bg-deep);
+  color: #e2e8f0;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Typography & Editorial Numbers */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-custom {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-number {
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+/* Vertical Rotated Text */
+.writing-mode-vertical {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+
+/* Minimal Container-Free Floating Instrument System */
+.geo-instrument {
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.75), 0 0 1px 1px rgba(255, 255, 255, 0.03);
+  border-radius: 16px;
+}
+
+.geo-divider {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.02) 100%);
+  width: 100%;
+}
+
+/* Concentric Spatial Ring Marker Animations */
+@keyframes ring-expand {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+}
+
+.animate-ring-expand {
+  animation: ring-expand 3.5s ease-in-out infinite;
+}
+
+/* Hide default Cesium widget credits cleanly */
+.cesium-widget-credits {
+  display: none !important;
+}
+
+.cesium-viewer {
+  font-family: var(--font-sans) !important;
+}
+
+/* Custom Minimal Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.4);
+}
+
+

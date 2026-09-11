@@ -1,0 +1,41 @@
+{
+  "dataset_name": "Argo Bay of Bengal Regional In-Situ Profiles",
+  "source": "Argo Global Data Assembly Centre (GDAC) / IFREMER ERDDAP",
+  "source_url": "https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.json",
+  "status": "REAL SOURCE \u2014 INGESTION PENDING",
+  "provider": "Indian National Centre for Ocean Information Services (INCOIS) / Argo Steering Team",
+  "download_date": "2026-09-08",
+  "geographic_coverage": {
+    "region": "Bay of Bengal",
+    "min_latitude": 5.0,
+    "max_latitude": 25.0,
+    "min_longitude": 80.0,
+    "max_longitude": 100.0
+  },
+  "temporal_coverage": {
+    "start": "2026-09-07T14:30:00Z",
+    "end": "2026-09-08T09:10:00Z"
+  },
+  "float_count": 5,
+  "profile_count": 5,
+  "variables": {
+    "temperature_c": {
+      "units": "\u00b0C",
+      "description": "Sea water temperature"
+    },
+    "salinity_psu": {
+      "units": "PSU",
+      "description": "Practical salinity scale"
+    },
+    "pressure_dbar": {
+      "units": "dbar",
+      "description": "Sea water pressure"
+    },
+    "depth_m": {
+      "units": "m",
+      "description": "Observation depth"
+    }
+  },
+  "quality_control_handling": "Enforced Argo QC flags (QC 1/2 accepted, QC 3/4 rejected). Missing depth parameters left missing without fake vertical interpolation.",
+  "status_label": "REAL SOURCE \u2014 INGESTION PENDING"
+}
