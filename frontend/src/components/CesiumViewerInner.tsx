@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
-import { apiProvider } from '../services/ApiProvider';
+import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
+import { generateLayerImageDataUrlCached, generateDepthSliceImageDataUrlCached } from '../utils/rasterGen';
+import { perfMonitor } from '../utils/perfMonitor';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
@@ -130,90 +132,6 @@ export function computeAstronomicalData(timestampStr: string, latDeg: number, lo
   };
 }
 
-function generateLayerImageDataUrl(
-  layerType: 'sst' | 'salinity' | 'tchp',
-  latitudes: number[],
-  longitudes: number[],
-  values: number[][]
-): string {
-  const nLat = latitudes.length;
-  const nLon = longitudes.length;
-  if (!nLat || !nLon || !values) return '';
-
-  const canvas = document.createElement('canvas');
-  canvas.width = nLon;
-  canvas.height = nLat;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return '';
-
-  const imgData = ctx.createImageData(nLon, nLat);
-
-  for (let i = 0; i < nLat; i++) {
-    const row = nLat - 1 - i;
-    for (let j = 0; j < nLon; j++) {
-      const val = values[i][j];
-      const idx = (row * nLon + j) * 4;
-      if (val === null || val === undefined || isNaN(val) || val === 0) {
-        imgData.data[idx + 3] = 0;
-        continue;
-      }
-
-      let r = 0, g = 0, b = 0, a = 180;
-      if (layerType === 'sst') {
-        const norm = Math.max(0, Math.min(1, (val - 25.0) / 7.0));
-        if (norm < 0.5) {
-          const t = norm * 2;
-          r = Math.round(30 + t * (45 - 30));
-          g = Math.round(78 + t * (212 - 78));
-          b = Math.round(216 + t * (191 - 216));
-        } else {
-          const t = (norm - 0.5) * 2;
-          r = Math.round(45 + t * (244 - 45));
-          g = Math.round(212 + t * (63 - 212));
-          b = Math.round(191 + t * (94 - 191));
-        }
-      } else if (layerType === 'salinity') {
-        const norm = Math.max(0, Math.min(1, (val - 28.0) / 7.0));
-        if (norm < 0.5) {
-          const t = norm * 2;
-          r = Math.round(30 + t * (13 - 30));
-          g = Math.round(27 + t * (148 - 27));
-          b = Math.round(75 + t * (136 - 75));
-        } else {
-          const t = (norm - 0.5) * 2;
-          r = Math.round(13 + t * (245 - 13));
-          g = Math.round(148 + t * (158 - 148));
-          b = Math.round(136 + t * (11 - 136));
-        }
-      } else {
-        const norm = Math.max(0, Math.min(1, (val - 10.0) / 100.0));
-        r = Math.round(168 + norm * (244 - 168));
-        g = Math.round(85 - norm * 60);
-        b = Math.round(247 - norm * 200);
-      }
-
-      imgData.data[idx] = r;
-      imgData.data[idx + 1] = g;
-      imgData.data[idx + 2] = b;
-      imgData.data[idx + 3] = a;
-    }
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-
-  const scaleCanvas = document.createElement('canvas');
-  scaleCanvas.width = 512;
-  scaleCanvas.height = 512;
-  const scaleCtx = scaleCanvas.getContext('2d');
-  if (scaleCtx) {
-    scaleCtx.imageSmoothingEnabled = true;
-    scaleCtx.imageSmoothingQuality = 'high';
-    scaleCtx.drawImage(canvas, 0, 0, 512, 512);
-    return scaleCanvas.toDataURL();
-  }
-  return canvas.toDataURL();
-}
-
 interface CesiumViewerInnerProps {
   cyclone: Cyclone | null;
   currentTrackIndex: number;
@@ -226,6 +144,8 @@ interface CesiumViewerInnerProps {
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
   targetLocation?: { lat: number; lon: number; height?: number } | null;
   timestamp?: string;
+  depthSliceVisible?: boolean;
+  depthSlicePayload?: DepthSlicePayload | null;
 }
 
 export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
@@ -240,14 +160,38 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   onAstronomicalUpdate,
   targetLocation,
   timestamp,
+  depthSliceVisible = false,
+  depthSlicePayload = null,
 }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const [viewerInstance, setViewerInstance] = useState<Cesium.Viewer | null>(null);
   const onInspectPointRef = useRef(onInspectPoint);
-  onInspectPointRef.current = onInspectPoint;
+  const onSelectStationRef = useRef(onSelectStation);
+  const onSelectArgoProfileRef = useRef(onSelectArgoProfile);
   const rasterLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  // Dedicated imagery layer for the HYCOM model depth slice (Phase 1B).
+  // Fully separate from the surface rasterLayerRef so surface behavior and
+  // depth-slice behavior never remove each other's layers.
+  const depthSliceLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+
+  // Persistent keyed entity registry: avoids destructive removeAll() churn.
+  const entityRegistryRef = useRef<Map<string, Cesium.Entity>>(new Map());
+  // Signatures used to detect when a keyed entity's *structure* changes
+  // (e.g. a different cyclone) and must be rebuilt rather than updated in place.
+  const entitySigRef = useRef<Map<string, string>>(new Map());
+
+  // Keep callback refs current inside effects only (React 19 immutability).
+  useEffect(() => {
+    onInspectPointRef.current = onInspectPoint;
+  }, [onInspectPoint]);
+  useEffect(() => {
+    onSelectStationRef.current = onSelectStation;
+  }, [onSelectStation]);
+  useEffect(() => {
+    onSelectArgoProfileRef.current = onSelectArgoProfile;
+  }, [onSelectArgoProfile]);
 
   // Dynamic Mouse Hover Tooltip State
   const [hoverTooltip, setHoverTooltip] = useState<{
@@ -266,7 +210,35 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     dataStatus?: string;
   } | null>(null);
 
-  const isLayerActive = (id: string) => layers.find((l) => l.id === id)?.active ?? false;
+  const isLayerActive = useCallback((id: string) => layers.find((l) => l.id === id)?.active ?? false, [layers]);
+
+  /**
+   * Acquire (create once) or fetch an existing entity by stable key.
+   * If the structure signature changes, the entity is rebuilt.
+   */
+  const acquireEntity = useCallback((
+    viewer: Cesium.Viewer,
+    key: string,
+    signature: string,
+    build: () => Cesium.Entity.ConstructorOptions
+  ): Cesium.Entity => {
+    const registry = entityRegistryRef.current;
+    const sigs = entitySigRef.current;
+    const existing = registry.get(key);
+
+    if (existing && sigs.get(key) === signature) {
+      return existing;
+    }
+
+    if (existing) {
+      viewer.entities.remove(existing);
+    }
+
+    const entity = viewer.entities.add(build());
+    registry.set(key, entity);
+    sigs.set(key, signature);
+    return entity;
+  }, []);
 
   // Initialize 3D Globe with Living Atmospheric Visual Depth, Real Astronomical Engine, HD Satellite Imagery & Place Names Overlay
   useEffect(() => {
@@ -369,10 +341,10 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
           if (props.stationData) {
-            onSelectStation(props.stationData.getValue());
+            onSelectStationRef.current(props.stationData.getValue());
             return;
-          } else if (props.argoData && onSelectArgoProfile) {
-            onSelectArgoProfile(props.argoData.getValue());
+          } else if (props.argoData && onSelectArgoProfileRef.current) {
+            onSelectArgoProfileRef.current(props.argoData.getValue());
             return;
           }
         }
@@ -457,16 +429,20 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
       return () => {
         handler.destroy();
+        const registry = entityRegistryRef.current;
+        const sigs = entitySigRef.current;
         if (viewerRef.current && !viewerRef.current.isDestroyed()) {
           viewerRef.current.destroy();
           viewerRef.current = null;
           setViewerInstance(null);
+          registry.clear();
+          sigs.clear();
         }
       };
     } catch (err) {
       console.error('Cesium Globe initialization fallback:', err);
     }
-  }, [onSelectStation]);
+  }, []);
 
   // Handle Dynamic Camera FlyTo on Target Location Selection (including Sun & Moon targeting)
   useEffect(() => {
@@ -553,15 +529,28 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     }
   }, [timestamp, targetLocation, onAstronomicalUpdate]);
 
-  // Render Cyclone Anchor, Concentric Rings, Forecast Cone, & Spatial Layers
+  // ============================================================
+  // Persistent Entity Synchronization
+  //
+  // Entities are created once per stable key and updated in place
+  // (position/axis/text/visibility) instead of being destroyed and
+  // recreated on every timeline tick or layer toggle.
+  // ============================================================
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
 
-    viewer.entities.removeAll();
+    const t0 = performance.now();
+    const registry = entityRegistryRef.current;
+
+    // Track which keys are still relevant this pass; anything not refreshed
+    // below is hidden rather than destroyed (cheap to re-enable later).
+    const activeKeys = new Set<string>();
+
+    const showCycloneLayer = isLayerActive('cyclone');
 
     // 1. CYCLONE STORM VISUAL ANCHOR
-    if (cyclone && isLayerActive('cyclone')) {
+    if (cyclone && showCycloneLayer) {
       const positions: Cesium.Cartesian3[] = [];
       const trackPoints = cyclone.track;
 
@@ -570,50 +559,87 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       });
 
       // Forecast Track Vector Line (Muted Cyan Dashed)
-      viewer.entities.add({
-        name: `${cyclone.name} Forecast Track`,
-        polyline: {
-          positions: positions,
-          width: 2.5,
-          material: new Cesium.PolylineDashMaterialProperty({
-            color: Cesium.Color.CYAN.withAlpha(0.65),
-            dashLength: 10.0,
-          }),
-        },
-      });
+      if (positions.length >= 2) {
+        const trackEntity = acquireEntity(
+          viewer,
+          'cyclone-track-forecast',
+          `forecast|${cyclone.id}|${trackPoints.length}`,
+          () => ({
+            name: `${cyclone.name} Forecast Track`,
+            polyline: {
+              positions: positions,
+              width: 2.5,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: Cesium.Color.CYAN.withAlpha(0.65),
+                dashLength: 10.0,
+              }),
+            },
+          })
+        );
+        trackEntity.show = true;
+        activeKeys.add('cyclone-track-forecast');
+      }
 
-      // Historical Observed Track Line (Smooth Crimson Red)
-      if (currentTrackIndex > 0) {
-        const historyPositions = positions.slice(0, currentTrackIndex + 1);
-        viewer.entities.add({
-          name: `${cyclone.name} Historical Track`,
-          polyline: {
-            positions: historyPositions,
-            width: 3.5,
-            material: Cesium.Color.fromCssColorString('#f43f5e'),
-          },
-        });
+      // Historical Observed Track Line (Smooth Crimson Red) - time-varying
+      const historyPositions = currentTrackIndex > 0 ? positions.slice(0, currentTrackIndex + 1) : [];
+      if (historyPositions.length >= 2) {
+        const histEntity = acquireEntity(
+          viewer,
+          'cyclone-track-historical',
+          `hist|${cyclone.id}`,
+          () => ({
+            name: `${cyclone.name} Historical Track`,
+            polyline: {
+              positions: historyPositions,
+              width: 3.5,
+              material: Cesium.Color.fromCssColorString('#f43f5e'),
+            },
+          })
+        );
+        // In-place update of positions on timeline scrub
+        (histEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue(historyPositions);
+        histEntity.show = true;
+        activeKeys.add('cyclone-track-historical');
       }
 
       // Track Nodes
       trackPoints.forEach((pt, idx) => {
+        const key = `cyclone-node-${cyclone.id}-${idx}`;
         const isCurrent = idx === currentTrackIndex;
+        const nodeEntity = acquireEntity(
+          viewer,
+          key,
+          `node|${cyclone.id}|${idx}|${pt.latitude}|${pt.longitude}`,
+          () => ({
+            name: `Track Node ${idx + 1}`,
+            position: Cesium.Cartesian3.fromDegrees(pt.longitude, pt.latitude),
+            point: {
+              pixelSize: isCurrent ? 12 : 7,
+              color: isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85),
+              outlineColor: isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK,
+              outlineWidth: isCurrent ? 3 : 1.5,
+            },
+            properties: {
+              trackNodeData: pt,
+              nodeIndex: idx + 1,
+              cycloneName: cyclone.name,
+            },
+          })
+        );
 
-        viewer.entities.add({
-          name: `Track Node ${idx + 1}`,
-          position: Cesium.Cartesian3.fromDegrees(pt.longitude, pt.latitude),
-          point: {
-            pixelSize: isCurrent ? 12 : 7,
-            color: isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85),
-            outlineColor: isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK,
-            outlineWidth: isCurrent ? 3 : 1.5,
-          },
-          properties: {
-            trackNodeData: pt,
-            nodeIndex: idx + 1,
-            cycloneName: cyclone.name,
-          },
-        });
+        // In-place style update for the "current" highlight
+        if (nodeEntity.point) {
+          (nodeEntity.point.pixelSize as Cesium.ConstantProperty).setValue(isCurrent ? 12 : 7);
+          (nodeEntity.point.color as Cesium.ConstantProperty).setValue(
+            isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85)
+          );
+          (nodeEntity.point.outlineColor as Cesium.ConstantProperty).setValue(
+            isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK
+          );
+          (nodeEntity.point.outlineWidth as Cesium.ConstantProperty).setValue(isCurrent ? 3 : 1.5);
+        }
+        nodeEntity.show = true;
+        activeKeys.add(key);
       });
 
       // 3D Solar System Space Celestial Bodies (Sun, Moon & Solar Beam Vector in Space)
@@ -631,43 +657,59 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           const sunSpacePos = Cesium.Cartesian3.multiplyByScalar(sunNorm, 40000000.0, new Cesium.Cartesian3());
           const earthSurfacePoint = Cesium.Cartesian3.multiplyByScalar(sunNorm, 6371000.0, new Cesium.Cartesian3());
 
-          viewer.entities.add({
-            name: 'Sun 3D Celestial Body',
-            position: sunSpacePos,
-            point: {
-              pixelSize: 28,
-              color: Cesium.Color.fromCssColorString('#fbbf24'),
-              outlineColor: Cesium.Color.fromCssColorString('#f59e0b'),
-              outlineWidth: 5,
-            },
-            label: {
-              text: '☉ THE SUN\nSOLAR SYSTEM CORE LIGHT SOURCE',
-              font: '10px IBM Plex Mono, monospace',
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              outlineWidth: 2,
-              outlineColor: Cesium.Color.BLACK,
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              pixelOffset: new Cesium.Cartesian2(0, -18),
-              fillColor: Cesium.Color.fromCssColorString('#fef08a'),
-              showBackground: true,
-              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
-              backgroundPadding: new Cesium.Cartesian2(8, 5),
-            },
-          });
+          const sunEntity = acquireEntity(
+            viewer,
+            'celestial-sun',
+            `sun|${julianDate.toString()}`,
+            () => ({
+              name: 'Sun 3D Celestial Body',
+              position: sunSpacePos,
+              point: {
+                pixelSize: 28,
+                color: Cesium.Color.fromCssColorString('#fbbf24'),
+                outlineColor: Cesium.Color.fromCssColorString('#f59e0b'),
+                outlineWidth: 5,
+              },
+              label: {
+                text: '☉ THE SUN\nSOLAR SYSTEM CORE LIGHT SOURCE',
+                font: '10px IBM Plex Mono, monospace',
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                outlineWidth: 2,
+                outlineColor: Cesium.Color.BLACK,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -18),
+                fillColor: Cesium.Color.fromCssColorString('#fef08a'),
+                showBackground: true,
+                backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
+                backgroundPadding: new Cesium.Cartesian2(8, 5),
+              },
+            })
+          );
+          (sunEntity.position as Cesium.ConstantPositionProperty).setValue(sunSpacePos);
+          sunEntity.show = true;
+          activeKeys.add('celestial-sun');
 
           // Solar Rays Polyline (From Sun position to Earth surface position)
-          viewer.entities.add({
-            name: 'Solar Rays Vector Beam',
-            polyline: {
-              positions: [sunSpacePos, earthSurfacePoint],
-              width: 2.0,
-              material: new Cesium.PolylineGlowMaterialProperty({
-                glowPower: 0.3,
-                taperPower: 0.8,
-                color: Cesium.Color.fromCssColorString('#fde047').withAlpha(0.35),
-              }),
-            },
-          });
+          const rayEntity = acquireEntity(
+            viewer,
+            'celestial-sun-rays',
+            'sunrays',
+            () => ({
+              name: 'Solar Rays Vector Beam',
+              polyline: {
+                positions: [sunSpacePos, earthSurfacePoint],
+                width: 2.0,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.3,
+                  taperPower: 0.8,
+                  color: Cesium.Color.fromCssColorString('#fde047').withAlpha(0.35),
+                }),
+              },
+            })
+          );
+          (rayEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue([sunSpacePos, earthSurfacePoint]);
+          rayEntity.show = true;
+          activeKeys.add('celestial-sun-rays');
         }
 
         // 3D Moon Entity in Space
@@ -679,213 +721,319 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           const moonNorm = Cesium.Cartesian3.normalize(moonPosEcef, new Cesium.Cartesian3());
           const moonSpacePos = Cesium.Cartesian3.multiplyByScalar(moonNorm, 24000000.0, new Cesium.Cartesian3());
 
-          viewer.entities.add({
-            name: 'Moon 3D Celestial Body',
-            position: moonSpacePos,
-            point: {
-              pixelSize: 14,
-              color: Cesium.Color.fromCssColorString('#e2e8f0'),
-              outlineColor: Cesium.Color.fromCssColorString('#94a3b8'),
-              outlineWidth: 3,
-            },
-            label: {
-              text: '☽ THE MOON\nEARTH NATURAL SATELLITE',
-              font: '10px IBM Plex Mono, monospace',
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              outlineWidth: 2,
-              outlineColor: Cesium.Color.BLACK,
-              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              pixelOffset: new Cesium.Cartesian2(0, -14),
-              fillColor: Cesium.Color.fromCssColorString('#cbd5e1'),
-              showBackground: true,
-              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
-              backgroundPadding: new Cesium.Cartesian2(8, 5),
-            },
-          });
+          const moonEntity = acquireEntity(
+            viewer,
+            'celestial-moon',
+            `moon|${julianDate.toString()}`,
+            () => ({
+              name: 'Moon 3D Celestial Body',
+              position: moonSpacePos,
+              point: {
+                pixelSize: 14,
+                color: Cesium.Color.fromCssColorString('#e2e8f0'),
+                outlineColor: Cesium.Color.fromCssColorString('#94a3b8'),
+                outlineWidth: 3,
+              },
+              label: {
+                text: '☽ THE MOON\nEARTH NATURAL SATELLITE',
+                font: '10px IBM Plex Mono, monospace',
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                outlineWidth: 2,
+                outlineColor: Cesium.Color.BLACK,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                pixelOffset: new Cesium.Cartesian2(0, -14),
+                fillColor: Cesium.Color.fromCssColorString('#cbd5e1'),
+                showBackground: true,
+                backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.9),
+                backgroundPadding: new Cesium.Cartesian2(8, 5),
+              },
+            })
+          );
+          (moonEntity.position as Cesium.ConstantPositionProperty).setValue(moonSpacePos);
+          moonEntity.show = true;
+          activeKeys.add('celestial-moon');
         }
       } catch (e) {
         console.warn('3D Celestial bodies rendering:', e);
       }
 
-      // Active Cyclone Eye Core Anchor & Concentric Intensity Rings
+      // Active Cyclone Eye Core Anchor & Concentric Intensity Rings (time-varying, updated in place)
       const activePt = trackPoints[Math.min(currentTrackIndex, trackPoints.length - 1)];
       if (activePt) {
+        const eyePos = Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude);
+
         // Core Eye Circle (Storm Visual Center Anchor)
-        viewer.entities.add({
-          name: 'Cyclone Eye Core Anchor',
-          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
-          ellipse: {
-            semiMajorAxis: 35000,
-            semiMinorAxis: 35000,
-            material: Cesium.Color.WHITE.withAlpha(0.25),
-            outline: true,
-            outlineColor: Cesium.Color.WHITE,
-            outlineWidth: 2.0,
-          },
-        });
+        const eyeEntity = acquireEntity(
+          viewer,
+          'cyclone-eye-core',
+          `eye|${cyclone.id}`,
+          () => ({
+            name: 'Cyclone Eye Core Anchor',
+            position: eyePos,
+            ellipse: {
+              semiMajorAxis: 35000,
+              semiMinorAxis: 35000,
+              material: Cesium.Color.WHITE.withAlpha(0.25),
+              outline: true,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 2.0,
+            },
+          })
+        );
+        (eyeEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        eyeEntity.show = true;
+        activeKeys.add('cyclone-eye-core');
 
         // Inner Core Wind Radius Ring (50kt Concentric Ring)
-        viewer.entities.add({
-          name: 'Inner Core Intensity Ring (50kt)',
-          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
-          ellipse: {
-            semiMajorAxis: cyclone.windRadius.r50ktsKm * 1000,
-            semiMinorAxis: cyclone.windRadius.r50ktsKm * 1000,
-            material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
-            outline: true,
-            outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
-            outlineWidth: 1.5,
-          },
-        });
+        const ring50 = acquireEntity(
+          viewer,
+          'cyclone-ring-50kt',
+          `r50|${cyclone.id}|${cyclone.windRadius.r50ktsKm}`,
+          () => ({
+            name: 'Inner Core Intensity Ring (50kt)',
+            position: eyePos,
+            ellipse: {
+              semiMajorAxis: cyclone.windRadius.r50ktsKm * 1000,
+              semiMinorAxis: cyclone.windRadius.r50ktsKm * 1000,
+              material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
+              outline: true,
+              outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
+              outlineWidth: 1.5,
+            },
+          })
+        );
+        (ring50.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        ring50.show = true;
+        activeKeys.add('cyclone-ring-50kt');
 
         // Outer Wind Radius Ring (34kt Concentric Ring)
-        viewer.entities.add({
-          name: 'Outer Wind Intensity Ring (34kt)',
-          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
-          ellipse: {
-            semiMajorAxis: cyclone.windRadius.r34ktsKm * 1000,
-            semiMinorAxis: cyclone.windRadius.r34ktsKm * 1000,
-            material: Cesium.Color.TEAL.withAlpha(0.06),
-            outline: true,
-            outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
-            outlineWidth: 1.0,
-          },
-        });
+        const ring34 = acquireEntity(
+          viewer,
+          'cyclone-ring-34kt',
+          `r34|${cyclone.id}|${cyclone.windRadius.r34ktsKm}`,
+          () => ({
+            name: 'Outer Wind Intensity Ring (34kt)',
+            position: eyePos,
+            ellipse: {
+              semiMajorAxis: cyclone.windRadius.r34ktsKm * 1000,
+              semiMinorAxis: cyclone.windRadius.r34ktsKm * 1000,
+              material: Cesium.Color.TEAL.withAlpha(0.06),
+              outline: true,
+              outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
+              outlineWidth: 1.0,
+            },
+          })
+        );
+        (ring34.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        ring34.show = true;
+        activeKeys.add('cyclone-ring-34kt');
 
         // Directional Movement Vector Indicator Tag Pin
-        viewer.entities.add({
-          name: 'Cyclone Eye Pin Callout',
-          position: Cesium.Cartesian3.fromDegrees(activePt.longitude, activePt.latitude),
-          label: {
-            text: `EYE OF STORM: ${cyclone.name}\n${activePt.category.toUpperCase()} · ${activePt.maxWindKts} KT`,
-            font: '10px IBM Plex Mono, monospace',
-            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-            outlineWidth: 2,
-            outlineColor: Cesium.Color.BLACK,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(40, -20),
-            fillColor: Cesium.Color.WHITE,
-            showBackground: true,
-            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
-            backgroundPadding: new Cesium.Cartesian2(8, 5),
-          },
-        });
+        const eyeLabelText = `EYE OF STORM: ${cyclone.name}\n${activePt.category.toUpperCase()} · ${activePt.maxWindKts} KT`;
+        const pinEntity = acquireEntity(
+          viewer,
+          'cyclone-eye-pin',
+          `pin|${cyclone.id}`,
+          () => ({
+            name: 'Cyclone Eye Pin Callout',
+            position: eyePos,
+            label: {
+              text: eyeLabelText,
+              font: '10px IBM Plex Mono, monospace',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineWidth: 2,
+              outlineColor: Cesium.Color.BLACK,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(40, -20),
+              fillColor: Cesium.Color.WHITE,
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
+              backgroundPadding: new Cesium.Cartesian2(8, 5),
+            },
+          })
+        );
+        (pinEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        if (pinEntity.label?.text) {
+          (pinEntity.label.text as Cesium.ConstantProperty).setValue(eyeLabelText);
+        }
+        pinEntity.show = true;
+        activeKeys.add('cyclone-eye-pin');
       }
 
-      // Forecast Uncertainty Region Circles
-      cyclone.forecastCone.forEach((conePt) => {
-        viewer.entities.add({
-          name: 'Forecast Cone Circle',
-          position: Cesium.Cartesian3.fromDegrees(conePt.longitude, conePt.latitude),
-          ellipse: {
-            semiMajorAxis: conePt.radiusKm * 1000,
-            semiMinorAxis: conePt.radiusKm * 1000,
-            material: Cesium.Color.CYAN.withAlpha(0.04),
-            outline: true,
-            outlineColor: Cesium.Color.CYAN.withAlpha(0.25),
-            outlineWidth: 1.0,
-          },
-        });
+      // Forecast Uncertainty Region Circles (static per cyclone)
+      cyclone.forecastCone.forEach((conePt, coneIdx) => {
+        const key = `cyclone-cone-${cyclone.id}-${coneIdx}`;
+        const coneEntity = acquireEntity(
+          viewer,
+          key,
+          `cone|${cyclone.id}|${coneIdx}|${conePt.latitude}|${conePt.longitude}|${conePt.radiusKm}`,
+          () => ({
+            name: 'Forecast Cone Circle',
+            position: Cesium.Cartesian3.fromDegrees(conePt.longitude, conePt.latitude),
+            ellipse: {
+              semiMajorAxis: conePt.radiusKm * 1000,
+              semiMinorAxis: conePt.radiusKm * 1000,
+              material: Cesium.Color.CYAN.withAlpha(0.04),
+              outline: true,
+              outlineColor: Cesium.Color.CYAN.withAlpha(0.25),
+              outlineWidth: 1.0,
+            },
+          })
+        );
+        coneEntity.show = true;
+        activeKeys.add(key);
       });
     }
 
     // 2. COASTAL HAZARD SECTOR POLYGONS
     if (isLayerActive('risk_zones')) {
-      viewer.entities.add({
-        name: 'Sundarbans Risk Sector',
-        polygon: {
-          hierarchy: Cesium.Cartesian3.fromDegreesArray([
-            87.5, 21.2,
-            89.8, 21.2,
-            90.5, 22.6,
-            88.0, 22.6,
-          ]),
-          material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.15),
-          outline: true,
-          outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.6),
-        },
-      });
+      const riskEntity = acquireEntity(
+        viewer,
+        'risk-sundarbans-sector',
+        'risk|sundarbans',
+        () => ({
+          name: 'Sundarbans Risk Sector',
+          polygon: {
+            hierarchy: Cesium.Cartesian3.fromDegreesArray([
+              87.5, 21.2,
+              89.8, 21.2,
+              90.5, 22.6,
+              88.0, 22.6,
+            ]),
+            material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.15),
+            outline: true,
+            outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.6),
+          },
+        })
+      );
+      riskEntity.show = true;
+      activeKeys.add('risk-sundarbans-sector');
     }
 
     // 3. MONITORING STATIONS
     if (isLayerActive('stations')) {
       stations.forEach((st) => {
-        viewer.entities.add({
-          name: `${st.name} Outer Halo`,
-          position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-          ellipse: {
-            semiMajorAxis: 18000,
-            semiMinorAxis: 18000,
-            material: Cesium.Color.WHITE.withAlpha(0.04),
-            outline: true,
-            outlineColor: Cesium.Color.WHITE.withAlpha(0.4),
-            outlineWidth: 1.0,
-          },
-        });
+        const haloKey = `station-halo-${st.id}`;
+        const haloEntity = acquireEntity(
+          viewer,
+          haloKey,
+          `halo|${st.id}|${st.latitude}|${st.longitude}`,
+          () => ({
+            name: `${st.name} Outer Halo`,
+            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
+            ellipse: {
+              semiMajorAxis: 18000,
+              semiMinorAxis: 18000,
+              material: Cesium.Color.WHITE.withAlpha(0.04),
+              outline: true,
+              outlineColor: Cesium.Color.WHITE.withAlpha(0.4),
+              outlineWidth: 1.0,
+            },
+          })
+        );
+        haloEntity.show = true;
+        activeKeys.add(haloKey);
 
-        viewer.entities.add({
-          name: st.name,
-          position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-          point: {
-            pixelSize: 6,
-            color: Cesium.Color.WHITE,
-            outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 1.5,
-          },
-          properties: {
-            stationData: st,
-          },
-        });
+        const pointKey = `station-${st.id}`;
+        const pointEntity = acquireEntity(
+          viewer,
+          pointKey,
+          `station|${st.id}|${st.latitude}|${st.longitude}`,
+          () => ({
+            name: st.name,
+            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
+            point: {
+              pixelSize: 6,
+              color: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 1.5,
+            },
+            properties: {
+              stationData: st,
+            },
+          })
+        );
+        pointEntity.show = true;
+        activeKeys.add(pointKey);
       });
     }
 
     // 4. REAL ARGO OBSERVATIONS LAYER
     if (isLayerActive('argo') && argoProfiles) {
       argoProfiles.forEach((p) => {
-        viewer.entities.add({
-          name: `Argo Float ${p.float_id} Halo`,
-          position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
-          ellipse: {
-            semiMajorAxis: 24000,
-            semiMinorAxis: 24000,
-            material: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.08),
-            outline: true,
-            outlineColor: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.6),
-            outlineWidth: 1.5,
-          },
-        });
+        const haloKey = `argo-halo-${p.profile_id}`;
+        const haloEntity = acquireEntity(
+          viewer,
+          haloKey,
+          `argoHalo|${p.profile_id}|${p.latitude}|${p.longitude}`,
+          () => ({
+            name: `Argo Float ${p.float_id} Halo`,
+            position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
+            ellipse: {
+              semiMajorAxis: 24000,
+              semiMinorAxis: 24000,
+              material: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.08),
+              outline: true,
+              outlineColor: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.6),
+              outlineWidth: 1.5,
+            },
+          })
+        );
+        haloEntity.show = true;
+        activeKeys.add(haloKey);
 
-        viewer.entities.add({
-          name: `Argo Float ${p.float_id}`,
-          position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
-          point: {
-            pixelSize: 8,
-            color: Cesium.Color.fromCssColorString('#22d3ee'),
-            outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 2,
-          },
-          label: {
-            text: `ARGO FLOAT ${p.float_id}\nREAL SOURCE • INGESTION PENDING`,
-            font: '9px IBM Plex Mono, monospace',
-            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-            outlineWidth: 2,
-            outlineColor: Cesium.Color.BLACK,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -12),
-            fillColor: Cesium.Color.fromCssColorString('#38bdf8'),
-            showBackground: true,
-            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
-            backgroundPadding: new Cesium.Cartesian2(6, 4),
-          },
-          properties: {
-            argoData: p,
-          },
-        });
+        const pointKey = `argo-${p.profile_id}`;
+        const pointEntity = acquireEntity(
+          viewer,
+          pointKey,
+          `argo|${p.profile_id}|${p.latitude}|${p.longitude}`,
+          () => ({
+            name: `Argo Float ${p.float_id}`,
+            position: Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude),
+            point: {
+              pixelSize: 8,
+              color: Cesium.Color.fromCssColorString('#22d3ee'),
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+            },
+            label: {
+              text: `ARGO FLOAT ${p.float_id}\nREAL SOURCE • INGESTION PENDING`,
+              font: '9px IBM Plex Mono, monospace',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineWidth: 2,
+              outlineColor: Cesium.Color.BLACK,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -12),
+              fillColor: Cesium.Color.fromCssColorString('#38bdf8'),
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.88),
+              backgroundPadding: new Cesium.Cartesian2(6, 4),
+            },
+            properties: {
+              argoData: p,
+            },
+          })
+        );
+        pointEntity.show = true;
+        activeKeys.add(pointKey);
       });
     }
-  }, [cyclone, currentTrackIndex, stations, layers, argoProfiles]);
 
-  // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity)
+    // Hide any registry entities not refreshed this pass (layer toggled off).
+    // They stay alive for instant re-enable — no destroy/recreate churn.
+    registry.forEach((entity, key) => {
+      if (!activeKeys.has(key)) {
+        entity.show = false;
+      }
+    });
+
+    perfMonitor.setEntityCount(registry.size);
+    perfMonitor.recordTimelineUpdate(performance.now() - t0);
+  }, [cyclone, currentTrackIndex, stations, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
+
+  // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity / TCHP)
+  // Fetches layer slices with abort-based cancellation and reuses cached
+  // raster Data URLs for already-loaded timestamp/layer combinations.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
@@ -894,26 +1042,43 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const showSaln = isLayerActive('salinity');
     const showTCHP = isLayerActive('tchp');
 
-    if (rasterLayerRef.current) {
-      viewer.imageryLayers.remove(rasterLayerRef.current);
-      rasterLayerRef.current = null;
-    }
+    const abortController = new AbortController();
 
-    if (!showSST && !showSaln && !showTCHP) return;
+    if (!showSST && !showSaln && !showTCHP) {
+      if (rasterLayerRef.current) {
+        viewer.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
+      }
+      return () => {
+        abortController.abort();
+      };
+    }
 
     const targetLayer: 'sst' | 'salinity' | 'tchp' = showSST ? 'sst' : showSaln ? 'salinity' : 'tchp';
 
     let active = true;
 
     async function loadRasterOverlay() {
-      const data = await apiProvider.getLayerData(targetLayer, timestamp);
+      const fetchT0 = performance.now();
+      let data: Awaited<ReturnType<typeof apiProvider.getLayerData>> = null;
+      try {
+        data = await apiProvider.getLayerData(targetLayer, timestamp, 3, abortController.signal);
+      } catch {
+        return; // aborted or failed
+      }
       if (!active || !data || !data.grid || !data.grid.values || !viewerRef.current || viewerRef.current.isDestroyed()) return;
 
-      const dataUrl = generateLayerImageDataUrl(
+      const { dataUrl, cacheHit, generationMs } = generateLayerImageDataUrlCached(
         targetLayer,
         data.grid.latitudes,
         data.grid.longitudes,
-        data.grid.values
+        data.grid.values,
+        data.timestamp
+      );
+
+      perfMonitor.recordRasterGen(
+        cacheHit ? generationMs : (performance.now() - fetchT0),
+        cacheHit
       );
 
       if (!dataUrl || !active) return;
@@ -944,12 +1109,103 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     return () => {
       active = false;
+      abortController.abort();
       if (viewerRef.current && !viewerRef.current.isDestroyed() && rasterLayerRef.current) {
         viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
         rasterLayerRef.current = null;
       }
     };
-  }, [layers, timestamp]);
+  }, [layers, timestamp, isLayerActive]);
+
+
+  // ============================================================
+  // HYCOM Model Depth Slice overlay (Phase 1B)
+  //
+  // A dedicated imagery layer, fully separate from the surface raster:
+  // - own layer ref (never removed by surface logic, never accumulates)
+  // - replaces the previous slice atomically before adding the new one
+  // - hidden entirely when depthSliceVisible is false or payload is absent
+  // The slice is a 2D geographic drape of a single native model depth
+  // level — NOT a volumetric or water-column visualization.
+  // ============================================================
+  const removeDepthSliceLayer = useCallback(() => {
+    const viewer = viewerRef.current;
+    if (viewer && !viewer.isDestroyed() && depthSliceLayerRef.current) {
+      viewer.imageryLayers.remove(depthSliceLayerRef.current);
+    }
+    depthSliceLayerRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    const payload = depthSlicePayload;
+
+    if (!depthSliceVisible || !payload || !payload.grid) {
+      removeDepthSliceLayer();
+      return;
+    }
+
+    // Vector (currents) slices carry u/v; rasterize the speed magnitude.
+    let values: (number | null)[][] | null = null;
+    if (payload.grid.values) {
+      values = payload.grid.values;
+    } else if (payload.grid.u && payload.grid.v) {
+      values = payload.grid.u.map((row, i) =>
+        row.map((u, j) => {
+          const v = payload.grid.v?.[i]?.[j];
+          if (u === null || u === undefined || v === null || v === undefined) return null;
+          return Math.sqrt(u * u + v * v);
+        })
+      );
+    }
+    if (!values) {
+      removeDepthSliceLayer();
+      return;
+    }
+
+    const { dataUrl, cacheHit, generationMs } = generateDepthSliceImageDataUrlCached(
+      payload.variable,
+      payload.matched_depth_m,
+      payload.grid.latitudes,
+      payload.grid.longitudes,
+      values,
+      payload.timestamp
+    );
+
+    perfMonitor.recordRasterGen(generationMs, cacheHit);
+
+    if (!dataUrl) return;
+
+    const provider = new Cesium.SingleTileImageryProvider({
+      url: dataUrl,
+      rectangle: Cesium.Rectangle.fromDegrees(
+        payload.bounds.minLon,
+        payload.bounds.minLat,
+        payload.bounds.maxLon,
+        payload.bounds.maxLat
+      ),
+      tileWidth: 512,
+      tileHeight: 512,
+    });
+
+    if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
+
+    // Atomic replace: remove the previous slice before adding the new one so
+    // old imagery never lingers underneath and layers never accumulate.
+    removeDepthSliceLayer();
+    depthSliceLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
+    depthSliceLayerRef.current.alpha = 0.75;
+  }, [depthSliceVisible, depthSlicePayload, removeDepthSliceLayer]);
+
+  // Unmount cleanup: the depth-slice imagery layer dies with the viewer, but
+  // clear the ref defensively in case the viewer outlives this component.
+  useEffect(() => {
+    return () => {
+      depthSliceLayerRef.current = null;
+    };
+  }, []);
 
 
   const showWind = isLayerActive('wind');
@@ -1052,6 +1308,24 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               <span className="text-emerald-400 font-semibold">INCOIS HYCOM — REAL VECTOR FIELD</span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* HYCOM Model Depth Slice legend chip — always visually distinct from SURFACE layers */}
+      {depthSliceVisible && depthSlicePayload && (
+        <div className="absolute left-6 bottom-36 z-20 pointer-events-none">
+          <div className="px-2.5 py-1 rounded-xl bg-[#080c14]/90 backdrop-blur-xl border border-indigo-500/40 text-indigo-300 shadow-2xl flex items-center gap-1.5 font-mono text-[9px] tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            <span className="font-bold">HYCOM MODEL DEPTH SLICE</span>
+            <span className="text-slate-500">│</span>
+            <span className="text-slate-200 font-semibold">{depthSlicePayload.variable.toUpperCase()}</span>
+            <span className="text-slate-500">│</span>
+            <span className="text-indigo-300 font-bold">{depthSlicePayload.matched_depth_m} m MODEL LEVEL</span>
+            <span className="text-slate-500">│</span>
+            <span className="text-slate-300">{depthSlicePayload.units}</span>
+            <span className="text-slate-500">│</span>
+            <span className="text-emerald-400 font-semibold">SUBSURFACE — NOT SURFACE</span>
+          </div>
         </div>
       )}
     </div>

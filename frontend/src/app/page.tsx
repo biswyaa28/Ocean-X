@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { apiProvider } from '../services/ApiProvider';
+import React, { useState, useEffect, useCallback } from 'react';
+import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
 import { demoProvider } from '../services/DemoProvider';
 import {
   Cyclone,
@@ -19,6 +19,7 @@ import {
 
 import { Header } from '../components/Header';
 import { LayerControl } from '../components/LayerControl';
+import { DepthSliceControl, DepthSliceSelection } from '../components/DepthSliceControl';
 import { ToolRail, ActiveRightTool } from '../components/ToolRail';
 import { Timeline } from '../components/Timeline';
 import { IntelligencePanel } from '../components/IntelligencePanel';
@@ -66,6 +67,17 @@ export default function Home() {
   const [legendBounds, setLegendBounds] = useState<{ min: number; mid: number; max: number; unit: string; layerName: string } | null>(null);
   const [astroData, setAstroData] = useState<AstronomicalData | null>(null);
 
+  // HYCOM model depth slice (Phase 1B) — separate from surface layers
+  const [depthSliceVisible, setDepthSliceVisible] = useState(false);
+  const [depthSliceSelection, setDepthSliceSelection] = useState<DepthSliceSelection>({
+    variable: 'temperature',
+    depthM: 50,
+  });
+  const [depthSliceMetadata, setDepthSliceMetadata] = useState<DepthSlicePayload | null>(null);
+  const [depthSliceLoading, setDepthSliceLoading] = useState(false);
+  const [depthSliceUnavailable, setDepthSliceUnavailable] = useState<string | null>(null);
+  const [datasetTimestamps, setDatasetTimestamps] = useState<string[]>([]);
+
   // Initial Load from DataProvider
   useEffect(() => {
     async function loadData() {
@@ -107,6 +119,28 @@ export default function Home() {
     loadData();
   }, []);
 
+  // Dataset time steps for the depth-slice picker (same source as /observations)
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTimestamps() {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api'}/observations`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.available_timestamps)) {
+          setDatasetTimestamps(data.available_timestamps);
+        }
+      } catch {
+        // Backend unreachable: picker stays empty; slice requests still work
+        // (backend defaults to the first available model time).
+      }
+    }
+    if (backendConnected) loadTimestamps();
+    return () => {
+      cancelled = true;
+    };
+  }, [backendConnected]);
+
   // Mode-dependent track and point resolution (Requirement #1 & #11)
   const activeTrack: CycloneTrackPoint[] = oceanMode === 'LIVE'
     ? LIVE_HYCOM_TIMESTEPS
@@ -128,8 +162,9 @@ export default function Home() {
     }
   }, [oceanMode]);
 
-  // Handle OceanMode Change
-  const handleOceanModeChange = (newMode: OceanMode) => {
+  // Memoized callbacks: stable references prevent cascading re-renders of the
+  // memoized CesiumGlobe subtree on unrelated top-level state changes.
+  const handleOceanModeChange = useCallback((newMode: OceanMode) => {
     setOceanMode(newMode);
     setCurrentTrackIndex(0);
     if (newMode === 'LIVE') {
@@ -138,7 +173,40 @@ export default function Home() {
       setInspectedCoords(null);
       setInspectionData(null);
     }
-  };
+  }, []);
+
+  const handleToggleLayer = useCallback((layerId: string) => {
+    setLayers((prev) => {
+      const isScientific = ['sst', 'salinity', 'currents', 'tchp'].includes(layerId);
+      const currentlyActive = prev.find((l) => l.id === layerId)?.active ?? false;
+      const targetState = !currentlyActive;
+
+      return prev.map((l) => {
+        if (l.id === layerId) {
+          return { ...l, active: targetState };
+        }
+        // If enabling a scientific ocean layer, deactivate other scientific ocean layers
+        if (targetState && isScientific && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) {
+          return { ...l, active: false };
+        }
+        return l;
+      });
+    });
+  }, []);
+
+  const handleInspectPoint = useCallback((lat: number, lon: number) => {
+    setInspectedCoords({ lat, lon });
+  }, []);
+
+  const handleSelectStation = useCallback((station: Station | null) => {
+    setSelectedStation(station);
+  }, []);
+
+  const handleSelectArgoProfile = useCallback((profile: ArgoProfile | null) => {
+    setSelectedArgoProfile(profile);
+  }, []);
+
+  const activeLayer = layers.find((l) => l.active) || null;
 
   // Metrics calculation
   useEffect(() => {
@@ -180,93 +248,141 @@ export default function Home() {
     });
   }, [cyclone, currentTrackIndex, currentPoint, oceanMode]);
 
-  // Toggle Layer Visibility with Single-Active Scientific Selection (Requirement #2)
-  const handleToggleLayer = (layerId: string) => {
-    setLayers((prev) => {
-      const isScientific = ['sst', 'salinity', 'currents', 'tchp'].includes(layerId);
-      const currentlyActive = prev.find((l) => l.id === layerId)?.active ?? false;
-      const targetState = !currentlyActive;
-
-      return prev.map((l) => {
-        if (l.id === layerId) {
-          return { ...l, active: targetState };
-        }
-        // If enabling a scientific ocean layer, deactivate other scientific ocean layers
-        if (targetState && isScientific && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) {
-          return { ...l, active: false };
-        }
-        return l;
-      });
-    });
-  };
-
-  const activeLayer = layers.find((l) => l.active) || null;
-
-  const handleInspectPoint = (lat: number, lon: number) => {
-    setInspectedCoords({ lat, lon });
-  };
-
   // Fetch Dynamic Legend Bounds from API (Requirement #16)
+  // Aborts in-flight layer queries on rapid layer/timeline toggling.
   useEffect(() => {
+    const abortController = new AbortController();
+
     async function fetchLayerLegend() {
       if (!activeLayer || !['sst', 'salinity', 'currents', 'tchp'].includes(activeLayer.id)) {
         setLegendBounds(null);
         return;
       }
-      const data = await apiProvider.getLayerData(activeLayer.id, currentPoint?.timestamp);
-      if (data && data.grid && (data.grid.values || data.grid.u)) {
-        let vals: number[] = [];
-        if (data.grid.values) {
-          vals = data.grid.values.flat().filter((v: any) => v !== null && v !== undefined && !isNaN(v) && v !== 0);
-        } else if (data.grid.u && data.grid.v) {
-          const uFlat = data.grid.u.flat();
-          const vFlat = data.grid.v.flat();
-          for (let i = 0; i < uFlat.length; i++) {
-            const u = uFlat[i], v = vFlat[i];
-            if (u !== null && v !== null && !isNaN(u) && !isNaN(v)) {
-              vals.push(Math.sqrt(u * u + v * v));
+      try {
+        const data = await apiProvider.getLayerData(activeLayer.id, currentPoint?.timestamp, 3, abortController.signal);
+        if (abortController.signal.aborted) return;
+        if (data && data.grid && (data.grid.values || data.grid.u)) {
+          let vals: number[] = [];
+          if (data.grid.values) {
+            vals = data.grid.values
+              .flat()
+              .filter((v): v is number => v !== null && v !== undefined && !isNaN(v) && v !== 0);
+          } else if (data.grid.u && data.grid.v) {
+            const uFlat = data.grid.u.flat();
+            const vFlat = data.grid.v.flat();
+            for (let i = 0; i < uFlat.length; i++) {
+              const u = uFlat[i], v = vFlat[i];
+              if (u !== null && v !== null && !isNaN(u) && !isNaN(v)) {
+                vals.push(Math.sqrt(u * u + v * v));
+              }
             }
           }
+          if (vals.length > 0) {
+            const min = Math.min(...vals);
+            const max = Math.max(...vals);
+            const mid = (min + max) / 2;
+            setLegendBounds({
+              min,
+              mid,
+              max,
+              unit: data.units || activeLayer.unit || '',
+              layerName: activeLayer.name,
+            });
+            return;
+          }
         }
-        if (vals.length > 0) {
-          const min = Math.min(...vals);
-          const max = Math.max(...vals);
-          const mid = (min + max) / 2;
-          setLegendBounds({
-            min,
-            mid,
-            max,
-            unit: data.units || activeLayer.unit || '',
-            layerName: activeLayer.name,
-          });
-          return;
-        }
+        if (!abortController.signal.aborted) setLegendBounds(null);
+      } catch {
+        // Aborted or failed: leave previous legend state intact
       }
-      setLegendBounds(null);
     }
 
     fetchLayerLegend();
-  }, [activeLayer?.id, currentPoint?.timestamp]);
+
+    return () => {
+      abortController.abort();
+    };
+  }, [activeLayer?.id, currentPoint?.timestamp, activeLayer]);
+
+  // HYCOM model depth slice fetch (Phase 1B). Aborts in-flight requests on
+  // rapid depth/variable/timestamp changes; the latest selection wins.
+  useEffect(() => {
+    if (!depthSliceVisible) return;
+
+    const abortController = new AbortController();
+    const { signal } = abortController;
+    let settled = false;
+
+    const settle = (loading: boolean, unavailable: string | null) => {
+      if (settled || signal.aborted) return;
+      settled = true;
+      setDepthSliceLoading(loading);
+      setDepthSliceUnavailable(unavailable);
+    };
+
+    // Kick off async in a microtask so the effect body itself stays
+    // side-effect free (no synchronous setState cascade).
+    const started = Promise.resolve().then(() => {
+      if (signal.aborted) return;
+      setDepthSliceLoading(true);
+      setDepthSliceUnavailable(null);
+      return apiProvider.getDepthSlice(
+        depthSliceSelection.variable,
+        depthSliceSelection.depthM,
+        depthSliceSelection.timestamp,
+        3,
+        signal
+      );
+    });
+
+    started
+      .then((payload) => {
+        if (signal.aborted) return; // stale request: latest selection wins
+        if (payload) {
+          setDepthSliceMetadata(payload);
+          settle(false, null);
+        } else {
+          // Backend unreachable, dataset missing (503) or invalid selection.
+          // Never fall back to synthetic depth data.
+          setDepthSliceMetadata(null);
+          settle(false, 'Real INCOIS HYCOM depth data could not be loaded for this selection. The depth-resolved HYCOM dataset may not be installed on the server.');
+        }
+      })
+      .catch(() => {
+        if (signal.aborted) return; // aborts stay silent
+        settle(false, 'Depth slice request failed.');
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [depthSliceVisible, depthSliceSelection]);
 
   // Map Click Inspector Dispatcher (Requirement #5, #7, #8)
+  // Aborts in-flight inspection queries when the user clicks another point
+  // or moves the timeline, so only the latest response reaches the UI.
   useEffect(() => {
+    const abortController = new AbortController();
+    const { signal } = abortController;
+
     async function inspectMapPoint() {
       if (!inspectedCoords) return;
       const layerId = activeLayer?.id || 'cyclone';
       const ts = currentPoint?.timestamp;
 
       if (layerId === 'cyclone' && oceanMode !== 'LIVE') {
-        const cRes = await apiProvider.inspectCyclone(inspectedCoords.lat, inspectedCoords.lon, ts, cyclone?.id);
+        const cRes = await apiProvider.inspectCyclone(inspectedCoords.lat, inspectedCoords.lon, ts, cyclone?.id, signal);
+        if (signal.aborted) return;
         if (cRes) {
           setInspectionData({
-            latitude: cRes.latitude,
-            longitude: cRes.longitude,
-            timestamp: cRes.timestamp,
-            cycloneName: cRes.cycloneName,
-            maxWindKts: cRes.maxWindKts,
-            centralPressureMb: cRes.centralPressureMb,
-            category: cRes.category,
-            distanceToCoastKm: cRes.distanceToCoastKm,
+            latitude: cRes.latitude ?? inspectedCoords.lat,
+            longitude: cRes.longitude ?? inspectedCoords.lon,
+            timestamp: cRes.timestamp || ts || '',
+            cycloneName: cRes.cycloneName || cyclone?.name || 'AMPHAN',
+            maxWindKts: cRes.maxWindKts ?? currentPoint?.maxWindKts,
+            centralPressureMb: cRes.centralPressureMb ?? currentPoint?.centralPressureMb,
+            category: cRes.category || currentPoint?.category,
+            distanceToCoastKm: cRes.distanceToCoastKm ?? currentPoint?.distanceToCoastKm,
             observationType: oceanMode === 'SCENARIO' ? 'SIMULATED SCENARIO' : (cRes.observationType || 'HISTORICAL OBSERVATION'),
             dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'REAL',
             source: oceanMode === 'SCENARIO' ? 'Disaster Response Simulation Model' : 'NOAA IBTrACS v04r01',
@@ -304,7 +420,8 @@ export default function Home() {
           return;
         }
 
-        const hRes = await apiProvider.inspectPoint(inspectedCoords.lat, inspectedCoords.lon, ts);
+        const hRes = await apiProvider.inspectPoint(inspectedCoords.lat, inspectedCoords.lon, ts, signal);
+        if (signal.aborted) return;
         if (hRes) {
           setInspectionData({
             latitude: hRes.latitude ?? inspectedCoords.lat,
@@ -331,6 +448,7 @@ export default function Home() {
         }
       } else if (layerId === 'argo') {
         const aProfiles = await apiProvider.getArgoProfiles();
+        if (signal.aborted) return;
         if (aProfiles && aProfiles.length > 0) {
           const p = aProfiles[0];
           setInspectionData({
@@ -375,7 +493,11 @@ export default function Home() {
     }
 
     inspectMapPoint();
-  }, [inspectedCoords, currentTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, cyclone?.id, oceanMode]);
+
+    return () => {
+      abortController.abort();
+    };
+  }, [inspectedCoords, currentTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, cyclone?.id, oceanMode, activeLayer, hazard]);
 
   return (
     <div className="w-screen h-screen overflow-hidden bg-[#05070a] flex flex-col relative font-sans text-slate-100 select-none">
@@ -399,8 +521,10 @@ export default function Home() {
           stations={stations}
           layers={layers}
           argoProfiles={argoProfiles}
-          onSelectStation={setSelectedStation}
-          onSelectArgoProfile={setSelectedArgoProfile}
+          depthSliceVisible={depthSliceVisible}
+          depthSlicePayload={depthSliceMetadata}
+          onSelectStation={handleSelectStation}
+          onSelectArgoProfile={handleSelectArgoProfile}
           onInspectPoint={handleInspectPoint}
           onAstronomicalUpdate={setAstroData}
           targetLocation={targetLocation}
@@ -414,6 +538,19 @@ export default function Home() {
 
         {/* 3. Left GIS Layer Instrument (Internal Scrollbar, Safe Height) */}
         <LayerControl layers={layers} onToggleLayer={handleToggleLayer} />
+
+        {/* HYCOM Model Depth Slice instrument (Phase 1B) */}
+        <DepthSliceControl
+          visible={depthSliceVisible}
+          onToggleVisible={() => setDepthSliceVisible((v) => !v)}
+          selection={depthSliceSelection}
+          onChange={setDepthSliceSelection}
+          loading={depthSliceLoading}
+          unavailable={depthSliceUnavailable}
+          metadata={depthSliceMetadata}
+          datasetTimestamps={datasetTimestamps}
+          availableDepthsM={depthSliceMetadata?.available_depths_m ?? null}
+        />
 
         {/* 4. Right Map Tool Rail & Drawers */}
         <ToolRail
@@ -429,7 +566,7 @@ export default function Home() {
         {/* 5. Argo Model vs Observation Matchup Drawer */}
         <ArgoMatchupDrawer
           profile={selectedArgoProfile}
-          onClose={() => setSelectedArgoProfile(null)}
+          onClose={() => handleSelectArgoProfile(null)}
         />
 
         {/* 6. Scientific Data Inspector Instrument (No Overlap) */}
@@ -467,7 +604,7 @@ export default function Home() {
       {/* 9. Station Inspection Modal */}
       <StationModal
         station={selectedStation}
-        onClose={() => setSelectedStation(null)}
+        onClose={() => handleSelectStation(null)}
       />
     </div>
   );
