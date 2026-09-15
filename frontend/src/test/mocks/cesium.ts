@@ -52,6 +52,7 @@ function fakeColor() {
 }
 
 export const cesiumMock = {
+  Ion: { defaultAccessToken: '' },
   ImageryLayer: FakeImageryLayer,
   SingleTileImageryProvider: class {
     constructor(public options: unknown) {}
@@ -87,7 +88,11 @@ export const cesiumMock = {
       preRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
       camera: { getPickRay: vi.fn(), flyTo: vi.fn() },
     };
-    camera = { flyTo: vi.fn() };
+    camera = {
+      flyTo: vi.fn(),
+      moveStart: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      moveEnd: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    };
     clock = { currentTime: null, shouldAnimate: false };
     destroy = vi.fn();
     isDestroyed = vi.fn(() => false);
@@ -105,13 +110,13 @@ export const cesiumMock = {
     negate: vi.fn((v: unknown) => v),
     UNIT_Z: { x: 0, y: 0, z: 1 },
   },
-  Matrix3: {
-    multiplyByVector: vi.fn((_m: unknown, v: unknown) => v),
-    computeIcrfToFixedMatrix: vi.fn(() => ({})),
+  Matrix3: class {
+    static multiplyByVector = vi.fn((_m: unknown, v: unknown) => v);
+    static computeIcrfToFixedMatrix = vi.fn(() => ({}));
   },
-  Matrix4: {
-    inverse: vi.fn(() => ({})),
-    multiplyByPoint: vi.fn((_m: unknown, v: unknown) => v),
+  Matrix4: class {
+    static inverse = vi.fn(() => ({}));
+    static multiplyByPoint = vi.fn((_m: unknown, v: unknown) => v);
   },
   Transforms: {
     eastNorthUpToFixedFrame: vi.fn(() => ({})),
