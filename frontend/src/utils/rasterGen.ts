@@ -67,8 +67,8 @@ function getReusableImageData(ctx: CanvasRenderingContext2D, width: number, heig
   return rc.imgData;
 }
 
-/** A cell the surface ramp treats as no-data (surface semantics: 0 == masked). */
-function isSurfaceNoData(val: number | null | undefined): val is null | undefined {
+/** A cell the surface ramp treats as no-data (surface semantics: 0 == masked). Exported for regression tests. */
+export function isSurfaceNoData(val: number | null | undefined): val is null | undefined {
   return val === null || val === undefined || isNaN(val as number) || val === 0;
 }
 
