@@ -16,7 +16,8 @@ export class FakeImageryLayer {
 
 class FakeImageryLayerCollection {
   private layers: FakeImageryLayer[] = [];
-  addImageryProvider(_provider: unknown): FakeImageryLayer {
+  addImageryProvider(provider: unknown): FakeImageryLayer {
+    void provider;
     const layer = new FakeImageryLayer();
     this.layers.push(layer);
     layerOps.push({ op: 'add', layer });

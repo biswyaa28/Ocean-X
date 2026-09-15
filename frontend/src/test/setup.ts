@@ -23,7 +23,9 @@ const ctxStub = {
   imageSmoothingQuality: 'high',
 } as unknown as CanvasRenderingContext2D;
 
-HTMLCanvasElement.prototype.getContext = vi.fn(() => ctxStub);
+HTMLCanvasElement.prototype.getContext = vi.fn(
+  () => ctxStub
+) as unknown as HTMLCanvasElement['getContext'];
 HTMLCanvasElement.prototype.toDataURL = vi.fn(() => 'data:image/png;base64,STUB');
 
 // Cesium asset base path (mirrors the component's own runtime assignment)

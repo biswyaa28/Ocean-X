@@ -88,9 +88,9 @@ describe('generateDepthSliceImageDataUrlCached (stubbed canvas)', () => {
   });
 
   it('returns a cache hit for an identical variable/depth/timestamp/resolution', () => {
-    const args = ['temperature', 50, [5, 6], [80, 81], [[20, 21], [null, 19]], 't1'] as const;
-    generateDepthSliceImageDataUrlCached(...args);
-    const second = generateDepthSliceImageDataUrlCached(...args);
+    const grid: (number | null)[][] = [[20, 21], [null, 19]];
+    generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
+    const second = generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
     expect(second.cacheHit).toBe(true);
   });
 

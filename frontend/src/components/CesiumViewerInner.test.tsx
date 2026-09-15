@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
 import React from 'react';
-import type { Cyclone, Station, GISLayer } from '../types/oceanlens';
+import type { Station, GISLayer } from '../types/oceanlens';
 
 // Cesium mock must be in place BEFORE importing the component.
 import { cesiumMock, layerOps, resetLayerOps } from '../test/mocks/cesium';
