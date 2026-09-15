@@ -11,8 +11,127 @@ import {
   ArgoMatchupResponse,
 } from '../types/oceanlens';
 import { EnvironmentalFlowField } from '../types/flow';
+import { perfMonitor } from '../utils/perfMonitor';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
+
+/** True when a fetch rejected because it was aborted mid-flight. */
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+/** Shape of the /layers/{name} payload consumed by the raster overlay & legend. */
+export interface LayerDataPayload {
+  status: string;
+  source: string;
+  layer_name?: string;
+  timestamp?: string;
+  units?: string;
+  bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
+  grid: {
+    latitudes: number[];
+    longitudes: number[];
+    values?: (number | null)[][];
+    u?: number[][];
+    v?: number[][];
+  };
+}
+
+/**
+ * Shape of the /model/depth-slice payload (Phase 1A).
+ *
+ * Wire format is snake_case (pydantic default serialization).
+ *
+ * A HYCOM model depth slice: values are taken from the single native HYCOM
+ * model depth level nearest to the requested depth - depth is NEVER
+ * interpolated. `requested_depth_m` and `matched_depth_m` are reported
+ * separately so callers can surface the nearest-level semantics.
+ * Missing/NaN source values are represented as null.
+ */
+export interface DepthSlicePayload {
+  status: string;
+  source: string;
+  dataset_file: string;
+  variable: string;
+  units: string;
+  timestamp: string;
+  requested_timestamp?: string | null;
+  requested_depth_m: number;
+  matched_depth_m: number;
+  available_depths_m: number[];
+  depth_selection: string;
+  missing_values: number;
+  bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };
+  grid: {
+    latitudes: number[];
+    longitudes: number[];
+    values?: (number | null)[][];
+    u?: (number | null)[][];
+    v?: (number | null)[][];
+  };
+}
+
+/** Variables supported by the Phase 1A depth-slice API (backend DEPTH_VARIABLES, public names). */
+export const DEPTH_SLICE_VARIABLES = [
+  { id: 'temperature', label: 'Temperature', unit: '°C' },
+  { id: 'salinity', label: 'Salinity', unit: 'PSU' },
+  { id: 'currents', label: 'Currents (u/v)', unit: 'm/s' },
+  { id: 'ssh', label: 'Sea Surface Height', unit: 'm' },
+  { id: 'tchp', label: 'TCHP', unit: 'KJ/cm²' },
+  { id: 'mld', label: 'Mixed Layer Depth', unit: 'm' },
+] as const;
+
+export type DepthSliceVariableId = (typeof DEPTH_SLICE_VARIABLES)[number]['id'];
+
+/** Shape of the /inspect point payload consumed by the Data Inspector. */
+export interface InspectPointPayload {
+  status?: string;
+  dataStatus?: import('../types/oceanlens').DataStatus;
+  message?: string;
+  timestamp?: string;
+  latitude?: number;
+  longitude?: number;
+  requestedTimestamp?: string;
+  availableStart?: string;
+  availableEnd?: string;
+  source?: string;
+  depthM?: number;
+  depth_m?: number;
+  tempC?: number | null;
+  temp_c?: number | null;
+  salnPSU?: number | null;
+  saln_psu?: number | null;
+  uvelMS?: number | null;
+  uvel_ms?: number | null;
+  vvelMS?: number | null;
+  vvel_ms?: number | null;
+  currentSpeedMS?: number | null;
+  current_speed_ms?: number | null;
+  currentDirectionDeg?: number | null;
+  current_direction_deg?: number | null;
+  sshM?: number | null;
+  ssh_m?: number | null;
+  tchpKJ?: number | null;
+  tchp_kj_cm2?: number | null;
+  mldM?: number | null;
+  mld_m?: number | null;
+}
+
+/** Shape of the /cyclones/inspect payload. */
+export interface InspectCyclonePayload {
+  status?: string;
+  dataStatus?: string;
+  observationType?: string;
+  timestamp?: string;
+  latitude?: number;
+  longitude?: number;
+  cycloneName?: string;
+  maxWindKts?: number;
+  centralPressureMb?: number;
+  category?: string;
+  distanceToCoastKm?: number;
+  source?: string;
+}
 
 export class ApiProvider implements DataProvider {
   private isBackendAvailable: boolean | null = null;
@@ -40,13 +159,14 @@ export class ApiProvider implements DataProvider {
     }
   }
 
-  async getArgoMatchup(profileId: string): Promise<ArgoMatchupResponse | null> {
+  async getArgoMatchup(profileId: string, signal?: AbortSignal): Promise<ArgoMatchupResponse | null> {
     if (!(await this.checkBackend())) return null;
     try {
-      const res = await fetch(`${API_BASE}/argo/${profileId}/matchup`);
+      const res = await fetch(`${API_BASE}/argo/${profileId}/matchup`, { signal });
       if (!res.ok) return null;
       return await res.json();
-    } catch {
+    } catch (err: unknown) {
+      if (isAbortError(err)) { perfMonitor.recordRequestAborted(); return null; }
       return null;
     }
   }
@@ -158,21 +278,22 @@ export class ApiProvider implements DataProvider {
     }
   }
 
-  async inspectPoint(lat: number, lon: number, timestamp?: string): Promise<any | null> {
+  async inspectPoint(lat: number, lon: number, timestamp?: string, signal?: AbortSignal): Promise<InspectPointPayload | null> {
     if (!(await this.checkBackend())) return null;
     try {
       const url = timestamp
         ? `${API_BASE}/inspect?lat=${lat}&lon=${lon}&timestamp=${encodeURIComponent(timestamp)}`
         : `${API_BASE}/inspect?lat=${lat}&lon=${lon}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (!res.ok) return null;
       return await res.json();
-    } catch {
+    } catch (err: unknown) {
+      if (isAbortError(err)) { perfMonitor.recordRequestAborted(); return null; }
       return null;
     }
   }
 
-  async inspectCyclone(lat?: number, lon?: number, timestamp?: string, cycloneId?: string): Promise<any | null> {
+  async inspectCyclone(lat?: number, lon?: number, timestamp?: string, cycloneId?: string, signal?: AbortSignal): Promise<InspectCyclonePayload | null> {
     if (!(await this.checkBackend())) return null;
     try {
       const params = new URLSearchParams();
@@ -181,24 +302,51 @@ export class ApiProvider implements DataProvider {
       if (timestamp) params.append('timestamp', timestamp);
       if (cycloneId) params.append('cyclone_id', cycloneId);
 
-      const res = await fetch(`${API_BASE}/cyclones/inspect?${params.toString()}`);
+      const res = await fetch(`${API_BASE}/cyclones/inspect?${params.toString()}`, { signal });
       if (!res.ok) return null;
       return await res.json();
-    } catch {
+    } catch (err: unknown) {
+      if (isAbortError(err)) { perfMonitor.recordRequestAborted(); return null; }
       return null;
     }
   }
 
-  async getLayerData(layerName: string, timestamp?: string, stride = 3): Promise<any | null> {
+  async getLayerData(layerName: string, timestamp?: string, stride = 3, signal?: AbortSignal): Promise<LayerDataPayload | null> {
     if (!(await this.checkBackend())) return null;
     try {
       const url = timestamp
         ? `${API_BASE}/layers/${layerName}?timestamp=${encodeURIComponent(timestamp)}&stride=${stride}`
         : `${API_BASE}/layers/${layerName}?stride=${stride}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       if (!res.ok) return null;
       return await res.json();
-    } catch {
+    } catch (err: unknown) {
+      if (isAbortError(err)) { perfMonitor.recordRequestAborted(); return null; }
+      return null;
+    }
+  }
+
+  /**
+   * Fetch a HYCOM model depth slice at the nearest native model depth
+   * (Phase 1A data-contract foundation for depth-aware visualization).
+   * Returns null on any error; never falls back to synthetic data.
+   */
+  async getDepthSlice(
+    variable: string,
+    depthM: number,
+    timestamp?: string,
+    stride = 3,
+    signal?: AbortSignal
+  ): Promise<DepthSlicePayload | null> {
+    if (!(await this.checkBackend())) return null;
+    try {
+      const params = new URLSearchParams({ variable, depth: depthM.toString(), stride: stride.toString() });
+      if (timestamp) params.append('timestamp', timestamp);
+      const res = await fetch(`${API_BASE}/model/depth-slice?${params.toString()}`, { signal });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err: unknown) {
+      if (isAbortError(err)) { perfMonitor.recordRequestAborted(); return null; }
       return null;
     }
   }
