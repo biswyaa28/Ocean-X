@@ -9,6 +9,50 @@ export type DataStatus =
   | 'OBSERVATION'
   | 'FORECAST';
 
+export type ScientificDataStatus = 'REAL' | 'SIMULATED' | 'DEMO' | 'UNAVAILABLE';
+
+/**
+ * Phase 3 — Explicit data mode types.
+ *
+ * DataModeType reflects the OCEANX_DATA_MODE backend setting:
+ *   "REAL"    — backend is configured with production HYCOM datasets.
+ *   "FIXTURE" — backend is serving committed synthetic schema-compatible
+ *               fixtures (not scientific evidence).
+ *
+ * BackendStatus is the typed shape of /api/status including Phase 3 fields.
+ */
+export type DataModeType = 'REAL' | 'FIXTURE';
+
+export interface BackendStatus {
+  /** Backward-compatible mode string. "REAL" only with production data present. */
+  mode: string;
+  backendConnected: boolean;
+  datasetLoaded: boolean;
+  provider: string;
+  /** Explicit data mode — never inferred silently. */
+  dataMode: DataModeType;
+  /** True when the backend is serving synthetic fixture data. */
+  datasetSynthetic: boolean;
+}
+
+
+export interface ScientificProvenance {
+  source?: string;
+  provider?: string;
+  dataset?: string;
+  variable?: string;
+  units?: string;
+  timestamp?: string;
+  latitude?: number;
+  longitude?: number;
+  requested_depth_m?: number;
+  matched_depth_m?: number;
+  processing_status?: string;
+  data_status: ScientificDataStatus;
+  asset_id?: string;
+  source_url?: string;
+}
+
 
 export type AppMode = 'OPERATIONS' | 'RESEARCH';
 
@@ -158,6 +202,7 @@ export interface ArgoProfile {
   institution: string;
   observations_count: number;
   observations: ArgoObservationPoint[];
+  provenance: ScientificProvenance;
 }
 
 export interface DepthComparison {
@@ -171,6 +216,33 @@ export interface DepthComparison {
   matchedModelDepthM?: number | null;
 }
 
+export interface MatchupStatistics {
+  n: number;
+  meanResidual: number | null;
+  mae: number | null;
+  rmse: number | null;
+}
+
+export interface MatchupStatisticsByVariable {
+  temperature?: MatchupStatistics | null;
+  salinity?: MatchupStatistics | null;
+}
+
+/**
+ * Phase 2C neutral diagnostic context of a matchup: counts and matching
+ * metadata only — never a quality score, grade or validation metric.
+ */
+export interface MatchupDiagnostics {
+  totalArgoObservations: number;
+  matchedObservationCount: number;
+  unmatchedObservationCount: number;
+  matchedPercentage: number | null;
+  deepestMatchedObservationDepthM?: number | null;
+  deepestMatchedModelDepthM?: number | null;
+  repeatedNativeDepthMatchCount: number;
+  interpolationApplied: boolean;
+}
+
 export interface ArgoMatchupResponse {
   argoProfileId: string;
   floatId: string;
@@ -178,17 +250,23 @@ export interface ArgoMatchupResponse {
   observationLat: number;
   observationLon: number;
   modelDataset: string;
+  modelDataStatus?: ScientificDataStatus;
   modelTimestamp: string;
   matchedModelLat: number;
   matchedModelLon: number;
   timeDifferenceHours: number;
   distanceKm: number;
   matchedDepths: number[];
+  matchedPointCount: number;
+  matchingToleranceM: number;
+  modelDepthSelection: string;
   comparisons: DepthComparison[];
   dataStatus: DataStatus;
   source: string;
   residualConvention: string;
   statusMessage?: string | null;
+  statistics?: MatchupStatisticsByVariable | null;
+  diagnostics?: MatchupDiagnostics | null;
 }
 
 export interface AstronomicalData {
@@ -211,4 +289,3 @@ export interface AstronomicalData {
     lon: number;
   };
 }
-

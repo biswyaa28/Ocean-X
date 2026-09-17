@@ -40,6 +40,7 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
 
 import { CesiumViewerInner } from './CesiumViewerInner';
 import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../test/fixtures/depthSliceFixtures';
+import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
 
 const stations: Station[] = [];
 const layers: GISLayer[] = [
@@ -421,5 +422,240 @@ describe('currents (u/v) depth slice', () => {
     await waitForSliceLegend();
     await tick();
     expect(adds().length).toBe(2); // places + slice
+  });
+});
+
+// ------------------------------------------------------------
+// Phase 1E — real HYCOM current field provenance chips
+// ------------------------------------------------------------
+describe('Phase 1E — current field status chips', () => {
+  const currentsActive = layers.map((l) => (l.id === 'currents' ? { ...l, active: true } : l));
+
+  it('REAL status shows the REAL HYCOM CURRENT FIELD chip with timestamp and matched depth', async () => {
+    const payload = makeCurrentsSlicePayload({ matched_depth_m: 250, requested_depth_m: 250 });
+    const field = normalizeHycomCurrentField(payload)!;
+    renderViewer({
+      layers: currentsActive,
+      currentField: field,
+      currentFieldStatus: 'REAL',
+      currentFieldMetadata: payload,
+    });
+    await tick();
+    expect(document.body.textContent).toMatch(/REAL HYCOM CURRENT FIELD/);
+    expect(document.body.textContent).toMatch(/250 m MODEL LEVEL/);
+    expect(document.body.textContent).not.toMatch(/SIMULATED CURRENT FIELD/);
+  });
+
+  it('REAL surface (0 m) field is labelled SURFACE (0 m), never a subsurface depth', async () => {
+    const payload = makeCurrentsSlicePayload({ matched_depth_m: 0, requested_depth_m: 0 });
+    const field = normalizeHycomCurrentField(payload)!;
+    renderViewer({
+      layers: currentsActive,
+      currentField: field,
+      currentFieldStatus: 'REAL',
+      currentFieldMetadata: payload,
+    });
+    await tick();
+    expect(document.body.textContent).toMatch(/SURFACE \(0 m\)/);
+    expect(document.body.textContent).not.toMatch(/MODEL LEVEL/);
+  });
+
+  it('SIMULATED status shows the SIMULATED CURRENT FIELD chip, never a REAL claim', async () => {
+    renderViewer({
+      layers: currentsActive,
+      currentField: null,
+      currentFieldStatus: 'SIMULATED',
+    });
+    await tick();
+    expect(document.body.textContent).toMatch(/SIMULATED CURRENT FIELD/);
+    expect(document.body.textContent).not.toMatch(/REAL HYCOM CURRENT FIELD/);
+    expect(document.body.textContent).toMatch(/SURFACE-ONLY/);
+  });
+
+  it('UNAVAILABLE status shows CURRENT DATA UNAVAILABLE and no depth/timestamp provenance', async () => {
+    renderViewer({
+      layers: currentsActive,
+      currentField: null,
+      currentFieldStatus: 'UNAVAILABLE',
+      currentFieldStatusReason: 'HYCOM returned no valid UVEL/VVEL vectors for this depth/timestamp.',
+    });
+    await tick();
+    expect(document.body.textContent).toMatch(/CURRENT DATA UNAVAILABLE/);
+    expect(document.body.textContent).not.toMatch(/REAL HYCOM CURRENT FIELD/);
+    expect(document.body.textContent).not.toMatch(/SIMULATED CURRENT FIELD/);
+  });
+
+  it('hides the currents chip entirely when the currents layer is inactive', async () => {
+    renderViewer({
+      layers, // currents inactive
+      currentField: null,
+      currentFieldStatus: 'SIMULATED',
+    });
+    await tick();
+    expect(document.body.textContent).not.toMatch(/OCEAN CURRENT/);
+  });
+
+  it('defaults to the honest SIMULATED label when no status is provided', async () => {
+    renderViewer({ layers: currentsActive });
+    await tick();
+    expect(document.body.textContent).toMatch(/SIMULATED CURRENT FIELD/);
+  });
+});
+
+// ------------------------------------------------------------
+// Phase 1C — scientific render configuration & opacity
+// ------------------------------------------------------------
+import {
+  DEFAULT_DEPTH_SLICE_DISPLAY,
+  resolveDepthSliceRender,
+} from '../utils/depthSliceViz';
+
+function rerenderViewer(
+  rerender: (ui: React.ReactElement) => void,
+  props: Partial<ViewerProps> = {}
+) {
+  rerender(
+    <CesiumViewerInner
+      cyclone={null}
+      currentTrackIndex={0}
+      stations={stations}
+      layers={layers}
+      onSelectStation={() => {}}
+      {...props}
+    />
+  );
+}
+
+describe('Phase 1C — scientific render configuration', () => {
+  it('renders with an explicit render configuration (palette/range/scale) without churn', async () => {
+    const payload = makeDepthSlicePayload();
+    const render = resolveDepthSliceRender(payload, {
+      ...DEFAULT_DEPTH_SLICE_DISPLAY,
+      min: 19,
+      max: 21,
+      paletteId: 'thermal',
+    })!;
+    renderViewer({ depthSliceVisible: true, depthSlicePayload: payload, depthSliceRender: render });
+    await waitForSliceLegend();
+    await tick();
+    expect(adds().length).toBe(2); // places + exactly one slice
+    expect(removes().length).toBe(0);
+  });
+
+  it('replaces the slice raster exactly once when the palette changes (no accumulation)', async () => {
+    const payload = makeDepthSlicePayload();
+    const classic = resolveDepthSliceRender(payload, DEFAULT_DEPTH_SLICE_DISPLAY)!;
+    const thermal = resolveDepthSliceRender(payload, { ...DEFAULT_DEPTH_SLICE_DISPLAY, paletteId: 'thermal' })!;
+    const utils = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: classic,
+    });
+    await waitForSliceLegend();
+    const addsBefore = adds().length;
+
+    rerenderViewer(utils.rerender, { depthSliceVisible: true, depthSlicePayload: payload, depthSliceRender: thermal });
+    await tick();
+    expect(adds().length).toBe(addsBefore + 1); // exactly one new add
+    expect(removes().length).toBe(1); // previous slice removed
+    const lastSlice = adds()[adds().length - 1].layer;
+    expect(removes().some((r) => r.layer === lastSlice)).toBe(false); // never accumulated
+  });
+
+  it('updates layer opacity in place without any imagery add/remove churn', async () => {
+    const payload = makeDepthSlicePayload();
+    const render = resolveDepthSliceRender(payload, DEFAULT_DEPTH_SLICE_DISPLAY)!;
+    const utils = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: render,
+      depthSliceOpacity: 0.75,
+    });
+    await waitForSliceLegend();
+    await tick();
+    const addsBefore = adds().length;
+    const removesBefore = removes().length;
+    const sliceLayer = adds()[adds().length - 1].layer as { alpha: number };
+    expect(sliceLayer.alpha).toBe(0.75);
+
+    rerenderViewer(utils.rerender, {
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: render,
+      depthSliceOpacity: 0.35,
+    });
+    await tick();
+    expect((adds()[adds().length - 1].layer as { alpha: number }).alpha).toBe(0.35);
+    expect(adds().length).toBe(addsBefore); // no re-add
+    expect(removes().length).toBe(removesBefore); // no remove
+  });
+
+  it('opacity applies to the depth-slice layer only, never the surface raster', async () => {
+    const sstActive = layers.map((l) => (l.id === 'sst' ? { ...l, active: true } : l));
+    const payload = makeDepthSlicePayload();
+    const render = resolveDepthSliceRender(payload, DEFAULT_DEPTH_SLICE_DISPLAY)!;
+    renderViewer({
+      layers: sstActive,
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: render,
+      depthSliceOpacity: 0.6,
+    });
+    await waitForSliceLegend();
+    await tick();
+    // surface raster keeps its own fixed alpha of 0.65
+    const surface = adds().find((o) => (o.layer as { alpha: number }).alpha === 0.65);
+    expect(surface).toBeDefined();
+    const slice = adds().find((o) => (o.layer as { alpha: number }).alpha === 0.6);
+    expect(slice).toBeDefined();
+    expect(slice!.layer).not.toBe(surface!.layer);
+  });
+
+  it('legend chip reflects palette, display range and scale', async () => {
+    const payload = makeDepthSlicePayload();
+    const render = resolveDepthSliceRender(payload, {
+      ...DEFAULT_DEPTH_SLICE_DISPLAY,
+      min: 19,
+      max: 21,
+      paletteId: 'thermal',
+    })!;
+    renderViewer({ depthSliceVisible: true, depthSlicePayload: payload, depthSliceRender: render });
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/THERMAL/);
+    });
+    expect(document.body.textContent).toMatch(/19\.00\s*[–-]\s*21\.00/);
+    expect(document.body.textContent).toMatch(/LINEAR/);
+  });
+
+  it('changing only depth-slice display settings never removes the surface raster', async () => {
+    const sstActive = layers.map((l) => (l.id === 'sst' ? { ...l, active: true } : l));
+    const payload = makeDepthSlicePayload();
+    const render = resolveDepthSliceRender(payload, DEFAULT_DEPTH_SLICE_DISPLAY)!;
+    const utils = renderViewer({
+      layers: sstActive,
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: render,
+    });
+    await waitForSliceLegend();
+    await tick();
+    const surface = adds().find((o) => (o.layer as { alpha: number }).alpha === 0.65);
+    expect(surface).toBeDefined();
+
+    // palette + range + opacity all change: surface layer must survive
+    rerenderViewer(utils.rerender, {
+      layers: sstActive,
+      depthSliceVisible: true,
+      depthSlicePayload: payload,
+      depthSliceRender: resolveDepthSliceRender(payload, {
+        ...DEFAULT_DEPTH_SLICE_DISPLAY,
+        paletteId: 'viridis',
+        min: 19,
+        max: 21,
+      })!,
+      depthSliceOpacity: 0.4,
+    });
+    await tick();
+    expect(removes().some((r) => r.layer === surface!.layer)).toBe(false);
   });
 });

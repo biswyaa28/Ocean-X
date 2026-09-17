@@ -43,6 +43,49 @@ class FakeScreenSpaceEventHandler {
   destroy = vi.fn();
 }
 
+/** Constructable Cartesian3 stand-in (FlowCanvasOverlay allocates scratch
+ * Cartesians and clones camera positions per frame). */
+class FakeCartesian3 {
+  x = 0;
+  y = 0;
+  z = 0;
+  constructor(x = 0, y = 0, z = 0) {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+  static clone(src: unknown, result?: FakeCartesian3): FakeCartesian3 {
+    const s = src as { x: number; y: number; z: number };
+    if (result) {
+      result.x = s.x;
+      result.y = s.y;
+      result.z = s.z;
+      return result;
+    }
+    return new FakeCartesian3(s.x, s.y, s.z);
+  }
+  static equalsEpsilon(
+    a: { x: number; y: number; z: number },
+    b: { x: number; y: number; z: number },
+    epsilon: number
+  ): boolean {
+    return (
+      Math.abs(a.x - b.x) <= epsilon &&
+      Math.abs(a.y - b.y) <= epsilon &&
+      Math.abs(a.z - b.z) <= epsilon
+    );
+  }
+  static dot(
+    a: { x: number; y: number; z: number },
+    b: { x: number; y: number; z: number }
+  ): number {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+  }
+  static cross(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): FakeCartesian3 {
+    return new FakeCartesian3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+  }
+}
+
 function fakeJulian(date?: string) {
   return { toString: () => `jd:${date ?? 'now'}`, isStart: true };
 }
@@ -91,6 +134,7 @@ export const cesiumMock = {
     };
     camera = {
       flyTo: vi.fn(),
+      positionWC: new FakeCartesian3(1, 2, 3),
       moveStart: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
       moveEnd: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     };
@@ -103,13 +147,17 @@ export const cesiumMock = {
   Cartesian2: class {
     constructor(public x = 0, public y = 0) {}
   },
-  Cartesian3: {
-    fromDegrees: vi.fn(() => ({ x: 1, y: 2, z: 3 })),
+  Cartesian3: Object.assign(FakeCartesian3, {
+    fromDegrees: vi.fn(() => new FakeCartesian3(1, 2, 3)),
     magnitude: vi.fn(() => 1),
     normalize: vi.fn((v: unknown) => v),
     multiplyByScalar: vi.fn((v: unknown) => v),
     negate: vi.fn((v: unknown) => v),
-    UNIT_Z: { x: 0, y: 0, z: 1 },
+    UNIT_Z: new FakeCartesian3(0, 0, 1),
+  }),
+  Ellipsoid: { WGS84: {} },
+  SceneTransforms: {
+    worldToWindowCoordinates: vi.fn(() => ({ x: 100, y: 100 })),
   },
   Matrix3: class {
     static multiplyByVector = vi.fn((_m: unknown, v: unknown) => v);

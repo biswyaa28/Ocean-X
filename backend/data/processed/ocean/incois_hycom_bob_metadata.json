@@ -53,6 +53,6 @@
       "units": "as provided by source"
     }
   },
-  "original_file": "O:\\Hackthons\\OceanLens\\backend\\data\\raw\\ocean\\currents\\RSMC_hycom_20260908.nc",
-  "processed_file": "O:\\Hackthons\\OceanLens\\backend\\data\\processed\\ocean\\incois_hycom_bob_surface.nc"
+  "original_file": "data/raw/ocean/currents/RSMC_hycom_20260908.nc",
+  "processed_file": "data/processed/ocean/incois_hycom_bob_surface.nc"
 }

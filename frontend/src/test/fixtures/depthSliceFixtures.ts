@@ -32,6 +32,18 @@ export function makeDepthSlicePayload(overrides: Partial<DepthSlicePayload> = {}
       longitudes: values[0].map((_, j) => 80 + j),
       values,
     },
+    provenance: {
+      source: 'INCOIS RSMC HYCOM',
+      provider: 'INCOIS',
+      dataset: 'RSMC_hycom_20260908.nc',
+      variable: 'temperature',
+      units: '°C',
+      timestamp: '2026-09-07T06:00:00.000000000',
+      requested_depth_m: 50,
+      matched_depth_m: 50,
+      processing_status: 'fixture-backed test payload',
+      data_status: 'REAL',
+    },
     ...overrides,
   };
 }

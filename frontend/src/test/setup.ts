@@ -9,7 +9,8 @@ afterEach(() => {
 // jsdom has no real canvas rasterizer. Install a minimal 2d-context stub so
 // the raster generation utilities produce data URLs in tests (the components
 // treat an empty dataUrl as "nothing to draw", which would make imagery-layer
-// lifecycle assertions vacuous).
+// lifecycle assertions vacuous). Includes the path-drawing methods used by
+// the particle overlay's per-frame canvas work.
 const ctxStub = {
   createImageData: (w: number, h: number) => ({
     data: new Uint8ClampedArray(w * h * 4),
@@ -19,8 +20,19 @@ const ctxStub = {
   putImageData: () => {},
   drawImage: () => {},
   clearRect: () => {},
+  save: () => {},
+  restore: () => {},
+  fillRect: () => {},
+  beginPath: () => {},
+  moveTo: () => {},
+  lineTo: () => {},
+  stroke: () => {},
   imageSmoothingEnabled: true,
   imageSmoothingQuality: 'high',
+  globalCompositeOperation: 'source-over',
+  fillStyle: '',
+  strokeStyle: '',
+  lineWidth: 1,
 } as unknown as CanvasRenderingContext2D;
 
 HTMLCanvasElement.prototype.getContext = vi.fn(

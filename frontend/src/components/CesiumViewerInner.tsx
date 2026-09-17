@@ -4,9 +4,18 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
 import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
-import { generateLayerImageDataUrlCached, generateDepthSliceImageDataUrlCached } from '../utils/rasterGen';
+import {
+  DepthSliceRenderConfig,
+  extractDepthSliceValues,
+} from '../utils/depthSliceViz';
+import {
+  DepthSliceRenderOptions,
+  generateLayerImageDataUrlCached,
+  generateDepthSliceImageDataUrlCached,
+} from '../utils/rasterGen';
 import { perfMonitor } from '../utils/perfMonitor';
 
 if (typeof window !== 'undefined') {
@@ -146,6 +155,18 @@ interface CesiumViewerInnerProps {
   timestamp?: string;
   depthSliceVisible?: boolean;
   depthSlicePayload?: DepthSlicePayload | null;
+  /** Resolved scientific render configuration (palette/range/scale) — Phase 1C. */
+  depthSliceRender?: DepthSliceRenderConfig | null;
+  /** Depth-slice imagery layer opacity 0..1 — this layer only. */
+  depthSliceOpacity?: number;
+  /** Real HYCOM UVEL/VVEL current field (Phase 1E), normalized. */
+  currentField?: EnvironmentalFlowField | null;
+  /** Data status of the current field (REAL / SIMULATED / UNAVAILABLE). */
+  currentFieldStatus?: CurrentFieldDataStatus;
+  /** Human-readable reason for the current field status. */
+  currentFieldStatusReason?: string | null;
+  /** Backend metadata for the current field (provenance chip). */
+  currentFieldMetadata?: DepthSlicePayload | null;
 }
 
 export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
@@ -162,6 +183,12 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   timestamp,
   depthSliceVisible = false,
   depthSlicePayload = null,
+  depthSliceRender = null,
+  depthSliceOpacity = 0.75,
+  currentField = null,
+  currentFieldStatus = 'SIMULATED',
+  currentFieldStatusReason = null,
+  currentFieldMetadata = null,
 }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -404,7 +431,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               lat: st.latitude,
               lon: st.longitude,
               source: 'INCOIS Coastal Buoy Network',
-              dataStatus: 'LIVE TELEMETRY',
+              dataStatus: st.dataStatus === 'SIMULATED' ? 'SIMULATED TELEMETRY' : `${st.dataStatus} TELEMETRY`,
             });
             return;
           } else if (props.argoData) {
@@ -1119,12 +1146,15 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
 
   // ============================================================
-  // HYCOM Model Depth Slice overlay (Phase 1B)
+  // HYCOM Model Depth Slice overlay (Phase 1B, extended in Phase 1C)
   //
   // A dedicated imagery layer, fully separate from the surface raster:
   // - own layer ref (never removed by surface logic, never accumulates)
   // - replaces the previous slice atomically before adding the new one
   // - hidden entirely when depthSliceVisible is false or payload is absent
+  // - Phase 1C: renders through the resolved scientific render config
+  //   (palette / display range / scale) — display only, the payload's
+  //   scientific values are never modified
   // The slice is a 2D geographic drape of a single native model depth
   // level — NOT a volumetric or water-column visualization.
   // ============================================================
@@ -1135,6 +1165,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     }
     depthSliceLayerRef.current = null;
   }, []);
+
+  // Latest opacity for layer (re)creation without re-adding on change.
+  const depthSliceOpacityRef = useRef(depthSliceOpacity);
+
+  // Opacity-only updates mutate the existing imagery layer in place:
+  // zero add/remove churn, and only THIS layer ever changes alpha.
+  useEffect(() => {
+    depthSliceOpacityRef.current = depthSliceOpacity;
+    if (depthSliceLayerRef.current) {
+      depthSliceLayerRef.current.alpha = depthSliceOpacity;
+    }
+  }, [depthSliceOpacity]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -1147,23 +1189,26 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       return;
     }
 
-    // Vector (currents) slices carry u/v; rasterize the speed magnitude.
-    let values: (number | null)[][] | null = null;
-    if (payload.grid.values) {
-      values = payload.grid.values;
-    } else if (payload.grid.u && payload.grid.v) {
-      values = payload.grid.u.map((row, i) =>
-        row.map((u, j) => {
-          const v = payload.grid.v?.[i]?.[j];
-          if (u === null || u === undefined || v === null || v === undefined) return null;
-          return Math.sqrt(u * u + v * v);
-        })
-      );
-    }
+    // Scalar grid, or speed magnitude |(u,v)| for vector (currents) slices.
+    // Missing components stay missing (shared with the resolve logic so the
+    // legend and the raster can never disagree about the data).
+    const values = extractDepthSliceValues(payload);
     if (!values) {
       removeDepthSliceLayer();
       return;
     }
+
+    // Display-only render options from the resolved Phase 1C configuration.
+    // Without a configuration the generator keeps the Phase 1B default
+    // (classic palette, auto range over the slice, linear scale).
+    const renderOptions: DepthSliceRenderOptions | undefined = depthSliceRender
+      ? {
+          palette: depthSliceRender.palette,
+          rangeMin: depthSliceRender.rangeMin,
+          rangeMax: depthSliceRender.rangeMax,
+          scale: depthSliceRender.scale,
+        }
+      : undefined;
 
     const { dataUrl, cacheHit, generationMs } = generateDepthSliceImageDataUrlCached(
       payload.variable,
@@ -1171,7 +1216,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       payload.grid.latitudes,
       payload.grid.longitudes,
       values,
-      payload.timestamp
+      payload.timestamp,
+      renderOptions
     );
 
     perfMonitor.recordRasterGen(generationMs, cacheHit);
@@ -1196,8 +1242,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     // old imagery never lingers underneath and layers never accumulate.
     removeDepthSliceLayer();
     depthSliceLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
-    depthSliceLayerRef.current.alpha = 0.75;
-  }, [depthSliceVisible, depthSlicePayload, removeDepthSliceLayer]);
+    depthSliceLayerRef.current.alpha = depthSliceOpacityRef.current;
+  }, [depthSliceVisible, depthSlicePayload, depthSliceRender, removeDepthSliceLayer]);
 
   // Unmount cleanup: the depth-slice imagery layer dies with the viewer, but
   // clear the ref defensively in case the viewer outlives this component.
@@ -1278,6 +1324,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         viewer={viewerInstance}
         showWind={showWind}
         showCurrents={showCurrents}
+        currentField={currentField}
+        currentFieldStatus={currentFieldStatus}
         cycloneLat={activePt?.latitude || 18.2}
         cycloneLon={activePt?.longitude || 88.4}
         maxWindKts={activePt?.maxWindKts || 125}
@@ -1300,12 +1348,60 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
           {showCurrents && (
             <div className="px-2.5 py-1 rounded-xl bg-[#080c14]/90 backdrop-blur-xl border border-teal-500/30 text-teal-300 shadow-2xl flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${currentFieldStatus === 'UNAVAILABLE' ? 'bg-amber-400' : 'bg-teal-400'}`} />
               <span className="font-bold">OCEAN CURRENT</span>
               <span className="text-slate-500">│</span>
-              <span className="text-slate-300">m/s</span>
+              <span className="text-slate-300">{(currentFieldMetadata?.units || currentField?.units || 'm/s')}</span>
               <span className="text-slate-500">│</span>
-              <span className="text-emerald-400 font-semibold">INCOIS HYCOM — REAL VECTOR FIELD</span>
+              {currentFieldStatus === 'REAL' && (
+                <span className="text-emerald-400 font-semibold" title={currentFieldMetadata?.source || currentField?.source}>
+                  REAL HYCOM CURRENT FIELD
+                </span>
+              )}
+              {currentFieldStatus === 'SIMULATED' && (
+                <span className="text-amber-400 font-semibold" title={currentFieldStatusReason || 'Analytical model (not HYCOM output)'}>
+                  SIMULATED CURRENT FIELD
+                </span>
+              )}
+              {currentFieldStatus === 'UNAVAILABLE' && (
+                <span className="text-rose-400 font-semibold" title={currentFieldStatusReason || 'No valid HYCOM vectors for this selection'}>
+                  CURRENT DATA UNAVAILABLE
+                </span>
+              )}
+              {/* Timestamp / depth provenance: only what the data actually supports */}
+              {currentFieldStatus !== 'UNAVAILABLE' && (
+                <>
+                  <span className="text-slate-500">│</span>
+                  <span className="text-slate-300">
+                    {currentFieldStatus === 'REAL' && currentFieldMetadata
+                      ? `${(currentFieldMetadata.timestamp || '').replace('T', ' ').slice(0, 16)}`
+                      : (currentField?.timestamp || '').replace('T', ' ').slice(0, 16)}
+                  </span>
+                  <span className="text-slate-500">│</span>
+                  {currentFieldStatus === 'REAL' && currentFieldMetadata ? (
+                    currentFieldMetadata.matched_depth_m === 0 ? (
+                      <span className="text-cyan-300 font-semibold">SURFACE (0 m)</span>
+                    ) : (
+                      <span className="text-cyan-300 font-semibold" title={`Requested ${currentFieldMetadata.requested_depth_m} m — nearest native model level`}>
+                        {currentFieldMetadata.matched_depth_m} m MODEL LEVEL
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-cyan-300 font-semibold">SURFACE-ONLY</span>
+                  )}
+                  {currentFieldStatus === 'REAL' && currentFieldMetadata?.dataset_file && (
+                    <>
+                      <span className="text-slate-500">│</span>
+                      <span
+                        className="text-slate-400 truncate max-w-[150px]"
+                        title={currentFieldMetadata.dataset_file}
+                      >
+                        {currentFieldMetadata.dataset_file.split('/').pop()}
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1323,6 +1419,20 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             <span className="text-indigo-300 font-bold">{depthSlicePayload.matched_depth_m} m MODEL LEVEL</span>
             <span className="text-slate-500">│</span>
             <span className="text-slate-300">{depthSlicePayload.units}</span>
+            {depthSliceRender && (
+              <>
+                <span className="text-slate-500">│</span>
+                <span className="text-slate-300">{depthSliceRender.palette.label.toUpperCase()}</span>
+                <span className="text-slate-500">│</span>
+                <span className="text-slate-300 font-semibold">
+                  {depthSliceRender.rangeMin.toFixed(2)}–{depthSliceRender.rangeMax.toFixed(2)} {depthSlicePayload.units}
+                </span>
+                <span className="text-slate-500">│</span>
+                <span className={depthSliceRender.scale === 'log' ? 'text-amber-300 font-bold' : 'text-cyan-300 font-bold'}>
+                  {depthSliceRender.scale === 'log' ? 'LOG' : 'LINEAR'}
+                </span>
+              </>
+            )}
             <span className="text-slate-500">│</span>
             <span className="text-emerald-400 font-semibold">SUBSURFACE — NOT SURFACE</span>
           </div>

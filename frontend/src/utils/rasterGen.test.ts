@@ -6,7 +6,13 @@ import {
   isMissingDepthValue,
   isSurfaceNoData,
   clearRasterCache,
+  DepthSliceRenderOptions,
 } from './rasterGen';
+import {
+  CLASSIC_PALETTE,
+  getPaletteForVariable,
+  samplePalette,
+} from './scientificPalettes';
 
 type FakeImageData = { data: Uint8ClampedArray; width: number; height: number };
 
@@ -66,6 +72,121 @@ describe('paintDepthSliceGrid (pixel semantics)', () => {
     const maxB = img.data[6];
     expect(maxR).toBeGreaterThan(minR);
     expect(minB).toBeGreaterThan(maxB);
+  });
+});
+
+describe('paintDepthSliceGrid with render options (Phase 1C)', () => {
+  const viridis = getPaletteForVariable('temperature', 'viridis');
+
+  const opts = (o: Partial<DepthSliceRenderOptions> = {}): DepthSliceRenderOptions => ({
+    palette: viridis,
+    rangeMin: 10,
+    rangeMax: 20,
+    scale: 'linear',
+    ...o,
+  });
+
+  it('renders with the configured palette color transfer function', () => {
+    const img = mkImageData(2, 1);
+    paintDepthSliceGrid(img as unknown as ImageData, 'temperature', [5], [80, 81], [[10, 20]], opts());
+    const bottom = samplePalette(viridis, 0);
+    const top = samplePalette(viridis, 1);
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([bottom.r, bottom.g, bottom.b]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([top.r, top.g, top.b]);
+  });
+
+  it('clamps out-of-range values to the ramp endpoints (display-only clipping, data untouched)', () => {
+    const img = mkImageData(3, 1);
+    paintDepthSliceGrid(img as unknown as ImageData, 'temperature', [5], [80, 81, 82], [[5, 15, 25]], opts());
+    const bottom = samplePalette(viridis, 0);
+    const mid = samplePalette(viridis, 0.5);
+    const top = samplePalette(viridis, 1);
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([bottom.r, bottom.g, bottom.b]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([mid.r, mid.g, mid.b]);
+    expect([img.data[8], img.data[9], img.data[10]]).toEqual([top.r, top.g, top.b]);
+  });
+
+  it('maps values through log10 when the scale is log', () => {
+    const img = mkImageData(3, 1);
+    // range [1, 100]: 1 → t=0, 10 → t=0.5, 100 → t=1
+    paintDepthSliceGrid(img as unknown as ImageData, 'temperature', [5], [80, 81, 82], [[1, 10, 100]], opts({ rangeMin: 1, rangeMax: 100, scale: 'log' }));
+    const bottom = samplePalette(viridis, 0);
+    const mid = samplePalette(viridis, 0.5);
+    const top = samplePalette(viridis, 1);
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([bottom.r, bottom.g, bottom.b]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([mid.r, mid.g, mid.b]);
+    expect([img.data[8], img.data[9], img.data[10]]).toEqual([top.r, top.g, top.b]);
+  });
+
+  it('defensively clamps non-positive values to the ramp bottom under log scale (never NaN colors)', () => {
+    const img = mkImageData(2, 1);
+    paintDepthSliceGrid(img as unknown as ImageData, 'temperature', [5], [80, 81], [[0, -5]], opts({ rangeMin: 1, rangeMax: 100, scale: 'log' }));
+    const bottom = samplePalette(viridis, 0);
+    expect([img.data[0], img.data[1], img.data[2]]).toEqual([bottom.r, bottom.g, bottom.b]);
+    expect([img.data[4], img.data[5], img.data[6]]).toEqual([bottom.r, bottom.g, bottom.b]);
+    expect(img.data.slice(0, 8).every((c) => Number.isFinite(c))).toBe(true);
+  });
+
+  it('keeps missing cells fully transparent under render options', () => {
+    const img = mkImageData(2, 1);
+    paintDepthSliceGrid(img as unknown as ImageData, 'temperature', [5], [80, 81], [[null, 15]], opts());
+    expect(img.data[3]).toBe(0);
+    expect(img.data[7]).toBeGreaterThan(0);
+  });
+
+  it('default call (no options) is pixel-identical to explicit classic + auto range + linear', () => {
+    const values: (number | null)[][] = [[10, 15, 20]];
+    const a = mkImageData(3, 1);
+    const b = mkImageData(3, 1);
+    paintDepthSliceGrid(a as unknown as ImageData, 'temperature', [5], [80, 81, 82], values);
+    paintDepthSliceGrid(
+      b as unknown as ImageData,
+      'temperature',
+      [5],
+      [80, 81, 82],
+      values,
+      opts({ palette: CLASSIC_PALETTE, rangeMin: 10, rangeMax: 20 })
+    );
+    expect(Array.from(a.data)).toEqual(Array.from(b.data));
+  });
+});
+
+describe('generateDepthSliceImageDataUrlCached render-config cache keys (Phase 1C)', () => {
+  const viridis = getPaletteForVariable('temperature', 'viridis');
+  const grid: (number | null)[][] = [[10, 20]];
+
+  beforeEach(() => {
+    clearRasterCache();
+  });
+
+  it('caches by the full render configuration (palette, range, scale) — no stale rasters', () => {
+    const linearViridis: DepthSliceRenderOptions = { palette: viridis, rangeMin: 10, rangeMax: 20, scale: 'linear' };
+    generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
+    const hit = generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
+    expect(hit.cacheHit).toBe(true);
+
+    // different palette → regenerate
+    const classic: DepthSliceRenderOptions = { palette: CLASSIC_PALETTE, rangeMin: 10, rangeMax: 20, scale: 'linear' };
+    expect(
+      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', classic).cacheHit
+    ).toBe(false);
+
+    // different range → regenerate
+    expect(
+      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, rangeMin: 12 }).cacheHit
+    ).toBe(false);
+
+    // different scale → regenerate
+    expect(
+      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, scale: 'log' }).cacheHit
+    ).toBe(false);
+  });
+
+  it('a call without render options never collides with a configured raster of the same slice', () => {
+    const configured: DepthSliceRenderOptions = { palette: viridis, rangeMin: 10, rangeMax: 20, scale: 'linear' };
+    generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', configured);
+    const plain = generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1');
+    expect(plain.cacheHit).toBe(false);
   });
 });
 

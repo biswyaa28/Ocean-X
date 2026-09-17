@@ -5,7 +5,21 @@
  * bounded cache keyed by layer/timestamp/grid-resolution.
  */
 
+import { CLASSIC_PALETTE, samplePalette, ScientificPalette } from './scientificPalettes';
+
 export type RasterLayerType = 'sst' | 'salinity' | 'tchp';
+
+/**
+ * Phase 1C scientific render options for depth slices. Display-only:
+ * values are mapped through the palette/range/scale for visualization and
+ * are never modified, clipped or persisted.
+ */
+export interface DepthSliceRenderOptions {
+  palette: ScientificPalette;
+  rangeMin: number;
+  rangeMax: number;
+  scale: 'linear' | 'log';
+}
 
 interface RasterGenContext {
   canvas: HTMLCanvasElement;
@@ -214,10 +228,19 @@ export function clearRasterCache(): void {
 // ============================================================
 
 /**
- * Deep-ocean colormap for HYCOM model depth slices:
- * blue (low) -> cyan -> yellow -> red (high), auto-ranged over the valid
- * cells of the slice. Missing (null/NaN) cells stay fully transparent.
- * A legitimate 0.0 value is NOT masked (unlike surface semantics).
+ * Deep-ocean colormap for HYCOM model depth slices.
+ *
+ * Color transfer comes from the scientific palette registry (Phase 1C):
+ * by default the classic Phase 1B ramp (blue → cyan → yellow → red)
+ * auto-ranged over the valid cells of the slice — byte-identical to the
+ * previous hardcoded colormap. Missing (null/NaN) cells stay fully
+ * transparent; a legitimate 0.0 value is NOT masked (unlike surface
+ * semantics).
+ *
+ * With `renderOptions`, the display range / palette / scale are user
+ * controlled (visualization only): values outside the range clamp to the
+ * ramp endpoints and log scale maps through log10 (only ever active for
+ * strictly positive data; non-positive values clamp to the ramp bottom).
  *
  * Exported for direct pixel-level testing.
  */
@@ -226,26 +249,40 @@ export function paintDepthSliceGrid(
   variable: string,
   latitudes: number[],
   longitudes: number[],
-  values: (number | null)[][]
+  values: (number | null)[][],
+  renderOptions?: DepthSliceRenderOptions
 ): void {
   const nLat = latitudes.length;
   const nLon = longitudes.length;
   const data = imgData.data;
 
-  // Auto-range normalization over the valid (non-missing) cells of this slice.
-  let min = Infinity;
-  let max = -Infinity;
-  for (let i = 0; i < nLat; i++) {
-    for (let j = 0; j < nLon; j++) {
-      const v = values[i] ? values[i][j] : null;
-      if (!isMissingDepthValue(v)) {
-        if ((v as number) < min) min = v as number;
-        if ((v as number) > max) max = v as number;
+  const palette = renderOptions ? renderOptions.palette : CLASSIC_PALETTE;
+
+  // Display range: explicit (validated by the caller) or auto-ranged over
+  // the valid (non-missing) cells of this slice.
+  let min: number;
+  let max: number;
+  if (renderOptions) {
+    min = renderOptions.rangeMin;
+    max = renderOptions.rangeMax;
+  } else {
+    let autoMin = Infinity;
+    let autoMax = -Infinity;
+    for (let i = 0; i < nLat; i++) {
+      for (let j = 0; j < nLon; j++) {
+        const v = values[i] ? values[i][j] : null;
+        if (!isMissingDepthValue(v)) {
+          if ((v as number) < autoMin) autoMin = v as number;
+          if ((v as number) > autoMax) autoMax = v as number;
+        }
       }
     }
+    if (!isFinite(autoMin) || !isFinite(autoMax)) return; // all missing: fully transparent
+    min = autoMin;
+    max = autoMax;
   }
-  if (!isFinite(min) || !isFinite(max)) return; // all missing: fully transparent
-  const range = max - min || 1;
+
+  const scale = renderOptions ? renderOptions.scale : 'linear';
 
   for (let i = 0; i < nLat; i++) {
     const row = nLat - 1 - i;
@@ -256,29 +293,25 @@ export function paintDepthSliceGrid(
         data[idx + 3] = 0; // missing values stay fully transparent
         continue;
       }
-      const norm = Math.max(0, Math.min(1, ((val as number) - min) / range));
-      let r: number, g: number, b: number;
-      if (norm < 0.25) {
-        const t = norm / 0.25;
-        r = Math.round(20);
-        g = Math.round(60 + t * 100);
-        b = Math.round(160 + t * 40);
-      } else if (norm < 0.5) {
-        const t = (norm - 0.25) / 0.25;
-        r = Math.round(20 + t * 20);
-        g = Math.round(160 + t * 60);
-        b = Math.round(200 - t * 80);
-      } else if (norm < 0.75) {
-        const t = (norm - 0.5) / 0.25;
-        r = Math.round(40 + t * 200);
-        g = Math.round(220 - t * 10);
-        b = Math.round(120 - t * 90);
+      let norm: number;
+      if (scale === 'log') {
+        // Log is only enabled by the UI for strictly positive data/ranges;
+        // non-positive values defensively clamp to the ramp bottom instead
+        // of producing NaN colors — they are never given a fake log value.
+        if (val as number <= 0 || min <= 0) {
+          norm = 0;
+        } else {
+          const lmin = Math.log10(min);
+          const lmax = Math.log10(max);
+          const span = lmax - lmin;
+          norm = span > 0 ? (Math.log10(val as number) - lmin) / span : 0;
+        }
       } else {
-        const t = (norm - 0.75) / 0.25;
-        r = Math.round(240 + t * 15);
-        g = Math.round(210 - t * 130);
-        b = Math.round(30 - t * 20);
+        const span = max - min;
+        norm = span > 0 ? ((val as number) - min) / span : 0;
       }
+      const clamped = Math.max(0, Math.min(1, norm));
+      const { r, g, b } = samplePalette(palette, clamped);
       data[idx] = r;
       data[idx + 1] = g;
       data[idx + 2] = b;
@@ -293,8 +326,10 @@ export function paintDepthSliceGrid(
 /**
  * Generates a raster Data URL for a HYCOM model depth slice.
  * Reuses the persistent canvas/ImageData machinery and the bounded LRU
- * cache; the cache key includes variable + matched depth + timestamp so a
- * depth slice can never collide with a surface raster or another level.
+ * cache; the cache key includes variable + matched depth + timestamp (and
+ * the full render configuration when provided) so a depth slice can never
+ * collide with a surface raster, another level, or a differently styled
+ * rendering of the same slice.
  */
 export function generateDepthSliceImageDataUrlCached(
   variable: string,
@@ -302,7 +337,8 @@ export function generateDepthSliceImageDataUrlCached(
   latitudes: number[],
   longitudes: number[],
   values: (number | null)[][],
-  timestamp?: string
+  timestamp?: string,
+  renderOptions?: DepthSliceRenderOptions
 ): { dataUrl: string; cacheHit: boolean; generationMs: number } {
   const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
 
@@ -310,7 +346,10 @@ export function generateDepthSliceImageDataUrlCached(
   const nLon = longitudes.length;
   if (!nLat || !nLon || !values) return { dataUrl: '', cacheHit: false, generationMs: 0 };
 
-  const cacheKey = `depthslice_${variable}_${matchedDepthM}m_${timestamp || 'latest'}_${nLat}x${nLon}`;
+  let cacheKey = `depthslice_${variable}_${matchedDepthM}m_${timestamp || 'latest'}_${nLat}x${nLon}`;
+  if (renderOptions) {
+    cacheKey += `_${renderOptions.palette.id}_${renderOptions.rangeMin}_${renderOptions.rangeMax}_${renderOptions.scale}`;
+  }
   const cached = dataUrlCache.get(cacheKey);
   if (cached) {
     // LRU refresh
@@ -328,7 +367,7 @@ export function generateDepthSliceImageDataUrlCached(
   }
 
   const imgData = getReusableImageData(rc.ctx, nLon, nLat);
-  paintDepthSliceGrid(imgData, variable, latitudes, longitudes, values);
+  paintDepthSliceGrid(imgData, variable, latitudes, longitudes, values, renderOptions);
   rc.ctx.putImageData(imgData, 0, 0);
 
   let dataUrl: string;

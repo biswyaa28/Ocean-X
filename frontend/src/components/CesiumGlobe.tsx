@@ -4,6 +4,8 @@ import dynamic from 'next/dynamic';
 import React from 'react';
 import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
 import { DepthSlicePayload } from '../services/ApiProvider';
+import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
+import { DepthSliceRenderConfig } from '../utils/depthSliceViz';
 import { Loader2 } from 'lucide-react';
 import { perfMonitor } from '../utils/perfMonitor';
 
@@ -36,6 +38,18 @@ interface CesiumGlobeProps {
   timestamp?: string;
   depthSliceVisible?: boolean;
   depthSlicePayload?: DepthSlicePayload | null;
+  /** Resolved scientific render configuration (Phase 1C) — display only. */
+  depthSliceRender?: DepthSliceRenderConfig | null;
+  /** Depth-slice layer opacity (0..1) — this layer only. */
+  depthSliceOpacity?: number;
+  /** Real HYCOM UVEL/VVEL current field (Phase 1E), normalized. */
+  currentField?: EnvironmentalFlowField | null;
+  /** Data status of the current field (REAL / SIMULATED / UNAVAILABLE). */
+  currentFieldStatus?: CurrentFieldDataStatus;
+  /** Human-readable reason for the current field status. */
+  currentFieldStatusReason?: string | null;
+  /** Backend metadata for the current field (provenance chip). */
+  currentFieldMetadata?: DepthSlicePayload | null;
 }
 
 /**
@@ -60,6 +74,12 @@ function cesiumGlobePropsAreEqual(
   if (prev.timestamp !== next.timestamp) return false;
   if (prev.depthSliceVisible !== next.depthSliceVisible) return false;
   if (prev.depthSlicePayload !== next.depthSlicePayload) return false;
+  if (prev.depthSliceRender !== next.depthSliceRender) return false;
+  if (prev.depthSliceOpacity !== next.depthSliceOpacity) return false;
+  if (prev.currentField !== next.currentField) return false;
+  if (prev.currentFieldStatus !== next.currentFieldStatus) return false;
+  if (prev.currentFieldStatusReason !== next.currentFieldStatusReason) return false;
+  if (prev.currentFieldMetadata !== next.currentFieldMetadata) return false;
 
   if (prev.layers === next.layers) return true;
   if (prev.layers.length !== next.layers.length) return false;
