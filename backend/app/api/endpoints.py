@@ -1,6 +1,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.config import settings
 from app.models.schemas import (
     Cyclone,
     Hazard,
@@ -8,14 +9,23 @@ from app.models.schemas import (
     GISLayer,
     DatasetInfo,
     LayerDataResponse,
+    DepthSliceResponse,
     RiskAssessment,
     ArgoProfile,
     ArgoFloat,
     ArgoObservationPoint,
-    ArgoMatchupResponse
+    ArgoMatchupResponse,
+    StatusResponse,
 )
 from app.providers.ibtracs_provider import ibtracs_provider
-from app.providers.incois_provider import incois_provider
+from app.providers.incois_provider import (
+    DepthSliceDatasetError,
+    DepthSliceDepthError,
+    DepthSliceTimestampError,
+    DepthSliceVariableError,
+    DepthSliceVariableUnavailableError,
+    incois_provider,
+)
 from app.providers.argo_provider import argo_provider
 from app.services.risk_engine import calculate_prototype_risk
 from app.services.model_observation_matchup import match_argo_with_hycom
@@ -31,31 +41,55 @@ def get_health():
         "version": "1.0.0"
     }
 
-@router.get("/status")
+@router.get("/status", response_model=StatusResponse)
 def get_status():
-    nc_meta = incois_provider.get_metadata()
-    has_incois = bool(nc_meta)
-    return {
-        "mode": "REAL" if has_incois else "SIMULATED",
-        "backendConnected": True,
-        "datasetLoaded": has_incois,
-        "provider": "INCOIS & NOAA IBTrACS"
-    }
+    """Return system status including explicit data mode information.
+
+    dataMode:        "REAL" or "FIXTURE" — set by OCEANX_DATA_MODE env var.
+    datasetSynthetic: True when serving committed synthetic fixture data.
+    mode:            Backward-compatible; "REAL" only when DATA_MODE==REAL
+                     and the production file is present, "SIMULATED" otherwise.
+    datasetLoaded:   True when the configured HYCOM file is reachable.
+    """
+    data_mode = settings.DATA_MODE  # "REAL" | "FIXTURE"
+    dataset_file_present = (
+        settings.PROCESSED_OCEAN_FILE.exists()
+        or settings.RAW_HYCOM_FILE.exists()
+    )
+    dataset_synthetic = (data_mode == "FIXTURE")
+    # "REAL" on the wire only when we have REAL production data
+    compat_mode = (
+        "REAL"
+        if (data_mode == "REAL" and dataset_file_present)
+        else "SIMULATED"
+    )
+    return StatusResponse(
+        mode=compat_mode,
+        backendConnected=True,
+        datasetLoaded=dataset_file_present,
+        provider="INCOIS & NOAA IBTrACS",
+        dataMode=data_mode,
+        datasetSynthetic=dataset_synthetic,
+    )
 
 @router.get("/datasets", response_model=List[DatasetInfo])
 def get_datasets():
     meta = incois_provider.get_metadata()
     timestamps = incois_provider.get_available_timestamps()
-    
+    has_incois = (
+        settings.PROCESSED_OCEAN_FILE.exists()
+        or settings.RAW_HYCOM_FILE.exists()
+    )
+
     incois_ds = DatasetInfo(
         dataset_name="OceanLens Bay of Bengal Ocean Conditions",
         provider="INCOIS",
-        status="REAL",
+        status="REAL" if has_incois else "NOT CURRENTLY INTEGRATED",
         source="INCOIS RSMC HYCOM",
         region=meta.get("region", {"min_lat": 5.0, "max_lat": 25.0, "min_lon": 80.0, "max_lon": 100.0}),
         time_range={
-            "start": timestamps[0] if timestamps else "2026-09-07T06:00:00",
-            "end": timestamps[-1] if timestamps else "2026-09-14T00:00:00"
+            "start": timestamps[0] if timestamps else "",
+            "end": timestamps[-1] if timestamps else ""
         },
         time_steps_count=len(timestamps),
         variables=meta.get("variables", {
@@ -219,14 +253,41 @@ def get_timeseries():
 
 @router.get("/layers", response_model=List[GISLayer])
 def get_layers():
+    """Return available GIS layers with status values that reflect the actual
+    active data mode.
+
+    HYCOM layer status coherence rules:
+      DATA_MODE==REAL  + production file present  → "REAL"
+      DATA_MODE==REAL  + production file absent   → "NOT CURRENTLY INTEGRATED"
+      DATA_MODE==FIXTURE                          → "SIMULATED"
+
+    The wind layer is always "SIMULATED" (parametric model, never HYCOM).
+    The Argo layer is always "REAL" (in-situ observations from GDAC).
+    """
+    data_mode = settings.DATA_MODE
+    production_available = (
+        settings.PROCESSED_OCEAN_FILE.exists()
+        or settings.RAW_HYCOM_FILE.exists()
+    )
+
+    if data_mode == "FIXTURE":
+        hycom_status: str = "SIMULATED"
+        hycom_desc_suffix = " (synthetic fixture — not scientific evidence)"
+    elif production_available:
+        hycom_status = "REAL"
+        hycom_desc_suffix = ""
+    else:
+        hycom_status = "NOT CURRENTLY INTEGRATED"
+        hycom_desc_suffix = " (production dataset not installed)"
+
     return [
         GISLayer(
             id='currents',
             name='Ocean Currents (HYCOM)',
             category='physical',
             active=True,
-            status='REAL',
-            description='INCOIS HYCOM real ocean velocity vector field (u, v components)',
+            status=hycom_status,
+            description='INCOIS HYCOM ocean velocity vector field (u, v components)' + hycom_desc_suffix,
             unit='m/s'
         ),
         GISLayer(
@@ -243,8 +304,8 @@ def get_layers():
             name='Sea Surface Temp (SST)',
             category='physical',
             active=False,
-            status='REAL',
-            description='INCOIS HYCOM real absolute sea surface temperature field',
+            status=hycom_status,
+            description='INCOIS HYCOM sea surface temperature field' + hycom_desc_suffix,
             unit='°C'
         ),
         GISLayer(
@@ -252,8 +313,8 @@ def get_layers():
             name='Sea Surface Salinity',
             category='physical',
             active=False,
-            status='REAL',
-            description='INCOIS HYCOM real sea surface salinity field',
+            status=hycom_status,
+            description='INCOIS HYCOM sea surface salinity field' + hycom_desc_suffix,
             unit='PSU'
         ),
         GISLayer(
@@ -261,8 +322,8 @@ def get_layers():
             name='Ocean Heat Potential (TCHP)',
             category='hazard',
             active=False,
-            status='REAL',
-            description='INCOIS HYCOM real tropical cyclone heat potential',
+            status=hycom_status,
+            description='INCOIS HYCOM tropical cyclone heat potential' + hycom_desc_suffix,
             unit='kJ/cm²'
         ),
         GISLayer(
@@ -289,6 +350,48 @@ def get_layer_data(
             detail=f"Layer '{layer_name}' not available or dataset missing"
         )
     return layer_res
+
+
+# ============================================================
+# HYCOM Model Depth Slice (Phase 1A)
+# ============================================================
+
+@router.get("/model/depth-slice", response_model=DepthSliceResponse)
+def get_model_depth_slice(
+    variable: str = Query(..., description="Variable to slice: temperature, salinity, currents, ssh, tchp, mld"),
+    timestamp: Optional[str] = Query(None, description="ISO timestamp; defaults to the first available model time"),
+    depth: float = Query(..., description="Requested depth in meters; the nearest native HYCOM model depth is used"),
+    stride: int = Query(3, description="Spatial downsampling stride for payload optimization")
+):
+    """Return a HYCOM model depth slice at the nearest native model depth level.
+
+    Values come from a single native model level - depth is never
+    interpolated. The response reports both the requested depth and the
+    matched native model depth.
+    """
+    try:
+        return incois_provider.get_depth_slice(
+            variable=variable,
+            timestamp=timestamp,
+            requested_depth_m=depth,
+            stride=stride,
+        )
+    except DepthSliceVariableError as e:
+        raise HTTPException(status_code=404, detail=e.detail)
+    except DepthSliceTimestampError as e:
+        # Unparseable input is a client error; a parseable timestamp outside
+        # the dataset's coverage is an unavailable-data error.
+        if "unparseable" in e.message:
+            raise HTTPException(status_code=400, detail=e.detail)
+        raise HTTPException(status_code=404, detail=e.detail)
+    except DepthSliceDepthError as e:
+        raise HTTPException(status_code=400, detail=e.detail)
+    except DepthSliceVariableUnavailableError as e:
+        # The dataset genuinely lacks the variable (e.g. UVEL/VVEL absent):
+        # an honest unavailable-data error, never a substitute variable.
+        raise HTTPException(status_code=503, detail=e.detail)
+    except DepthSliceDatasetError as e:
+        raise HTTPException(status_code=503, detail=e.detail)
 
 
 # ============================================================
@@ -353,5 +456,3 @@ def inspect_point(
     if not res:
         raise HTTPException(status_code=404, detail="No ocean data found for target location")
     return res
-
-

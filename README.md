@@ -15,7 +15,7 @@
 **An interactive 3D disaster-intelligence platform focused on the Bay of Bengal.**  
 Ocean-X synthesizes oceanographic observations, atmospheric dynamics, and cyclone telemetry into actionable decision-support insights.
 
-[Features](#-key-features) • [Tech Stack](#-tech-stack) • [Architecture](#-architecture) • [Getting Started](#-getting-started) • [API Spec](#-api-endpoints) • [Data Strategy](#-data-resiliency--trust-engine)
+[Quick Start](#quick-start) • [Features](#-key-features) • [Tech Stack](#-tech-stack) • [Architecture](#-architecture) • [Getting Started](#-getting-started) • [API Spec](#-api-endpoints) • [Data Strategy](#-data-resiliency--trust-engine)
 
 </div>
 
@@ -30,6 +30,170 @@ Observe ──► Analyze ──► Predict/Project ──► Explain ──► 
 ```
 
 > ⚠️ **Note:** Ocean-X is a decision-support and visualization prototype designed for hazard analysis and research simulation. It is not intended to supersede official meteorological warning systems.
+
+---
+
+## Quick Start
+
+There are **two ways to run OCEAN-X**:
+
+1. **SIH Demo / Fixture Mode** — recommended for a fresh clone. Uses the small
+   synthetic, schema-compatible HYCOM fixtures committed to this repository.
+   **No large download is required.**
+2. **REAL Production HYCOM Mode** — only required for actual production HYCOM
+   runtime verification. Requires the ~9.85 GB INCOIS HYCOM dataset to be
+   installed and processed locally (see
+   [Optional: REAL Production HYCOM](#optional-real-production-hycom)).
+
+> ✅ **The normal SIH demo does NOT require downloading the ~9.85 GB production
+> HYCOM dataset.** The repository contains small synthetic HYCOM fixtures for
+> development and testing (`backend/tests/fixtures/hycom_raw_fixture.nc` and
+> `backend/tests/fixtures/hycom_surface_fixture.nc`).
+
+---
+
+### Fresh Clone — SIH Demo (FIXTURE mode)
+
+#### 1. Clone the repository
+
+```bash
+git clone https://github.com/ZoroDev0/Ocean-X.git
+cd Ocean-X
+```
+
+#### 2. Backend setup
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate    # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+#### 3. Frontend setup
+
+```bash
+cd frontend
+npm install
+```
+
+#### 4. Validate the FIXTURE data
+
+With the backend virtual environment active:
+
+```bash
+cd backend
+source .venv/bin/activate
+OCEANX_DATA_MODE=FIXTURE python ../scripts/check-data.py
+```
+
+Expected output ends with:
+
+```
+Required HYCOM data available: YES (synthetic fixtures)
+NOTE: These are SYNTHETIC TEST FIXTURES.
+```
+
+- **FIXTURE mode is explicit.** It is used only when `OCEANX_DATA_MODE=FIXTURE`
+  is set; it never activates silently.
+- It uses the **committed synthetic, schema-compatible fixtures** in
+  `backend/tests/fixtures/` (constant placeholder values — not ocean measurements).
+- It is intended for the **SIH demo and development/testing** only.
+- It is **NOT scientific or production validation**, and fixture output must never
+  be presented as scientific evidence.
+- **Argo provenance is unchanged:** Argo profiles remain separately identified as
+  real/in-situ (`REAL SOURCE — INGESTION PENDING`); the synthetic label applies
+  only to the HYCOM model fields served in FIXTURE mode.
+
+#### 5. Run OCEAN-X
+
+Terminal 1 — backend (FIXTURE mode):
+
+```bash
+cd backend
+source .venv/bin/activate
+OCEANX_DATA_MODE=FIXTURE uvicorn app.main:app --reload --port 8000
+```
+
+Terminal 2 — frontend:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Open **http://localhost:3000** in your browser (Next.js dev-server default). The
+backend listens on **http://localhost:8000**, and interactive API documentation
+is available at **http://localhost:8000/docs**.
+
+The frontend already defaults to the API base `http://127.0.0.1:8000/api`, so no
+extra configuration is needed. To point it elsewhere, set `NEXT_PUBLIC_API_URL`
+in `frontend/.env.local` (see `docs/DEMO_RUNBOOK.md` for the full variable table).
+
+#### Windows / PowerShell
+
+The same flow in PowerShell (the project also ships a PowerShell data-download
+helper at `backend/scripts/download_incois.ps1`):
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+$env:OCEANX_DATA_MODE="FIXTURE"
+python ..\scripts\check-data.py
+uvicorn app.main:app --reload --port 8000
+```
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Use `python` (not `python3`) on Windows. These are the PowerShell equivalents
+used elsewhere in the project (see `docs/DEMO_RUNBOOK.md`); no broader Windows
+support is claimed beyond what the repository already provides.
+
+#### Data modes
+
+| Mode                   | Purpose                        | Production HYCOM required? | Scientific interpretation                          |
+| ---------------------- | ------------------------------ | -------------------------- | -------------------------------------------------- |
+| `FIXTURE`              | SIH demo / development / tests | No                         | Synthetic, not scientific evidence                 |
+| `REAL`                 | Production runtime             | Yes                        | Production-backed only when the dataset is loaded  |
+| `REAL` with missing data | Safe unavailable state       | Yes, but absent            | Must not be interpreted as production data         |
+
+`OCEANX_DATA_MODE` defaults to `REAL`. Setting `OCEANX_DATA_MODE=REAL` does
+**not** by itself make data production-backed — the production dataset must
+actually be installed and processed. When it is absent, the backend reports an
+honest unavailable/`DATASET UNAVAILABLE` status rather than substituting values.
+See [🔵 Data Modes — REAL vs FIXTURE](#-data-modes--real-vs-fixture) for details.
+
+#### Troubleshooting
+
+**"HYCOM dataset not found"** — Expected for a fresh clone when running in REAL
+mode: the ~9.85 GB production dataset is intentionally not committed to Git. For
+the SIH demo, run in FIXTURE mode (`OCEANX_DATA_MODE=FIXTURE`) as shown above.
+
+**"Backend unavailable"** — Confirm the backend is running by checking
+`http://localhost:8000/api/health` (or opening `http://localhost:8000/docs`), and
+that it was started with the intended `OCEANX_DATA_MODE`. When the backend is
+unreachable, the frontend visibly identifies a disconnected / demo /
+non-authoritative state rather than silently presenting data as production.
+
+**Python environment** — Activate the virtual environment before running backend
+commands: `source .venv/bin/activate` (macOS/Linux) or
+`.\.venv\Scripts\Activate.ps1` (Windows PowerShell), from inside `backend/`.
+
+**Frontend dependencies** — `npm install` must be run inside the `frontend/`
+directory (it installs from `frontend/package.json`).
+
+#### Developer documentation
+
+- [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) — step-by-step demo/judge runbook (FIXTURE & REAL modes)
+- [`docs/API_Specification.md`](docs/API_Specification.md) — API contract specifications
+- [`docs/PRD.md`](docs/PRD.md) — product requirements
+- [`docs/INDEX.md`](docs/INDEX.md) — full documentation index
+- [`docs/superpowers/`](docs/superpowers/) — design specs and execution artifacts
+- [`docs/superpowers/plans/`](docs/superpowers/plans/) — project plans (retained for future developers)
 
 ---
 
@@ -139,6 +303,20 @@ uvicorn app.main:app --reload --port 8000
 ```
 > The API server will run at `http://localhost:8000`. Access interactive API documentation at `http://localhost:8000/docs`.
 
+**Scientific datasets:** the large HYCOM NetCDF datasets are NOT included in
+the repository. The backend and the test suite work without them (APIs
+degrade gracefully and tests use committed synthetic schema fixtures), but
+REAL ocean-field mode requires installing them:
+
+```bash
+# From the repository root
+python scripts/check-data.py          # preflight: what is present/missing
+python scripts/setup-data.py          # instructions
+python scripts/setup-data.py --download   # optional: ~9.85 GB INCOIS HYCOM source
+```
+See [data/README.md](data/README.md) for the full dataset inventory,
+provenance and policies.
+
 ---
 
 ### **3. Frontend Setup**
@@ -161,11 +339,23 @@ npm run dev
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/v1/health` | `GET` | Health check endpoint returning system & adapter status |
-| `/api/v1/cyclones` | `GET` | Retrieve active & historical cyclone telemetry tracks |
-| `/api/v1/stations` | `GET` | Get monitoring station data (buoys, coastal meters) |
-| `/api/v1/layers/{type}` | `GET` | Fetch environmental layer grids (wind, current, SST, waves) |
-| `/api/v1/impact-analysis` | `GET` | Evidence-based risk score & coastal vulnerability analysis |
+| `/api/health` | `GET` | Health check — returns service & version |
+| `/api/status` | `GET` | System status + data mode (`dataMode`, `datasetSynthetic`) |
+| `/api/datasets` | `GET` | Dataset metadata |
+| `/api/cyclones` | `GET` | Cyclone tracks (NOAA IBTrACS) |
+| `/api/stations` | `GET` | Coastal monitoring stations |
+| `/api/hazards` | `GET` | Active hazard list |
+| `/api/risk/{id}` | `GET` | Prototype risk assessment |
+| `/api/timeseries` | `GET` | Available HYCOM model timestamps |
+| `/api/layers` | `GET` | GIS layer list (status coherent with data mode) |
+| `/api/layers/{name}` | `GET` | Layer grid data (currents/sst/salinity/tchp) |
+| `/api/model/depth-slice` | `GET` | HYCOM depth slice at nearest native model level |
+| `/api/argo/floats` | `GET` | Argo float list |
+| `/api/argo/profiles` | `GET` | Argo profile list |
+| `/api/argo/{id}/matchup` | `GET` | Model–observation matchup, statistics & diagnostics |
+| `/api/inspect` | `GET` | Point ocean data inspection |
+
+> **Note:** `/api/v1/impact-analysis` does **not exist** in the current implementation and has been removed from this documentation.
 
 ---
 
@@ -209,6 +399,102 @@ Ocean-X/
 ```
 
 ---
+
+
+---
+
+## Optional: REAL Production HYCOM
+
+> ⚠️ **This is NOT required for the normal SIH demo.** The SIH demo runs entirely
+> in FIXTURE mode with the committed synthetic fixtures (see
+> [Quick Start](#quick-start)).
+
+- The production INCOIS HYCOM dataset is approximately **9.85 GB**.
+- It is **intentionally NOT committed to Git** (`.gitignore` excludes large raw
+  NetCDF / scientific files).
+- The repository expects the documented INCOIS HYCOM source file
+  (`RSMC_hycom_20260908.nc`); its path, origin and expected size are recorded in
+  [`data/manifest.json`](data/manifest.json) and [`data/README.md`](data/README.md).
+- Production data availability may change — the upstream INCOIS source is
+  external, so download availability and exact file names can change over time.
+- REAL-mode verification requires the production dataset to be **actually present
+  and processed**. Simply setting `OCEANX_DATA_MODE=REAL` does not make anything
+  production-backed.
+- **Fixture validation must never be described as production scientific
+  validation.**
+
+### Data workflow (run from the repository root, backend `.venv` active)
+
+```bash
+python scripts/check-data.py              # preflight: what is present/missing
+python scripts/setup-data.py --check      # status; exit 1 when required data is missing
+python scripts/setup-data.py --download   # ~9.85 GB INCOIS HYCOM source (asks for confirmation)
+python scripts/setup-data.py --process    # regenerate the processed surface NetCDF
+python scripts/check-data.py              # re-check -> "Required HYCOM data available: YES"
+```
+
+`--download` is supported automatically only for datasets with a verified public
+source (`HYCOM_RSMC_RAW`, ~9.85 GB); it announces the size, asks for confirmation
+first, and resumes if interrupted. `--process` regenerates the derived surface
+dataset by running `backend/scripts/extract_hycom_bob.py` (it prefers the backend
+`.venv` interpreter, which has `xarray` + `netCDF4`).
+
+Then start the backend in REAL mode (`REAL` is the default mode):
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --reload --port 8000
+```
+
+> **Retain the raw production file.** Keep `RSMC_hycom_20260908.nc` even after
+> processing: full-depth matchup functionality requires the raw dataset, because
+> the processed surface extraction does not contain the complete depth structure.
+
+See [`data/README.md`](data/README.md) for the full dataset inventory, provenance
+and policies.
+
+---
+
+## 🔵 Data Modes — REAL vs FIXTURE
+
+Ocean-X supports two explicit runtime modes controlled by the `OCEANX_DATA_MODE` environment variable:
+
+### REAL mode (default)
+
+```bash
+# Default — no env var needed
+uvicorn app.main:app --port 8000
+```
+
+- Uses production HYCOM NetCDF datasets (install via `python scripts/setup-data.py`)
+- `/api/status` returns `"dataMode": "REAL"`, `"datasetSynthetic": false`
+- HYCOM layers return `"REAL"` status only when production files are present
+- Missing production files produce honest `DATASET UNAVAILABLE` status — no silent fallback
+
+### FIXTURE mode
+
+```bash
+OCEANX_DATA_MODE=FIXTURE uvicorn app.main:app --port 8000
+```
+
+- Uses committed synthetic schema-compatible fixtures from `backend/tests/fixtures/`
+- No production HYCOM data required
+- `/api/status` returns `"dataMode": "FIXTURE"`, `"datasetSynthetic": true`
+- HYCOM layers return `"SIMULATED"` status
+- Frontend displays: `DATA: SYNTHETIC FIXTURE — NOT SCIENTIFIC EVIDENCE`
+- Fixture values are **constant placeholders** — never real ocean measurements
+- Explicitly selected only — never activates silently
+
+### Preflight check
+
+```bash
+# REAL mode preflight
+python scripts/check-data.py
+
+# FIXTURE mode preflight
+OCEANX_DATA_MODE=FIXTURE python scripts/check-data.py
+```
 
 ## 🤝 Contributing & License
 

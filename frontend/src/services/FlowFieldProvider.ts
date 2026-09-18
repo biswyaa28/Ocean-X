@@ -1,4 +1,5 @@
 import { EnvironmentalFlowField } from '../types/flow';
+import type { DepthSlicePayload } from './ApiProvider';
 
 /**
  * Generates a normalized EnvironmentalFlowField for Bay of Bengal (Wind or Ocean Current).
@@ -52,8 +53,8 @@ export function generateBayOfBengalFlowField(
         const latNorm = (lat - minLat) / (maxLat - minLat);
         const lonNorm = (lon - minLon) / (maxLon - minLon);
 
-        let uBg = 10.0 + Math.sin(latNorm * Math.PI) * 4.0 + Math.cos(lonNorm * Math.PI) * 2.0;
-        let vBg = 8.0 + Math.cos(latNorm * Math.PI * 0.8) * 3.5;
+        const uBg = 10.0 + Math.sin(latNorm * Math.PI) * 4.0 + Math.cos(lonNorm * Math.PI) * 2.0;
+        const vBg = 8.0 + Math.cos(latNorm * Math.PI * 0.8) * 3.5;
 
         // 2. Coherent Cyclonic Vortex around Active Cyclone Eye
         const coreRadius = 4.2;
@@ -81,8 +82,8 @@ export function generateBayOfBengalFlowField(
         // --- INCOIS-STYLE OCEAN CURRENT VECTOR FIELD ---
         // 1. East India Coastal Current (EICC) northward along east coast + Bay gyre
         const latNorm = (lat - minLat) / (maxLat - minLat);
-        let uCurrent = 0.5 + Math.sin(latNorm * Math.PI * 1.2) * 0.4;
-        let vCurrent = 0.8 + Math.sin(lon * 0.15) * 0.35;
+        const uCurrent = 0.5 + Math.sin(latNorm * Math.PI * 1.2) * 0.4;
+        const vCurrent = 0.8 + Math.sin(lon * 0.15) * 0.35;
 
         // 2. Storm-Driven Oceanic Eddy Circulation
         const eddyRadius = 4.5;
@@ -120,11 +121,132 @@ export function generateBayOfBengalFlowField(
     units: 'm/s',
     source: 'SIMULATED VECTOR FIELD', // Corrected source as per Section 7
     status: 'SIMULATED',
+    surfaceOnly: true,
+    statusReason: 'Analytical Bay-of-Bengal background + storm-driven eddy model (not HYCOM output)',
   };
 }
 
 /**
+ * A cell value that carries no actual measurement. null is the wire
+ * representation of a missing UVEL/VVEL cell; NaN marks it in the
+ * normalized grid. A legitimate 0.0 m/s is VALID data, never missing.
+ */
+function isMissingCell(value: number | null | undefined): boolean {
+  return value === null || value === undefined || Number.isNaN(value);
+}
+
+/**
+ * Normalize a backend HYCOM UVEL/VVEL payload (Phase 1A depth-slice wire
+ * format, variable=currents) into the EnvironmentalFlowField consumed by
+ * the particle renderer.
+ *
+ * Preservation guarantees:
+ * - latitude/longitude/timestamp/units/depth come from the payload only
+ * - null (missing) cells become NaN in the normalized grid — never 0.0
+ * - the grid is NEVER transposed or flipped: row i is latitudes[i],
+ *   column j is longitudes[j], exactly as the backend serializes them
+ * - source data values are not mutated (rounding is display-only and
+ *   performed by the renderer, not here)
+ *
+ * Returns null when the payload cannot yield a usable field (malformed
+ * shape, missing vectors, no coordinates): the caller decides whether to
+ * fall back to the labelled synthetic field.
+ */
+export function normalizeHycomCurrentField(payload: DepthSlicePayload): EnvironmentalFlowField | null {
+  if (!payload || !payload.grid) return null;
+
+  const { grid, bounds } = payload;
+  const lats = grid.latitudes;
+  const lons = grid.longitudes;
+  if (!Array.isArray(lats) || !Array.isArray(lons) || lats.length < 2 || lons.length < 2) return null;
+  if (!Array.isArray(grid.u) || !Array.isArray(grid.v)) return null;
+  if (grid.u.length !== lats.length || grid.v.length !== lats.length) return null;
+
+  const u: number[][] = [];
+  const v: number[][] = [];
+  let validCells = 0;
+  let missingCells = 0;
+
+  for (let i = 0; i < lats.length; i++) {
+    const uRow = grid.u[i];
+    const vRow = grid.v[i];
+    if (!Array.isArray(uRow) || !Array.isArray(vRow) || uRow.length !== lons.length || vRow.length !== lons.length) {
+      return null;
+    }
+    const uOut: number[] = new Array(lons.length);
+    const vOut: number[] = new Array(lons.length);
+    for (let j = 0; j < lons.length; j++) {
+      const uCell = uRow[j];
+      const vCell = vRow[j];
+      if (isMissingCell(uCell) || isMissingCell(vCell)) {
+        // Missing either component invalidates the vector at this cell.
+        // It stays NaN (missing) — never an arbitrary numerical value.
+        uOut[j] = Number.NaN;
+        vOut[j] = Number.NaN;
+        missingCells++;
+      } else if (typeof uCell !== 'number' || typeof vCell !== 'number') {
+        return null; // malformed cell type: reject the whole payload
+      } else {
+        uOut[j] = uCell;
+        vOut[j] = vCell;
+        validCells++;
+      }
+    }
+    u.push(uOut);
+    v.push(vOut);
+  }
+
+  if (validCells === 0) return null; // no real vectors at all: not a field
+
+  // Bounds are recomputed from the actual coordinate axes (never trusted
+  // blindly) — the renderer seeds particles from these numbers.
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+
+  void bounds; // payload bounds are reported for provenance only
+
+  return {
+    type: 'current',
+    timestamp: payload.timestamp,
+    bounds: { minLat, maxLat, minLon, maxLon },
+    grid: { latitudes: lats, longitudes: lons, u, v },
+    units: payload.units || 'm/s',
+    source: payload.source || 'INCOIS RSMC HYCOM',
+    status: 'REAL',
+    depthM: payload.requested_depth_m,
+    matchedDepthM: payload.matched_depth_m,
+    surfaceOnly: payload.matched_depth_m === 0,
+    statusReason:
+      missingCells > 0
+        ? `${missingCells} missing UVEL/VVEL cells rendered as gaps (no vectors generated)`
+        : undefined,
+  };
+}
+
+/**
+ * Count cells carrying a usable vector (both components finite).
+ */
+export function countValidCurrentCells(field: EnvironmentalFlowField): number {
+  let valid = 0;
+  for (let i = 0; i < field.grid.u.length; i++) {
+    for (let j = 0; j < field.grid.u[i].length; j++) {
+      if (Number.isFinite(field.grid.u[i][j]) && Number.isFinite(field.grid.v[i][j])) valid++;
+    }
+  }
+  return valid;
+}
+
+/**
  * Bilinear sampling of vector field velocity (u, v) at any continuous (lat, lon) position.
+ *
+ * Handles both the uniform synthetic grid and real HYCOM grids:
+ * - non-uniform axes (binary search for the bracketing cell)
+ * - descending latitude order (orientation preserved, never flipped)
+ * - missing (NaN) cells: any bracketing cell without a real vector yields
+ *   speed 0, so particles crossing a gap respawn instead of being advected
+ *   by fabricated values. Missing regions stay missing.
  */
 export function sampleFlowVelocity(
   field: EnvironmentalFlowField,
@@ -145,40 +267,66 @@ export function sampleFlowVelocity(
 
   const lats = grid.latitudes;
   const lons = grid.longitudes;
-  const step = lats[1] - lats[0];
 
-  const iFloat = (lat - bounds.minLat) / step;
-  const jFloat = (lon - bounds.minLon) / step;
+  // Locate the bracketing cell on each axis. Works for ascending and
+  // descending axes alike (real HYCOM axes may be either) and for
+  // non-uniform spacings (the raw model grid is not regular).
+  const findBracket = (axis: number[], value: number): [number, number, number] | null => {
+    const n = axis.length;
+    if (n < 2) return null;
+    const ascending = axis[1] >= axis[0];
+    let lo = 0;
+    let hi = n - 1;
+    if (ascending ? value <= axis[0] : value >= axis[0]) return [0, 0, 0];
+    if (ascending ? value >= axis[n - 1] : value <= axis[n - 1]) return [n - 1, n - 1, 0];
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      const above = ascending ? axis[mid] <= value : axis[mid] >= value;
+      if (above) lo = mid;
+      else hi = mid;
+    }
+    const span = axis[hi] - axis[lo];
+    const frac = span !== 0 ? (value - axis[lo]) / span : 0;
+    return [lo, hi, Math.min(Math.max(frac, 0), 1)];
+  };
 
-  const i0 = Math.floor(iFloat);
-  const j0 = Math.floor(jFloat);
-  const i1 = Math.min(i0 + 1, lats.length - 1);
-  const j1 = Math.min(j0 + 1, lons.length - 1);
+  const latBracket = findBracket(lats, lat);
+  const lonBracket = findBracket(lons, lon);
+  if (!latBracket || !lonBracket) return { u: 0, v: 0, speed: 0 };
 
-  const fi = iFloat - i0;
-  const fj = jFloat - j0;
+  const [i0, i1, fi] = latBracket;
+  const [j0, j1, fj] = lonBracket;
 
   const u00 = grid.u[i0][j0];
   const u10 = grid.u[i1][j0];
-  const u00_1 = grid.u[i0][j1];
+  const u01 = grid.u[i0][j1];
   const u11 = grid.u[i1][j1];
 
   const v00 = grid.v[i0][j0];
   const v10 = grid.v[i1][j0];
-  const v00_1 = grid.v[i0][j1];
+  const v01 = grid.v[i0][j1];
   const v11 = grid.v[i1][j1];
+
+  // Missing cells propagate: if any corner of the bilinear stencil lacks a
+  // real vector, no (fabricated) vector is produced at this position.
+  if (
+    !Number.isFinite(u00) || !Number.isFinite(u10) || !Number.isFinite(u01) || !Number.isFinite(u11) ||
+    !Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)
+  ) {
+    return { u: 0, v: 0, speed: 0 };
+  }
 
   // Bilinear interpolation
   const u =
     (1 - fi) * (1 - fj) * u00 +
     fi * (1 - fj) * u10 +
-    (1 - fi) * fj * u00_1 +
+    (1 - fi) * fj * u01 +
     fi * fj * u11;
 
   const v =
     (1 - fi) * (1 - fj) * v00 +
     fi * (1 - fj) * v10 +
-    (1 - fi) * fj * v00_1 +
+    (1 - fi) * fj * v01 +
     fi * fj * v11;
 
   const speed = Math.sqrt(u * u + v * v);

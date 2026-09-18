@@ -352,8 +352,8 @@ metadata = {
             "units": "as provided by source",
         },
     },
-    "original_file": str(RAW_FILE),
-    "processed_file": str(OUTPUT_FILE),
+    "original_file": str(RAW_FILE.relative_to(ROOT)),
+    "processed_file": str(OUTPUT_FILE.relative_to(ROOT)),
 }
 
 

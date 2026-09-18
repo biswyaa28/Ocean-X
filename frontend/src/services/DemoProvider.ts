@@ -9,6 +9,7 @@ import {
   DataStatus,
   ArgoProfile,
   ArgoMatchupResponse,
+  ArgoObservationPoint,
 } from '../types/oceanlens';
 
 
@@ -327,6 +328,19 @@ const DEMO_LAYERS: GISLayer[] = [
     description: 'INCOIS deep sea buoys and coastal radar stations',
   },
   {
+    // Real Argo in-situ observation profiles (Phase 1D depth-profile drawer).
+    // Without this registry entry the LayerControl "Argo Observations" toggle
+    // could never activate the layer — the app layer list is the source of
+    // truth for isLayerActive('argo').
+    id: 'argo',
+    name: 'Argo Observations',
+    category: 'physical',
+    active: true,
+    status: 'REAL SOURCE — INGESTION PENDING',
+    description: 'Real Argo float in-situ temperature and salinity profiles',
+    unit: 'IN-SITU',
+  },
+  {
     id: 'risk_zones',
     name: 'Coastal Risk Polygons',
     category: 'hazard',
@@ -446,10 +460,12 @@ export class DemoProvider implements DataProvider {
     };
   }
 
-  async getDataStatus(): Promise<{ mode: DataStatus; backendConnected: boolean }> {
+  async getDataStatus(): Promise<{ mode: DataStatus; backendConnected: boolean; dataMode: import('../types/oceanlens').DataModeType; datasetSynthetic: boolean }> {
     return {
       mode: 'SIMULATED',
       backendConnected: false,
+      dataMode: 'REAL',
+      datasetSynthetic: false,
     };
   }
 
@@ -462,6 +478,11 @@ export class DemoProvider implements DataProvider {
   }
 
   async getArgoMatchup(profileId: string): Promise<ArgoMatchupResponse | null> {
+    return null;
+  }
+
+  async getArgoObservations(): Promise<ArgoObservationPoint[] | null> {
+    // No demo/synthetic Argo observations exist — real observations only.
     return null;
   }
 }

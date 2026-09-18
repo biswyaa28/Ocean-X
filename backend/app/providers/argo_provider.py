@@ -5,16 +5,13 @@ import math
 from datetime import datetime
 
 from app.core.config import settings
-
-ROOT_DIR = Path(__file__).resolve().parents[2]
-PROCESSED_ARGO_FILE = ROOT_DIR / "data" / "processed" / "ocean" / "argo" / "argo_bob_processed.json"
-METADATA_ARGO_FILE = ROOT_DIR / "data" / "processed" / "ocean" / "argo" / "argo_bob_metadata.json"
+from app.models.schemas import ScientificProvenance
 
 
 class ArgoProvider:
-    def __init__(self, data_path: Path = PROCESSED_ARGO_FILE, meta_path: Path = METADATA_ARGO_FILE):
-        self.data_path = data_path
-        self.meta_path = meta_path
+    def __init__(self, data_path: Path = None, meta_path: Path = None):
+        self.data_path = data_path or settings.PROCESSED_ARGO_FILE
+        self.meta_path = meta_path or settings.PROCESSED_ARGO_META
         self._profiles: Optional[List[Dict[str, Any]]] = None
         self._metadata: Optional[Dict[str, Any]] = None
 
@@ -44,7 +41,28 @@ class ArgoProvider:
 
     def get_profiles(self) -> List[Dict[str, Any]]:
         self._load_data()
-        return self._profiles or []
+        profiles = self._profiles or []
+        return [self._with_provenance(profile) for profile in profiles]
+
+    def _with_provenance(self, profile: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep the legacy fields while adding explicit fixture/demo provenance."""
+        result = dict(profile)
+        metadata = self.get_metadata()
+        result["provenance"] = ScientificProvenance(
+            source=metadata.get("source"),
+            provider=metadata.get("provider"),
+            dataset=metadata.get("dataset_name", "ARGO_PROFILES_BOB"),
+            variable="temperature_c, salinity_psu",
+            units="°C, PSU",
+            timestamp=profile.get("observation_time"),
+            latitude=profile.get("latitude"),
+            longitude=profile.get("longitude"),
+            processing_status="curated fallback profile set",
+            data_status="DEMO",
+            asset_id=profile.get("profile_id"),
+            source_url=metadata.get("source_url"),
+        ).model_dump()
+        return result
 
     def get_floats(self) -> List[Dict[str, Any]]:
         self._load_data()
@@ -74,7 +92,7 @@ class ArgoProvider:
         self._load_data()
         for p in self._profiles or []:
             if p["profile_id"] == profile_id or p["profile_id"].endswith(profile_id):
-                return p
+                return self._with_provenance(p)
         return None
 
     def get_profile_observations(self, profile_id: str) -> Optional[List[Dict[str, Any]]]:

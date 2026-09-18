@@ -14,3 +14,4 @@
 10. README.md
 
 These documents intentionally distinguish verified source capabilities, prototype assumptions, simulated data, and future work.
+11. DEMO_RUNBOOK.md — Phase 3 judge/demo runbook (REAL & FIXTURE modes)
