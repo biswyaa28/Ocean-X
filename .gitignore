@@ -28,9 +28,22 @@ backend/.pytest_cache/
 .env*.local
 backend/.env
 
-# Large raw datasets & binary netCDF files
+# Large raw scientific datasets & binary NetCDF files
+# (kept local or downloaded via scripts/setup-data.py - see data/manifest.json)
 backend/data/raw/ocean/currents/
 *.nc
+*.nc4
+*.h5
+*.hdf5
+*.grib
+*.grb
+*.zarr
+*.parquet
+# Generated/processed scientific outputs are not committed
+backend/data/processed/**/*.nc
+
+# ...EXCEPT small synthetic test fixtures, which ARE committed
+!backend/tests/fixtures/*.nc
 
 # IDE & OS
 .vscode/
@@ -42,3 +55,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 yarn-debug.log*
+
+# Playwright MCP artifacts
+.playwright-mcp/

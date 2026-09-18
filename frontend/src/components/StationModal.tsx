@@ -67,7 +67,7 @@ export const StationModal: React.FC<StationModalProps> = ({ station, onClose }) 
         {/* Ocean Measurements Grid */}
         <div className="space-y-2 mb-5">
           <div className="text-[10px] font-mono uppercase text-slate-400 tracking-widest font-bold px-1">
-            REAL-TIME TELEMETRY
+            {station.dataStatus === 'SIMULATED' ? 'SIMULATED TELEMETRY' : 'OBSERVATION TELEMETRY'}
           </div>
 
           <div className="grid grid-cols-2 gap-2.5 text-xs font-mono">
@@ -127,4 +127,3 @@ export const StationModal: React.FC<StationModalProps> = ({ station, onClose }) 
     </div>
   );
 };
-

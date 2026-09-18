@@ -13,7 +13,53 @@ DataStatus = Literal[
     'FORECAST'
 ]
 
+ScientificDataStatus = Literal['REAL', 'SIMULATED', 'DEMO', 'UNAVAILABLE']
+
+class ScientificProvenance(BaseModel):
+    """Compact provenance contract shared by scientific visualization payloads."""
+    source: Optional[str] = None
+    provider: Optional[str] = None
+    dataset: Optional[str] = None
+    variable: Optional[str] = None
+    units: Optional[str] = None
+    timestamp: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    requested_depth_m: Optional[float] = None
+    matched_depth_m: Optional[float] = None
+    processing_status: Optional[str] = None
+    data_status: ScientificDataStatus
+    asset_id: Optional[str] = None
+    source_url: Optional[str] = None
+
 AppMode = Literal['OPERATIONS', 'RESEARCH']
+
+DataModeType = Literal['REAL', 'FIXTURE']
+
+
+class StatusResponse(BaseModel):
+    """Typed response for /api/status.
+
+    dataMode: the explicitly configured data mode — "REAL" (production
+        HYCOM datasets) or "FIXTURE" (committed synthetic schema-compatible
+        test fixtures).  This is determined by OCEANX_DATA_MODE and is
+        never inferred silently.
+    datasetLoaded: True when a HYCOM dataset file is reachable at the
+        configured path (production file in REAL mode; fixture file in
+        FIXTURE mode).
+    datasetSynthetic: True when the backend is serving synthetic fixture
+        data, not real production ocean measurements.
+    mode: backward-compatible field.  "REAL" only when DATA_MODE==REAL
+        and the production file is present; "SIMULATED" otherwise.
+    """
+    mode: str
+    backendConnected: bool = True
+    datasetLoaded: bool
+    provider: str
+    dataMode: DataModeType
+    datasetSynthetic: bool
+
+
 
 class CycloneTrackPoint(BaseModel):
     id: str
@@ -115,7 +161,7 @@ class KPIMetrics(BaseModel):
 class LayerGridData(BaseModel):
     latitudes: List[float]
     longitudes: List[float]
-    values: Optional[List[List[float]]] = None
+    values: Optional[List[List[Optional[float]]]] = None
     u: Optional[List[List[float]]] = None
     v: Optional[List[List[float]]] = None
 
@@ -127,6 +173,41 @@ class LayerDataResponse(BaseModel):
     units: str
     bounds: Dict[str, float]
     grid: LayerGridData
+    provenance: Optional[ScientificProvenance] = None
+
+class DepthSliceGridData(BaseModel):
+    """Grid payload of a HYCOM model depth slice.
+
+    Missing/NaN source values are represented as null (never as 0.0).
+    """
+    latitudes: List[float]
+    longitudes: List[float]
+    values: Optional[List[List[Optional[float]]]] = None
+    u: Optional[List[List[Optional[float]]]] = None
+    v: Optional[List[List[Optional[float]]]] = None
+
+class DepthSliceResponse(BaseModel):
+    """A HYCOM model depth slice at the nearest native model depth level.
+
+    The requested depth and the matched native model depth are reported
+    separately: values are taken from the matched level only - depth is
+    never interpolated.
+    """
+    status: DataStatus
+    source: str
+    dataset_file: str
+    variable: str
+    units: str
+    timestamp: str
+    requested_timestamp: Optional[str] = None
+    requested_depth_m: float
+    matched_depth_m: float
+    available_depths_m: List[float]
+    depth_selection: str = "nearest native HYCOM model depth (no interpolation)"
+    missing_values: int = 0
+    bounds: Dict[str, float]
+    grid: DepthSliceGridData
+    provenance: ScientificProvenance
 
 class DatasetInfo(BaseModel):
     dataset_name: str
@@ -154,10 +235,11 @@ class ArgoProfile(BaseModel):
     latitude: float
     longitude: float
     observation_time: str
-    data_status: DataStatus = "REAL"
+    data_status: DataStatus = "REAL SOURCE — INGESTION PENDING"
     institution: str
     observations_count: int
     observations: List[ArgoObservationPoint]
+    provenance: ScientificProvenance
 
 class ArgoFloat(BaseModel):
     float_id: str
@@ -179,6 +261,34 @@ class DepthComparison(BaseModel):
     salinityResidualPSU: Optional[float] = None
     matchedModelDepthM: Optional[float] = None
 
+class MatchupStatistics(BaseModel):
+    n: int
+    meanResidual: Optional[float] = None
+    mae: Optional[float] = None
+    rmse: Optional[float] = None
+
+class MatchupStatisticsByVariable(BaseModel):
+    temperature: Optional[MatchupStatistics] = None
+    salinity: Optional[MatchupStatistics] = None
+
+class MatchupDiagnostics(BaseModel):
+    """Neutral diagnostic context of an existing matchup.
+
+    Counts and matching metadata only - never a matchup quality score, grade
+    or validation metric. ``matchedObservationCount`` counts backend
+    comparison rows (one per depth-matched Argo observation); valid
+    temperature/salinity statistical pairs are reported separately by
+    ``MatchupStatisticsByVariable`` and may be smaller.
+    """
+    totalArgoObservations: int = 0
+    matchedObservationCount: int = 0
+    unmatchedObservationCount: int = 0
+    matchedPercentage: Optional[float] = None
+    deepestMatchedObservationDepthM: Optional[float] = None
+    deepestMatchedModelDepthM: Optional[float] = None
+    repeatedNativeDepthMatchCount: int = 0
+    interpolationApplied: bool = False
+
 class ArgoMatchupResponse(BaseModel):
     argoProfileId: str
     floatId: str
@@ -186,15 +296,20 @@ class ArgoMatchupResponse(BaseModel):
     observationLat: float
     observationLon: float
     modelDataset: str = "INCOIS HYCOM"
+    modelDataStatus: ScientificDataStatus = "UNAVAILABLE"
     modelTimestamp: str
     matchedModelLat: float
     matchedModelLon: float
     timeDifferenceHours: float
     distanceKm: float
     matchedDepths: List[float]
+    matchedPointCount: int = 0
+    matchingToleranceM: float = 15.0
+    modelDepthSelection: str = "nearest native HYCOM model depth (no interpolation)"
     comparisons: List[DepthComparison]
     dataStatus: DataStatus = "REAL"
     source: str = "Argo Global Data (GDAC) + INCOIS RSMC HYCOM"
     residualConvention: str = "ΔT = HYCOM - Argo, ΔS = HYCOM - Argo"
     statusMessage: Optional[str] = None
-
+    statistics: Optional[MatchupStatisticsByVariable] = None
+    diagnostics: Optional[MatchupDiagnostics] = None

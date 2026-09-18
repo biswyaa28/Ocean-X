@@ -155,7 +155,13 @@ Source selection and access constraints must be verified before implementation.
 
 - Build window: 1–2 days
 - Stack: Next.js/React, CesiumJS, FastAPI/Python
-- Deployment target: Vercel + Railway
+- Deployment target: Vercel (frontend) + Railway or VPS (backend)
+  - **Phase 3 assessment**: The frontend can deploy to Vercel as a standard Next.js app.
+    The backend requires a persistent server (Railway, Fly.io, or VPS) because it uses
+    xarray/netCDF4 — incompatible with Vercel's serverless runtime.
+    Production REAL mode requires external dataset hosting (e.g., S3/GCS) for the 9.85 GB
+    HYCOM NetCDF file. FIXTURE mode (committed synthetic fixtures) can deploy to Railway
+    immediately without dataset hosting. See `docs/DEMO_RUNBOOK.md`.
 - Real data + simulated fallback
 - No dataset/API is currently supplied by the project owner
 

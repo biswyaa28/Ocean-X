@@ -1,4 +1,13 @@
+"""OceanLens API contract tests.
+
+These tests validate the API contract and code paths. They run against the
+REAL production datasets when installed; otherwise tests/conftest.py points
+the HYCOM paths at committed SYNTHETIC schema-compatible fixtures (announced
+in the test banner) so the suite never requires the multi-gigabyte
+production data. Assertions are identical in both modes.
+"""
 import pytest
+from app.core.config import settings
 from fastapi.testclient import TestClient
 from app.main import app
 
@@ -15,8 +24,22 @@ def test_status():
     response = client.get("/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["mode"] in ["REAL", "SIMULATED"]
+    # Phase 3: dataMode and datasetSynthetic must be present
+    assert "dataMode" in data, "Phase 3: /api/status must include 'dataMode'"
+    assert "datasetSynthetic" in data, "Phase 3: /api/status must include 'datasetSynthetic'"
+    assert data["dataMode"] in ("REAL", "FIXTURE"), f"dataMode must be REAL or FIXTURE, got {data['dataMode']!r}"
+    assert isinstance(data["datasetSynthetic"], bool), "datasetSynthetic must be a bool"
     assert data["backendConnected"] is True
+    # Coherence: if dataMode==FIXTURE then mode must be SIMULATED and datasetSynthetic==True
+    if data["dataMode"] == "FIXTURE":
+        assert data["mode"] == "SIMULATED", "FIXTURE mode must report mode=SIMULATED"
+        assert data["datasetSynthetic"] is True, "FIXTURE mode must report datasetSynthetic=True"
+    # Coherence: datasetLoaded must match whether the configured file exists
+    has_incois = (
+        settings.PROCESSED_OCEAN_FILE.exists()
+        or settings.RAW_HYCOM_FILE.exists()
+    )
+    assert data["datasetLoaded"] == has_incois, "datasetLoaded must reflect actual file presence"
 
 def test_datasets():
     response = client.get("/datasets")
@@ -27,6 +50,13 @@ def test_datasets():
     providers = [d["provider"] for d in data]
     assert "INCOIS" in providers
     assert "NOAA NCEI" in providers
+    incois = next(dataset for dataset in data if dataset["provider"] == "INCOIS")
+    expected_status = (
+        "REAL"
+        if settings.PROCESSED_OCEAN_FILE.exists() or settings.RAW_HYCOM_FILE.exists()
+        else "NOT CURRENTLY INTEGRATED"
+    )
+    assert incois["status"] == expected_status
 
 def test_cyclones():
     response = client.get("/cyclones")
@@ -42,8 +72,10 @@ def test_layer_currents():
     response = client.get("/layers/currents")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "REAL"
-    assert "INCOIS HYCOM — REAL VECTOR FIELD" in data["source"]
+    # Phase 3: status reflects actual data mode — never hardcoded REAL
+    assert data["status"] in ("REAL", "SIMULATED"), \
+        f"currents layer status must be REAL or SIMULATED, got {data['status']!r}"
+    assert "INCOIS HYCOM" in data["source"]
     assert data["units"] == "m/s"
     assert data["grid"]["u"] is not None
     assert data["grid"]["v"] is not None
@@ -52,7 +84,9 @@ def test_layer_sst():
     response = client.get("/layers/sst")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "REAL"
+    # Phase 3: status reflects actual data mode
+    assert data["status"] in ("REAL", "SIMULATED"), \
+        f"sst layer status must be REAL or SIMULATED, got {data['status']!r}"
     assert "INCOIS" in data["source"]
     assert data["units"] == "°C"
     assert data["grid"]["values"] is not None
@@ -61,14 +95,16 @@ def test_layer_salinity():
     response = client.get("/layers/salinity")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "REAL"
+    # Phase 3: status reflects actual data mode
+    assert data["status"] in ("REAL", "SIMULATED"), \
+        f"salinity layer status must be REAL or SIMULATED, got {data['status']!r}"
     assert data["units"] == "PSU"
 
 def test_layer_tchp():
     response = client.get("/layers/tchp")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "REAL"
+    assert data["status"] in ("REAL", "SIMULATED"), f"status must be REAL or SIMULATED, got {data['status']!r}"
     assert data["units"] == "KJ/cm2"
 
 def test_inspect_point():
@@ -132,4 +168,3 @@ def test_2020_amphan_cyclone_inspect():
     assert data["source"] == "NOAA IBTrACS v04r01"
     assert data["maxWindKts"] > 0
     assert data["centralPressureMb"] > 0
-

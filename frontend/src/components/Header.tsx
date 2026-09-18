@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { AppMode, OceanMode, DataStatus, KPIMetrics, Cyclone } from '../types/oceanlens';
+import { AppMode, OceanMode, DataStatus, DataModeType, KPIMetrics, Cyclone } from '../types/oceanlens';
 import { Compass, SlidersHorizontal, Activity } from 'lucide-react';
 
 interface HeaderProps {
@@ -13,6 +13,12 @@ interface HeaderProps {
   backendConnected: boolean;
   metrics: KPIMetrics | null;
   cyclone?: Cyclone | null;
+  /** Phase 3: explicit data mode — "REAL" or "FIXTURE". */
+  dataMode?: DataModeType;
+  /** Phase 3: true when backend is serving synthetic fixture data. */
+  datasetSynthetic?: boolean;
+  datasetLoaded?: boolean;
+  liveKpiAuthoritative?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,8 +30,16 @@ export const Header: React.FC<HeaderProps> = ({
   backendConnected,
   metrics,
   cyclone,
+  dataMode = 'REAL',
+  datasetSynthetic = false,
+  datasetLoaded = false,
+  liveKpiAuthoritative = false,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
+  const isFixture = dataMode === 'FIXTURE' || datasetSynthetic;
+  const hasAuthoritativeRealData = backendConnected && dataStatus === 'REAL' && !isFixture && datasetLoaded;
+  const hasAuthoritativeLiveData = hasAuthoritativeRealData && liveKpiAuthoritative;
+  const displayMetrics = oceanMode === 'LIVE' && !hasAuthoritativeLiveData ? null : metrics;
 
   useEffect(() => {
     const updateTime = () => {
@@ -112,6 +126,29 @@ export const Header: React.FC<HeaderProps> = ({
               <span>{backendConnected ? 'REAL BACKEND CONNECTED' : `● ${dataStatus}`}</span>
             </div>
             <span className="text-white/20">│</span>
+            {/* Phase 3: Global data-mode indicator — always visible, never hidden */}
+            <span
+              id="oceanx-data-mode-indicator"
+              className={`font-bold tracking-widest uppercase text-[9px] px-1.5 py-0.5 rounded ${
+                !hasAuthoritativeRealData
+                  ? 'text-amber-300 bg-amber-900/40 border border-amber-500/40'
+                  : 'text-emerald-300'
+              }`}
+              title={
+                isFixture
+                  ? 'FIXTURE mode: synthetic placeholder data — not scientific evidence'
+                  : !backendConnected
+                    ? 'Backend disconnected: demo data — non-authoritative'
+                  : 'REAL mode: production HYCOM dataset'
+              }
+            >
+              {isFixture
+                ? 'DATA: SYNTHETIC FIXTURE — NOT SCIENTIFIC EVIDENCE'
+                : hasAuthoritativeRealData
+                  ? 'DATA: REAL'
+                  : 'DATA: DEMO / DISCONNECTED — NON-AUTHORITATIVE'}
+            </span>
+            <span className="text-white/20">│</span>
             <span className="text-slate-200 tracking-wider font-semibold">{currentTime || 'UTC 17:31:28'}</span>
           </div>
 
@@ -151,7 +188,7 @@ export const Header: React.FC<HeaderProps> = ({
             oceanMode === 'HISTORICAL' ? 'bg-cyan-400' : 'bg-amber-400'
           }`} />
           <span>
-            {oceanMode === 'LIVE' ? 'LIVE OCEAN · REAL INCOIS HYCOM DATA' :
+            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData ? 'LIVE OCEAN · REAL INCOIS HYCOM DATA' : 'LIVE OCEAN · DATA UNAVAILABLE / NON-AUTHORITATIVE') :
              oceanMode === 'HISTORICAL' ? 'HISTORICAL REPLAY · AMPHAN (2020) · NOAA IBTrACS' :
              'SCENARIO SIMULATION · NOT AN OFFICIAL FORECAST'}
           </span>
@@ -162,35 +199,35 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1 shrink-0">
           <span className="text-slate-400">STATUS:</span>
           <span className="text-cyan-300 font-bold">
-            {oceanMode === 'LIVE' ? (metrics?.activeCyclones ? '01 ACTIVE CYCLONE' : 'NO ACTIVE CYCLONE IN INTEGRATED DATA') :
+            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData && displayMetrics?.activeCyclones ? '01 ACTIVE CYCLONE' : 'LIVE KPI DATA UNAVAILABLE') :
              oceanMode === 'HISTORICAL' ? 'HISTORICAL RECORD (NOAA IBTrACS)' :
              'SIMULATION'}
           </span>
         </div>
 
-        {metrics && (
+        {displayMetrics && (
           <>
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">MAX WIND:</span>
-              <span className="text-cyan-300 font-bold">{metrics.maxWindKts} KT</span>
+              <span className="text-cyan-300 font-bold">{displayMetrics.maxWindKts} KT</span>
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">SST:</span>
-              <span className="text-rose-300 font-bold">{metrics.avgSSTC} °C</span>
+              <span className="text-rose-300 font-bold">{displayMetrics.avgSSTC} °C</span>
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">RISK:</span>
               <span className={`font-bold tracking-wider ${
-                metrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
-                metrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
-                metrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
+                displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
+                displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
+                displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
                 'text-emerald-400'
-              }`}>{metrics.coastalRiskLevel}</span>
+              }`}>{displayMetrics.coastalRiskLevel}</span>
             </div>
           </>
         )}

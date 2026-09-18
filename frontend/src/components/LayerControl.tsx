@@ -20,6 +20,26 @@ interface LayerItemSpec {
 export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLayer }) => {
   const [collapsed, setCollapsed] = useState(false);
 
+  const getLiveStatus = (item: LayerItemSpec): Pick<LayerItemSpec, 'statusBadge' | 'statusType'> => {
+    const layer = layers.find((candidate) => candidate.id === item.id);
+    if (!layer) {
+      return { statusBadge: 'NOT CURRENTLY INTEGRATED', statusType: 'not_integrated' };
+    }
+    if (layer.status === 'SIMULATED') {
+      return { statusBadge: 'SIMULATED', statusType: 'simulated' };
+    }
+    if (layer.status === 'REAL SOURCE — INGESTION PENDING') {
+      return { statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' };
+    }
+    if (layer.status === 'REAL') {
+      return { statusBadge: 'REAL', statusType: 'real' };
+    }
+    if (layer.status === 'NOT CURRENTLY INTEGRATED' || layer.status === 'REAL DATASET — TIMESTAMP UNAVAILABLE') {
+      return { statusBadge: layer.status, statusType: 'not_integrated' };
+    }
+    return item;
+  };
+
   const categories: { name: string; items: LayerItemSpec[] }[] = [
     {
       name: 'HAZARDS',
@@ -118,6 +138,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
               <div className="space-y-0.5">
                 {cat.items.map((item) => {
                   const active = getIsActive(item.id);
+                  const liveStatus = getLiveStatus(item);
 
                   return (
                     <button
@@ -152,13 +173,13 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
 
                         {/* Compact Status Badge (Requirement #3) */}
                         <span className={`text-[7.5px] font-bold px-1.5 py-0.5 rounded font-mono uppercase tracking-wider ${
-                          item.statusType === 'real' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' :
-                          item.statusType === 'derived' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30' :
-                          item.statusType === 'simulated' ? 'bg-yellow-500/15 text-yellow-300 border border-yellow-500/30' :
-                          item.statusType === 'pending' ? 'bg-purple-500/15 text-purple-300 border border-purple-500/30' :
+                          liveStatus.statusType === 'real' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' :
+                          liveStatus.statusType === 'derived' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30' :
+                          liveStatus.statusType === 'simulated' ? 'bg-yellow-500/15 text-yellow-300 border border-yellow-500/30' :
+                          liveStatus.statusType === 'pending' ? 'bg-purple-500/15 text-purple-300 border border-purple-500/30' :
                           'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                         }`}>
-                          {item.statusBadge}
+                        {liveStatus.statusBadge}
                         </span>
 
                         <span className="text-slate-500 group-hover:text-slate-300">
