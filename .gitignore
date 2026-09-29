@@ -2,3 +2,12 @@ node_modules
 dist
 .DS_Store
 *.local
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
