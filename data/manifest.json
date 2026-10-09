@@ -18,7 +18,19 @@
       "committed": true,
       "auto_download": false,
       "manual_install": null,
-      "expected_columns": ["SID", "SEASON", "NAME", "ISO_TIME", "LAT", "LON", "WMO_WIND", "WMO_PRES", "DIST2LAND", "STORM_SPEED", "STORM_DIR"],
+      "expected_columns": [
+        "SID",
+        "SEASON",
+        "NAME",
+        "ISO_TIME",
+        "LAT",
+        "LON",
+        "WMO_WIND",
+        "WMO_PRES",
+        "DIST2LAND",
+        "STORM_SPEED",
+        "STORM_DIR"
+      ],
       "provenance_note": "Real observations. Downloaded from NOAA NCEI. See backend/data/metadata/ibtracs.md."
     },
     {
@@ -44,20 +56,34 @@
       "category": "local-scientific",
       "required": false,
       "purpose": "Raw INCOIS RSMC HYCOM forecast fields used for depth-resolved Argo-vs-model matchups (/argo/{id}/matchup falls back to processed file when this is absent).",
-      "local_path": "backend/data/raw/ocean/currents/RSMC_hycom_20260908.nc",
-      "filename": "RSMC_hycom_20260908.nc",
+      "local_path": "backend/data/raw/ocean/currents/RSMC_hycom_20261008.nc",
+      "filename": "RSMC_hycom_20261008.nc",
       "format": "NetCDF4",
       "source": "INCOIS Ocean State Forecast THREDDS server (RSMC HYCOM currents product)",
-      "source_url": "https://incois.gov.in/thredds/fileServer/osf/currents2/RSMC_hycom_20260908.nc",
+      "source_url": "https://incois.gov.in/thredds/fileServer/osf/currents2/RSMC_hycom_20261008.nc",
       "approx_size_bytes": 10580000000,
-      "size_note": "approximately 9.85 GB",
+      "size_note": "approximately 10.58 GB (as reported by the THREDDS catalog dataSize)",
       "committed": false,
       "auto_download": true,
-      "download_url": "https://incois.gov.in/thredds/fileServer/osf/currents2/RSMC_hycom_20260908.nc",
-      "manual_install": "Place the file at backend/data/raw/ocean/currents/RSMC_hycom_20260908.nc. Use scripts/setup-data.py --download or backend/scripts/download_incois.ps1 (Windows, resumable).",
-      "expected_coords": ["TIME", "DEPTH", "LAT", "LON"],
-      "expected_variables": ["UVEL", "VVEL", "TEMP", "SALN", "SSH", "TCHP", "MLD"],
-      "provenance_note": "Real INCOIS RSMC HYCOM model output. The original source file must never be modified."
+      "download_url": "https://incois.gov.in/thredds/fileServer/osf/currents2/RSMC_hycom_20261008.nc",
+      "manual_install": "Place the file at backend/data/raw/ocean/currents/RSMC_hycom_20261008.nc. Use scripts/setup-data.py --download (resumable).",
+      "expected_coords": [
+        "TIME",
+        "DEPTH",
+        "LAT",
+        "LON"
+      ],
+      "expected_variables": [
+        "UVEL",
+        "VVEL",
+        "TEMP",
+        "SALN",
+        "SSH",
+        "TCHP",
+        "MLD"
+      ],
+      "provenance_note": "Real INCOIS RSMC HYCOM model output. The original source file must never be modified.",
+      "url_note": "INCOIS rotates this forecast product and keeps only the most recent runs; the 20260908 run referenced by earlier revisions has been retired upstream. Bump the filename/download_url to a run present in https://incois.gov.in/thredds/catalog/osf/currents2/catalog.xml when re-installing."
     },
     {
       "name": "HYCOM_BOB_SURFACE",
@@ -75,9 +101,28 @@
       "regenerate_command": "cd backend && python scripts/extract_hycom_bob.py",
       "requires": "HYCOM_RSMC_RAW",
       "manual_install": "Run scripts/setup-data.py (or backend/scripts/extract_hycom_bob.py) after installing HYCOM_RSMC_RAW.",
-      "expected_coords": ["TIME", "LAT", "LON"],
-      "expected_variables": ["UVEL", "VVEL", "TEMP", "SALN", "SSH", "TCHP", "MLD", "CURRENT_SPEED", "CURRENT_DIRECTION"],
-      "expected_region": {"min_lat": 5.0, "max_lat": 25.0, "min_lon": 80.0, "max_lon": 100.0},
+      "expected_coords": [
+        "TIME",
+        "LAT",
+        "LON"
+      ],
+      "expected_variables": [
+        "UVEL",
+        "VVEL",
+        "TEMP",
+        "SALN",
+        "SSH",
+        "TCHP",
+        "MLD",
+        "CURRENT_SPEED",
+        "CURRENT_DIRECTION"
+      ],
+      "expected_region": {
+        "min_lat": 5.0,
+        "max_lat": 25.0,
+        "min_lon": 80.0,
+        "max_lon": 100.0
+      },
       "provenance_note": "Derived product. Its metadata JSON (incois_hycom_bob_metadata.json, committed) records time range, region and variables."
     },
     {
@@ -123,8 +168,22 @@
       "committed": true,
       "auto_download": false,
       "is_test_fixture": true,
-      "expected_coords": ["TIME", "LAT", "LON"],
-      "expected_variables": ["UVEL", "VVEL", "TEMP", "SALN", "SSH", "TCHP", "MLD", "CURRENT_SPEED", "CURRENT_DIRECTION"],
+      "expected_coords": [
+        "TIME",
+        "LAT",
+        "LON"
+      ],
+      "expected_variables": [
+        "UVEL",
+        "VVEL",
+        "TEMP",
+        "SALN",
+        "SSH",
+        "TCHP",
+        "MLD",
+        "CURRENT_SPEED",
+        "CURRENT_DIRECTION"
+      ],
       "provenance_note": "SYNTHETIC TEST FIXTURE - contains constant/analytic placeholder values for schema and code-path testing only. Must never be used as real ocean data or substituted for production datasets at runtime."
     },
     {
@@ -140,9 +199,193 @@
       "committed": true,
       "auto_download": false,
       "is_test_fixture": true,
-      "expected_coords": ["TIME", "DEPTH", "LAT", "LON"],
-      "expected_variables": ["UVEL", "VVEL", "TEMP", "SALN", "SSH", "TCHP", "MLD"],
+      "expected_coords": [
+        "TIME",
+        "DEPTH",
+        "LAT",
+        "LON"
+      ],
+      "expected_variables": [
+        "UVEL",
+        "VVEL",
+        "TEMP",
+        "SALN",
+        "SSH",
+        "TCHP",
+        "MLD"
+      ],
       "provenance_note": "SYNTHETIC TEST FIXTURE - contains constant/analytic placeholder values for schema and code-path testing only. Must never be used as real ocean data or substituted for production datasets at runtime."
+    },
+    {
+      "name": "HYCOM_RSMC_RAW_SUBSETS",
+      "category": "local-scientific",
+      "required": false,
+      "purpose": "Archived Bay-of-Bengal NetCDFSubsets of every INCOIS RSMC HYCOM run currently published, so matchups can select the run whose time window covers an Argo profile. INCOIS deletes older runs.",
+      "local_path": "backend/data/raw/ocean/currents/RSMC_hycom_<YYYYMMDD>_bob_subset.nc",
+      "format": "NetCDF4 (CF-1.6 grid, cut with the INCOIS THREDDS NCSS service)",
+      "source": "INCOIS Ocean State Forecast THREDDS server (RSMC HYCOM currents product)",
+      "source_url": "https://incois.gov.in/thredds/catalog/osf/currents2/catalog.xml",
+      "download_url": "https://incois.gov.in/thredds/ncss/grid/osf/currents2",
+      "auto_download": false,
+      "regenerate_command": "python scripts/archive_hycom_runs.py",
+      "region": {
+        "min_lat": 5.0,
+        "max_lat": 25.0,
+        "min_lon": 80.0,
+        "max_lon": 100.0
+      },
+      "variables": [
+        "TEMP",
+        "SALN",
+        "UVEL",
+        "VVEL",
+        "SSH",
+        "TCHP",
+        "MLD"
+      ],
+      "archived_runs": [
+        {
+          "runDate": "20261004",
+          "filename": "RSMC_hycom_20261004_bob_subset.nc",
+          "timeStart": "2026-10-03T06:00:00.000000000",
+          "timeEnd": "2026-10-10T00:00:00.000000000",
+          "timeStepHours": 6.0,
+          "timeSteps": 28,
+          "depthLevelsM": [
+            0.0,
+            17.5,
+            52.5,
+            125.0,
+            275.0,
+            500.0
+          ],
+          "latCount": 349,
+          "lonCount": 334,
+          "bytes": 378615360,
+          "variables": [
+            "TEMP",
+            "SALN",
+            "UVEL",
+            "VVEL",
+            "SSH",
+            "TCHP",
+            "MLD"
+          ]
+        },
+        {
+          "runDate": "20261005",
+          "filename": "RSMC_hycom_20261005_bob_subset.nc",
+          "timeStart": "2026-10-04T06:00:00.000000000",
+          "timeEnd": "2026-10-11T00:00:00.000000000",
+          "timeStepHours": 6.0,
+          "timeSteps": 28,
+          "depthLevelsM": [
+            0.0,
+            17.5,
+            52.5,
+            125.0,
+            275.0,
+            500.0
+          ],
+          "latCount": 349,
+          "lonCount": 334,
+          "bytes": 378615360,
+          "variables": [
+            "TEMP",
+            "SALN",
+            "UVEL",
+            "VVEL",
+            "SSH",
+            "TCHP",
+            "MLD"
+          ]
+        },
+        {
+          "runDate": "20261006",
+          "filename": "RSMC_hycom_20261006_bob_subset.nc",
+          "timeStart": "2026-10-05T06:00:00.000000000",
+          "timeEnd": "2026-10-12T00:00:00.000000000",
+          "timeStepHours": 6.0,
+          "timeSteps": 28,
+          "depthLevelsM": [
+            0.0,
+            17.5,
+            52.5,
+            125.0,
+            275.0,
+            500.0
+          ],
+          "latCount": 349,
+          "lonCount": 334,
+          "bytes": 378615360,
+          "variables": [
+            "TEMP",
+            "SALN",
+            "UVEL",
+            "VVEL",
+            "SSH",
+            "TCHP",
+            "MLD"
+          ]
+        },
+        {
+          "runDate": "20261007",
+          "filename": "RSMC_hycom_20261007_bob_subset.nc",
+          "timeStart": "2026-10-06T06:00:00.000000000",
+          "timeEnd": "2026-10-13T00:00:00.000000000",
+          "timeStepHours": 6.0,
+          "timeSteps": 28,
+          "depthLevelsM": [
+            0.0,
+            17.5,
+            52.5,
+            125.0,
+            275.0,
+            500.0
+          ],
+          "latCount": 349,
+          "lonCount": 334,
+          "bytes": 378615360,
+          "variables": [
+            "TEMP",
+            "SALN",
+            "UVEL",
+            "VVEL",
+            "SSH",
+            "TCHP",
+            "MLD"
+          ]
+        },
+        {
+          "runDate": "20261008",
+          "filename": "RSMC_hycom_20261008_bob_subset.nc",
+          "timeStart": "2026-10-07T06:00:00.000000000",
+          "timeEnd": "2026-10-14T00:00:00.000000000",
+          "timeStepHours": 6.0,
+          "timeSteps": 28,
+          "depthLevelsM": [
+            0.0,
+            17.5,
+            52.5,
+            125.0,
+            275.0,
+            500.0
+          ],
+          "latCount": 349,
+          "lonCount": 334,
+          "bytes": 378615360,
+          "variables": [
+            "TEMP",
+            "SALN",
+            "UVEL",
+            "VVEL",
+            "SSH",
+            "TCHP",
+            "MLD"
+          ]
+        }
+      ],
+      "provenance_note": "Genuine INCOIS model output restricted to the Bay of Bengal by the publisher's own NetcdfSubset service; native depth axis, grid and time steps are unchanged. Never committed to Git."
     }
   ],
   "categories": {

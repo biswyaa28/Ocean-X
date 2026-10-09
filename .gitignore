@@ -29,10 +29,14 @@ backend/.pytest_cache/
 backend/.env
 
 # Large raw scientific datasets & binary NetCDF files
-# (kept local or downloaded via scripts/setup-data.py - see data/manifest.json)
-backend/data/raw/ocean/currents/
+# (kept local or downloaded via scripts/setup-data.py / archive_hycom_runs.py
+#  - see data/manifest.json and data/README.md)
+backend/data/raw/
 *.nc
 *.nc4
+*.nc.part
+*.partial
+*full-download-partial
 *.h5
 *.hdf5
 *.grib
@@ -41,9 +45,14 @@ backend/data/raw/ocean/currents/
 *.parquet
 # Generated/processed scientific outputs are not committed
 backend/data/processed/**/*.nc
+backend/data/processed/**/*.json
 
 # ...EXCEPT small synthetic test fixtures, which ARE committed
 !backend/tests/fixtures/*.nc
+!backend/data/processed/ocean/argo/argo_bob_processed.json
+!backend/data/processed/ocean/argo/argo_bob_metadata.json
+!backend/data/processed/ocean/incois_hycom_bob_metadata.json
+!backend/data/raw/ocean/argo/argo_bob_raw.json
 
 # IDE & OS
 .vscode/

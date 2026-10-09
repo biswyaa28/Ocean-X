@@ -156,9 +156,24 @@ def main():
     parser.add_argument("--check", action="store_true", help="report status and exit (exit 1 if required data is missing)")
     parser.add_argument("--download", action="store_true", help="download datasets that have a configured public source (confirmation required)")
     parser.add_argument("--process", action="store_true", help="regenerate derived datasets (run the HYCOM extractor)")
+    parser.add_argument(
+        "--archive-runs",
+        action="store_true",
+        help="archive a Bay-of-Bengal NCSS subset of every published INCOIS RSMC HYCOM run "
+             "(see scripts/archive_hycom_runs.py); INCOIS deletes older runs",
+    )
     parser.add_argument("--dataset", action="append", help="restrict action to the given dataset name(s); repeatable")
     parser.add_argument("--yes", "-y", action="store_true", help="assume 'yes' at confirmation prompts")
     args = parser.parse_args()
+
+    if args.archive_runs:
+        # Delegated to the dedicated archiver: it needs the publisher catalogue
+        # and per-run NCSS requests, which do not fit the manifest's one-URL model.
+        archiver = REPO_ROOT / "scripts" / "archive_hycom_runs.py"
+        cmd = [sys.executable, str(archiver)] + (["--force"] if args.yes else [])
+        print("OCEAN-X Model-Run Archiver")
+        print("=" * 60)
+        return subprocess.call(cmd, cwd=str(REPO_ROOT))
 
     manifest = load_manifest()
     datasets = manifest["datasets"]
