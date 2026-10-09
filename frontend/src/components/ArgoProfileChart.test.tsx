@@ -205,6 +205,61 @@ describe('ArgoProfileChart — robustness', () => {
     });
   });
 
+  describe('ArgoProfileChart — interpolated vs native model points', () => {
+    function renderMixedComparison() {
+      const normalized = normalizeArgoMatchupComparisons([
+        {
+          depthM: 0,
+          method: 'native',
+          argoTemperatureC: 29.8,
+          modelTemperatureC: 29.4,
+          matchedModelDepthM: 0,
+          argoSalinityPSU: 32.8,
+          modelSalinityPSU: 32.9,
+        },
+        {
+          depthM: 25,
+          method: 'interpolated',
+          argoTemperatureC: 28.7,
+          modelTemperatureC: 28.1,
+          matchedModelDepthM: 25,
+          argoSalinityPSU: 33.4,
+          modelSalinityPSU: 33.5,
+        },
+      ]);
+      return render(
+        <ArgoProfileChart normalized={normalizeArgoObservations([])} comparison={normalized} />
+      );
+    }
+
+    it('marks interpolated model points differently from native ones', () => {
+      const { container } = renderMixedComparison();
+      const chart = container.querySelectorAll('.recharts-wrapper')[0];
+      const fills = Array.from(chart.querySelectorAll('.recharts-dot')).map(
+        (dot) => dot.getAttribute('fill')
+      );
+
+      // Native model point: solid orange. Interpolated model point: hollow.
+      expect(fills).toContain('#f97316');
+      expect(fills).toContain('transparent');
+    });
+
+    it('discloses the interpolated/native split in the legend and panel header', () => {
+      renderMixedComparison();
+
+      expect(screen.getAllByText('NATIVE').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('INTERPOLATED').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/NATIVE LEVELS \+ VERTICAL INTERPOLATION/i)).toHaveLength(2);
+    });
+
+    it('hides the interpolation legend when every model point is native', () => {
+      renderComparison();
+
+      expect(screen.queryByText('INTERPOLATED')).not.toBeInTheDocument();
+      expect(screen.getAllByText(/NO INTERPOLATION/i)).toHaveLength(2);
+    });
+  });
+
   it('renders a deep profile (2000 m) with the full depth range on the axis', () => {
     const { container } = renderChart([
       obs(0, 30.0, 32.8),

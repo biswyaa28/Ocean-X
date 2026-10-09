@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import type { Station, GISLayer } from '../types/oceanlens';
 
 // Cesium mock must be in place BEFORE importing the component.
-import { cesiumMock, layerOps, resetLayerOps } from '../test/mocks/cesium';
+import { cesiumMock, layerOps, resetLayerOps, resetViewerOptions, viewerOptions, requestRenderCalls, inputActions, createdViewers } from '../test/mocks/cesium';
 vi.mock('cesium', () => ({ __esModule: true, ...cesiumMock }));
 vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
 
@@ -41,6 +41,7 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
 import { CesiumViewerInner } from './CesiumViewerInner';
 import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../test/fixtures/depthSliceFixtures';
 import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
+import { clearRasterCache } from '../utils/rasterGen';
 
 const stations: Station[] = [];
 const layers: GISLayer[] = [
@@ -85,6 +86,7 @@ const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 25))
 
 beforeEach(() => {
   resetLayerOps();
+  resetViewerOptions();
 });
 
 // ------------------------------------------------------------
@@ -314,7 +316,7 @@ describe('scenario 8 — payload removed (unavailable response)', () => {
 // Scenario 9: rapid selection churn
 // ------------------------------------------------------------
 describe('scenario 9 & 13 — rapid selection churn never accumulates layers', () => {
-  it('five rapid depth changes yield five adds and five removes (net one slice layer)', async () => {
+  it('five rapid depth changes never accumulate more than one live slice layer', async () => {
     const { rerender } = renderViewer({
       depthSliceVisible: true,
       depthSlicePayload: makeDepthSlicePayload({ matched_depth_m: 0, requested_depth_m: 0 }),
@@ -336,9 +338,17 @@ describe('scenario 9 & 13 — rapid selection churn never accumulates layers', (
     }
     await tick();
 
-    expect(adds().length).toBe(7); // places + initial + 5 churn adds
-    expect(removes().length).toBe(5); // every replaced slice cleaned up
-    // exactly one slice layer is live at the end: last add not removed
+    // Phase 2B: raster encoding is asynchronous, so a depth change that is
+    // superseded before its PNG encode completes is discarded instead of being
+    // added and immediately replaced. Fewer imagery adds/removes is the point
+    // (no wasted texture allocation, no stale flash) — the invariant that must
+    // hold is that exactly ONE slice layer is live at the end.
+    const sliceAdds = adds().filter((o) => (o.layer as { alpha: number }).alpha === 0.75);
+    const sliceRemoves = removes();
+    expect(sliceAdds.length).toBeGreaterThanOrEqual(1); // at least the newest slice is applied
+    expect(sliceAdds.length - sliceRemoves.length).toBe(1); // net exactly one live slice
+    expect(sliceRemoves.length).toBeLessThan(sliceAdds.length); // no over-removal
+    // the newest slice is the surviving one: it was never removed
     const lastSlice = adds()[adds().length - 1].layer;
     expect(removes().some((r) => r.layer === lastSlice)).toBe(false);
   });
@@ -659,3 +669,258 @@ describe('Phase 1C — scientific render configuration', () => {
     expect(removes().some((r) => r.layer === surface!.layer)).toBe(false);
   });
 });
+
+// ------------------------------------------------------------
+// Phase 2B: Cesium on-demand rendering (requestRenderMode)
+//
+// Cesium invalidates itself for camera movement, clock time and imagery/terrain
+// arrival. Everything the *application* mutates in place (entity fields, imagery
+// alpha, ...) must invalidate explicitly through requestRenderRef — and nothing
+// else may request frames, or requestRenderMode is defeated.
+// ------------------------------------------------------------
+describe('Phase 2B — Cesium on-demand rendering', () => {
+  function viewerOption(key: string): unknown {
+    const opts = (viewerOptions[0] ?? {}) as Record<string, unknown>;
+    return opts[key];
+  }
+
+  it('creates the viewer with requestRenderMode enabled (no continuous render loop)', async () => {
+    renderViewer();
+    await tick();
+
+    expect(viewerOptions.length).toBe(1);
+    expect(viewerOption('requestRenderMode')).toBe(true);
+    expect(viewerOption('maximumRenderTimeChange')).toBe(0);
+  });
+
+  it('invalidates the scene when the timeline timestamp changes', async () => {
+    const { rerender } = renderViewer({ timestamp: '2026-09-07T06:00:00Z' });
+    await tick();
+
+    const before = requestRenderCalls.length;
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+        timestamp="2026-09-07T18:00:00Z"
+      />
+    );
+    await tick();
+
+    expect(requestRenderCalls.length).toBeGreaterThan(before);
+  });
+
+  it('invalidates the scene when the depth slice changes', async () => {
+    const { rerender } = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 }),
+    });
+    await waitForSliceLegend();
+    await tick();
+
+    const before = requestRenderCalls.length;
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+        depthSliceVisible
+        depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 250, requested_depth_m: 250 })}
+      />
+    );
+    await tick();
+
+    expect(requestRenderCalls.length).toBeGreaterThan(before);
+  });
+
+  it('invalidates the scene when a surface layer is switched off (imagery removal)', async () => {
+    const sstActive = layers.map((l) => (l.id === 'sst' ? { ...l, active: true } : l));
+    const { rerender } = renderViewer({ layers: sstActive });
+    await tick();
+
+    const before = requestRenderCalls.length;
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+      />
+    );
+    await tick();
+
+    expect(removes().length).toBeGreaterThan(0);
+    expect(requestRenderCalls.length).toBeGreaterThan(before);
+  });
+
+  it('issues NO render requests while nothing changes (the overlay never defeats requestRenderMode)', async () => {
+    // All layers inactive: no raster fetch/generation can add render requests
+    // during the idle window, so any growth would come from an animation loop.
+    renderViewer({ timestamp: '2026-09-07T06:00:00Z' });
+    await tick();
+
+    const before = requestRenderCalls.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 120)); // ~7 animation frames
+    });
+
+    expect(requestRenderCalls.length).toBe(before);
+  });
+});
+
+// ------------------------------------------------------------
+// Phase 2B: raster imagery resource lifecycle (object URLs)
+// ------------------------------------------------------------
+describe('Phase 2B — raster imagery object URL lifecycle', () => {
+  let revokedUrls: string[];
+  // Captured before the suite overwrites them so afterEach can restore them.
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    // The raster cache is module-global and shared across tests in this file;
+    // without clearing it a slice generated by an earlier test (via the Data
+    // URL fallback) would be served as a cache hit and no Blob would be made.
+    clearRasterCache();
+    revokedUrls = [];
+    let counter = 0;
+    URL.createObjectURL = vi.fn(() => `blob:oceanx/${++counter}`);
+    URL.revokeObjectURL = vi.fn((url: string) => {
+      revokedUrls.push(url);
+    });
+    HTMLCanvasElement.prototype.toBlob = ((callback: BlobCallback) => {
+      callback(new Blob(['png'], { type: 'image/png' }));
+    }) as HTMLCanvasElement['toBlob'];
+  });
+
+  afterEach(() => {
+    // Restore the real environment. `revokeObjectURL` deliberately stays as a
+    // harmless no-op: React's global cleanup unmounts the component *after*
+    // this hook, and the unmount path releases its Blob URL.
+    if (originalCreateObjectURL) URL.createObjectURL = originalCreateObjectURL;
+    else Reflect.deleteProperty(URL, 'createObjectURL');
+    URL.revokeObjectURL = originalRevokeObjectURL ?? (() => {});
+    Reflect.deleteProperty(HTMLCanvasElement.prototype, 'toBlob');
+  });
+
+  it('hands Cesium an object URL and releases it when the slice is replaced', async () => {
+    const { rerender } = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 }),
+    });
+    await waitForSliceLegend();
+    await tick();
+
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(revokedUrls).toEqual([]); // the live slice keeps its URL
+
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+        depthSliceVisible
+        depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 250, requested_depth_m: 250 })}
+      />
+    );
+    await tick();
+
+    // the replaced slice's object URL was freed exactly once
+    expect(revokedUrls).toHaveLength(1);
+    expect(revokedUrls[0].startsWith('blob:')).toBe(true);
+  });
+
+  it('releases the object URL when the slice is hidden', async () => {
+    const { rerender } = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 }),
+    });
+    await waitForSliceLegend();
+    await tick();
+
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+        depthSliceVisible={false}
+        depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 })}
+      />
+    );
+    await tick();
+
+    expect(revokedUrls).toHaveLength(1);
+  });
+
+  it('releases the object URL on unmount (no leaked Blob URL)', async () => {
+    const { unmount } = renderViewer({
+      depthSliceVisible: true,
+      depthSlicePayload: makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 }),
+    });
+    await waitForSliceLegend();
+    await tick();
+
+    unmount();
+    expect(revokedUrls).toHaveLength(1);
+  });
+});
+
+// ------------------------------------------------------------
+// Phase 2B: interaction paths must survive on-demand rendering
+// ------------------------------------------------------------
+describe('Phase 2B — hover picking and camera interaction remain functional', () => {
+  it('still registers the RAF-throttled hover pick and can run it without throwing', async () => {
+    renderViewer({ timestamp: '2026-09-07T06:00:00Z' });
+    await tick();
+
+    const mouseMove = inputActions.find((a) => a.type === 2); // ScreenSpaceEventType.MOUSE_MOVE
+    expect(mouseMove).toBeDefined();
+
+    await act(async () => {
+      mouseMove!.action({ endPosition: { x: 10, y: 20 } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    });
+
+    // Picking is a scene *read*: it must never be a render-invalidation trigger
+    // (the hover path records the pick in perfMonitor instead).
+    expect(inputActions.filter((a) => a.type === 2)).toHaveLength(1);
+  });
+
+  it('leaves camera movement to Cesium (flyTo still drives the viewer camera)', async () => {
+    const { rerender } = renderViewer({ targetLocation: { lat: 12, lon: 80 } });
+    await tick();
+
+    const viewer = createdViewers[0];
+    expect(viewer).toBeDefined();
+    const flyToCalls = viewer.camera.flyTo.mock.calls.length;
+    expect(flyToCalls).toBeGreaterThan(0);
+
+    rerender(
+      <CesiumViewerInner
+        cyclone={null}
+        currentTrackIndex={0}
+        stations={stations}
+        layers={layers}
+        onSelectStation={() => {}}
+        targetLocation={{ lat: 20, lon: 90 }}
+      />
+    );
+    await tick();
+
+    // The camera change is auto-detected by Cesium's render loop; the component
+    // only needs to move the camera.
+    expect(viewer.camera.flyTo.mock.calls.length).toBeGreaterThan(flyToCalls);
+  });
+});
+
+

@@ -13,8 +13,8 @@ import {
 } from '../utils/depthSliceViz';
 import {
   DepthSliceRenderOptions,
-  generateLayerImageDataUrlCached,
-  generateDepthSliceImageDataUrlCached,
+  generateLayerImageSourceCached,
+  generateDepthSliceImageSourceCached,
 } from '../utils/rasterGen';
 import { perfMonitor } from '../utils/perfMonitor';
 
@@ -203,6 +203,27 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   // depth-slice behavior never remove each other's layers.
   const depthSliceLayerRef = useRef<Cesium.ImageryLayer | null>(null);
 
+  // Phase 2B — on-demand rendering invalidation + raster resource lifecycle.
+  //
+  // `requestRenderRef` is the single explicit invalidation entry point used by
+  // every state change that mutates the Cesium scene but that Cesium does NOT
+  // detect by itself (in-place entity updates, imagery opacity, ...). It is
+  // deliberately NOT called from the particle overlay's animation loop.
+  const requestRenderRef = useRef<() => void>(() => {});
+  // Removes the scene.postRender frame listener (instrumentation).
+  const postRenderRemoveRef = useRef<(() => void) | null>(null);
+  // Releases the object URL backing each raster imagery layer. Held per layer
+  // so replacing/removing a layer frees its Blob URL exactly once.
+  const rasterSourceReleaseRef = useRef<(() => void) | null>(null);
+  const depthSliceSourceReleaseRef = useRef<(() => void) | null>(null);
+
+  const releaseRasterSource = useCallback(() => {
+    if (rasterSourceReleaseRef.current) {
+      rasterSourceReleaseRef.current();
+      rasterSourceReleaseRef.current = null;
+    }
+  }, []);
+
   // Persistent keyed entity registry: avoids destructive removeAll() churn.
   const entityRegistryRef = useRef<Map<string, Cesium.Entity>>(new Map());
   // Signatures used to detect when a keyed entity's *structure* changes
@@ -283,6 +304,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             credit: 'Esri World Imagery',
           })
         ),
+        // Phase 2B — on-demand rendering. Cesium now only draws a frame when
+        // something it can detect changed (camera, clock time, imagery/terrain
+        // tile arrivals, explicit scene.requestRender()). Application state
+        // changes that Cesium cannot detect are invalidated explicitly through
+        // requestRenderRef below — see the "render invalidation" notes.
+        //
+        // maximumRenderTimeChange is 0 s (Cesium's default too): ANY change of
+        // clock simulation time requests a frame, so the time-dependent scene
+        // (sun light, celestial bodies, atmosphere) still redraws whenever the
+        // timeline timestamp advances. The clock itself never animates —
+        // shouldAnimate is always false and currentTime is only ever assigned
+        // from the application timestamp — so a static clock requests zero idle
+        // frames.
+        requestRenderMode: true,
+        maximumRenderTimeChange: 0.0,
         baseLayerPicker: false,
         geocoder: false,
         homeButton: false,
@@ -293,6 +329,20 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         animation: false,
         navigationHelpButton: false,
         fullscreenButton: false,
+      });
+
+      // Phase 2B: single explicit invalidation entry point + real frame counter.
+      // scene.postRender only fires for frames Cesium actually drew, so the
+      // counter measures the idle/interaction render frequency directly.
+      requestRenderRef.current = () => {
+        const currentViewer = viewerRef.current;
+        if (currentViewer && !currentViewer.isDestroyed()) {
+          currentViewer.scene.requestRender();
+          perfMonitor.recordCesiumRenderRequest();
+        }
+      };
+      postRenderRemoveRef.current = viewer.scene.postRender.addEventListener(() => {
+        perfMonitor.recordCesiumFrame();
       });
 
       // Add Place Names & Geographic Labels Overlay (Requirement 2)
@@ -359,6 +409,12 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       viewerRef.current = viewer;
       setViewerInstance(viewer);
 
+      // Phase 2B: the scene properties above (lighting, atmosphere, sun/moon,
+      // fog, sky box, background) are applied outside Cesium's change tracking,
+      // so the first invalidation is explicit. Camera flyTo + tile arrivals
+      // keep rendering afterwards until the globe is fully drawn.
+      requestRenderRef.current();
+
       // Event Handler for Station/Argo Clicks, Inspection & Dynamic Canvas Tooltips
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
@@ -391,13 +447,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         }
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-      // Mouse Move Handler for Dynamic Interactive Map Tooltips (Requirement 1)
-      handler.setInputAction((movement: { endPosition: Cesium.Cartesian2 }) => {
-        if (!movement.endPosition) {
-          setHoverTooltip(null);
-          return;
-        }
-        const pickedObject = viewer.scene.pick(movement.endPosition);
+      // Mouse Move Handler for Dynamic Interactive Map Tooltips with RAF Throttling (Phase 2A)
+      let pendingPickRaf: number | null = null;
+      let latestEndPosition: Cesium.Cartesian2 | null = null;
+
+      const processHoverPick = () => {
+        pendingPickRaf = null;
+        if (!latestEndPosition || !viewer || viewer.isDestroyed()) return;
+
+        const endPosition = latestEndPosition;
+        perfMonitor.recordHoverPick();
+
+        const pickedObject = viewer.scene.pick(endPosition);
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
           if (props.trackNodeData) {
@@ -407,8 +468,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
             setHoverTooltip({
               visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
+              x: endPosition.x,
+              y: endPosition.y,
               title: `TRACK NODE #${nodeIdx}`,
               cycloneName: cName,
               category: node.category || 'Cyclonic Storm',
@@ -425,8 +486,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             const st = props.stationData.getValue();
             setHoverTooltip({
               visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
+              x: endPosition.x,
+              y: endPosition.y,
               title: `STATION: ${st.name}`,
               lat: st.latitude,
               lon: st.longitude,
@@ -438,8 +499,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             const argo = props.argoData.getValue();
             setHoverTooltip({
               visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
+              x: endPosition.x,
+              y: endPosition.y,
               title: `ARGO FLOAT ${argo.float_id}`,
               lat: argo.latitude,
               lon: argo.longitude,
@@ -452,10 +513,43 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         }
 
         setHoverTooltip(null);
+      };
+
+      handler.setInputAction((movement: { endPosition: Cesium.Cartesian2 }) => {
+        if (!movement.endPosition) {
+          if (pendingPickRaf !== null) {
+            cancelAnimationFrame(pendingPickRaf);
+            pendingPickRaf = null;
+          }
+          latestEndPosition = null;
+          setHoverTooltip(null);
+          return;
+        }
+
+        latestEndPosition = movement.endPosition;
+        if (pendingPickRaf === null) {
+          pendingPickRaf = requestAnimationFrame(processHoverPick);
+        }
       }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
       return () => {
+        if (pendingPickRaf !== null) {
+          cancelAnimationFrame(pendingPickRaf);
+          pendingPickRaf = null;
+        }
         handler.destroy();
+        // Phase 2B: stop the frame instrumentation and drop every raster
+        // object URL so nothing outlives the viewer.
+        if (postRenderRemoveRef.current) {
+          postRenderRemoveRef.current();
+          postRenderRemoveRef.current = null;
+        }
+        requestRenderRef.current = () => {};
+        releaseRasterSource();
+        if (depthSliceSourceReleaseRef.current) {
+          depthSliceSourceReleaseRef.current();
+          depthSliceSourceReleaseRef.current = null;
+        }
         const registry = entityRegistryRef.current;
         const sigs = entitySigRef.current;
         if (viewerRef.current && !viewerRef.current.isDestroyed()) {
@@ -469,7 +563,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     } catch (err) {
       console.error('Cesium Globe initialization fallback:', err);
     }
-  }, []);
+  }, [releaseRasterSource]);
 
   // Handle Dynamic Camera FlyTo on Target Location Selection (including Sun & Moon targeting)
   useEffect(() => {
@@ -526,7 +620,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     });
   }, [targetLocation, timestamp]);
 
+  // Phase 2B — camera render invalidation.
+  //
+  // Camera movement / zoom / rotation needs no custom listener: Cesium's own
+  // render loop (Scene.render → View.checkForCameraUpdates) detects any camera
+  // change every frame and forces a frame, so interaction stays perfectly
+  // smooth with zero added listeners or throttling. The effects above only
+  // flyTo programmatically, which is camera movement too.
+  //
   // Synchronize Cesium JulianDate Clock with OceanLens Timeline Timestamp (Requirements 2, 3, 4)
+  //
+  // Phase 2B (requestRenderMode): the application clock NEVER animates
+  // (`shouldAnimate` is always false) — it is only ever set here from the
+  // timeline timestamp. Scientific time semantics are unchanged; the explicit
+  // requestRender below guarantees the time-dependent visuals (sun light,
+  // celestial bodies, atmosphere) are redrawn on every timeline change.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || !timestamp) return;
@@ -535,6 +643,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       const julianDate = safeJulianDate(timestamp);
       viewer.clock.currentTime = julianDate;
       viewer.clock.shouldAnimate = false;
+      requestRenderRef.current();
     } catch (err) {
       console.error('Error synchronizing Cesium JulianDate clock:', err);
     }
@@ -1056,11 +1165,20 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     perfMonitor.setEntityCount(registry.size);
     perfMonitor.recordTimelineUpdate(performance.now() - t0);
+
+    // Phase 2B (requestRenderMode): entity *in-place* updates (position,
+    // visibility, pixel size, label text, ...) are NOT scene-invalidating
+    // events in Cesium — EntityCollection.collectionChanged does not request a
+    // frame — so cyclone geometry, track nodes, Sun/Moon, station and Argo
+    // entity changes all invalidate here explicitly. (Add/remove of the entities
+    // themselves and camera movement are auto-detected by Cesium.)
+    requestRenderRef.current();
   }, [cyclone, currentTrackIndex, stations, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
 
   // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity / TCHP)
-  // Fetches layer slices with abort-based cancellation and reuses cached
-  // raster Data URLs for already-loaded timestamp/layer combinations.
+  // Phase 2B: raster encoding is now asynchronous (PNG Blob → object URL), so
+  // superseded generations are discarded instead of briefly flashing, and the
+  // layer's object URL is released on every replace/unmount.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
@@ -1070,12 +1188,15 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const showTCHP = isLayerActive('tchp');
 
     const abortController = new AbortController();
+    let active = true;
 
     if (!showSST && !showSaln && !showTCHP) {
       if (rasterLayerRef.current) {
         viewer.imageryLayers.remove(rasterLayerRef.current);
         rasterLayerRef.current = null;
+        requestRenderRef.current();
       }
+      releaseRasterSource();
       return () => {
         abortController.abort();
       };
@@ -1083,35 +1204,34 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     const targetLayer: 'sst' | 'salinity' | 'tchp' = showSST ? 'sst' : showSaln ? 'salinity' : 'tchp';
 
-    let active = true;
-
     async function loadRasterOverlay() {
-      const fetchT0 = performance.now();
       let data: Awaited<ReturnType<typeof apiProvider.getLayerData>> = null;
       try {
+        // Shared with the legend bounds fetch in page.tsx: one request, one grid.
         data = await apiProvider.getLayerData(targetLayer, timestamp, 3, abortController.signal);
       } catch {
         return; // aborted or failed
       }
-      if (!active || !data || !data.grid || !data.grid.values || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (!active || !data || !data.grid || !data.grid.values) return;
 
-      const { dataUrl, cacheHit, generationMs } = generateLayerImageDataUrlCached(
+      // Cache hit ⇒ pure lookup; miss ⇒ paint + one async PNG encode.
+      const source = await generateLayerImageSourceCached(
         targetLayer,
         data.grid.latitudes,
         data.grid.longitudes,
         data.grid.values,
         data.timestamp
       );
+      perfMonitor.recordRasterGen(source.generationMs, source.cacheHit);
+      perfMonitor.recordRasterSerialization(source.serializationMs, source.encoding);
 
-      perfMonitor.recordRasterGen(
-        cacheHit ? generationMs : (performance.now() - fetchT0),
-        cacheHit
-      );
-
-      if (!dataUrl || !active) return;
+      if (!active || !source.url || !viewerRef.current || viewerRef.current.isDestroyed()) {
+        source.release();
+        return;
+      }
 
       const provider = new Cesium.SingleTileImageryProvider({
-        url: dataUrl,
+        url: source.url,
         rectangle: Cesium.Rectangle.fromDegrees(
           data.bounds.minLon,
           data.bounds.minLat,
@@ -1122,14 +1242,26 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         tileHeight: 512,
       });
 
-      if (!active || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (!active || !viewerRef.current || viewerRef.current.isDestroyed()) {
+        source.release();
+        return;
+      }
 
+      // Atomic replace: remove the previous layer, free its object URL, then add
+      // the new one. The base imagery and the depth-slice layer are untouched.
       if (rasterLayerRef.current) {
         viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
       }
+      releaseRasterSource();
 
       rasterLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
       rasterLayerRef.current.alpha = 0.65;
+      rasterSourceReleaseRef.current = source.release;
+
+      // Phase 2B: imagery layer add/remove is auto-invalidating in Cesium, but
+      // the alpha assignment above is not — invalidate explicitly.
+      requestRenderRef.current();
     }
 
     loadRasterOverlay();
@@ -1140,9 +1272,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       if (viewerRef.current && !viewerRef.current.isDestroyed() && rasterLayerRef.current) {
         viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
         rasterLayerRef.current = null;
+        requestRenderRef.current();
       }
+      releaseRasterSource();
     };
-  }, [layers, timestamp, isLayerActive]);
+  }, [layers, timestamp, isLayerActive, releaseRasterSource]);
 
 
   // ============================================================
@@ -1162,8 +1296,14 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const viewer = viewerRef.current;
     if (viewer && !viewer.isDestroyed() && depthSliceLayerRef.current) {
       viewer.imageryLayers.remove(depthSliceLayerRef.current);
+      requestRenderRef.current();
     }
     depthSliceLayerRef.current = null;
+    // Phase 2B: the imagery layer owned this raster's object URL — free it.
+    if (depthSliceSourceReleaseRef.current) {
+      depthSliceSourceReleaseRef.current();
+      depthSliceSourceReleaseRef.current = null;
+    }
   }, []);
 
   // Latest opacity for layer (re)creation without re-adding on change.
@@ -1175,6 +1315,9 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     depthSliceOpacityRef.current = depthSliceOpacity;
     if (depthSliceLayerRef.current) {
       depthSliceLayerRef.current.alpha = depthSliceOpacity;
+      // ImageryLayer.alpha is not a scene-invalidating change under
+      // requestRenderMode — request the frame explicitly.
+      requestRenderRef.current();
     }
   }, [depthSliceOpacity]);
 
@@ -1210,39 +1353,63 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         }
       : undefined;
 
-    const { dataUrl, cacheHit, generationMs } = generateDepthSliceImageDataUrlCached(
-      payload.variable,
-      payload.matched_depth_m,
-      payload.grid.latitudes,
-      payload.grid.longitudes,
-      values,
-      payload.timestamp,
-      renderOptions
-    );
+    // Phase 2B: encoding is asynchronous, so a generation that is superseded
+    // (rapid depth/variable/palette/timestamp changes, slice hidden, unmount)
+    // must NOT add its layer afterwards. This is what prevents a stale slice
+    // from reappearing or lingering underneath the active one.
+    let superseded = false;
 
-    perfMonitor.recordRasterGen(generationMs, cacheHit);
+    (async () => {
+      const sliceLatitudes = payload.grid.latitudes;
+      const sliceLongitudes = payload.grid.longitudes;
 
-    if (!dataUrl) return;
+      const source = await generateDepthSliceImageSourceCached(
+        payload.variable,
+        payload.matched_depth_m,
+        sliceLatitudes,
+        sliceLongitudes,
+        values,
+        payload.timestamp,
+        renderOptions
+      );
 
-    const provider = new Cesium.SingleTileImageryProvider({
-      url: dataUrl,
-      rectangle: Cesium.Rectangle.fromDegrees(
-        payload.bounds.minLon,
-        payload.bounds.minLat,
-        payload.bounds.maxLon,
-        payload.bounds.maxLat
-      ),
-      tileWidth: 512,
-      tileHeight: 512,
-    });
+      perfMonitor.recordRasterGen(source.generationMs, source.cacheHit);
+      perfMonitor.recordRasterSerialization(source.serializationMs, source.encoding);
 
-    if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (superseded || !source.url) {
+        source.release();
+        return;
+      }
+      const currentViewer = viewerRef.current;
+      if (!currentViewer || currentViewer.isDestroyed()) {
+        source.release();
+        return;
+      }
 
-    // Atomic replace: remove the previous slice before adding the new one so
-    // old imagery never lingers underneath and layers never accumulate.
-    removeDepthSliceLayer();
-    depthSliceLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
-    depthSliceLayerRef.current.alpha = depthSliceOpacityRef.current;
+      const provider = new Cesium.SingleTileImageryProvider({
+        url: source.url,
+        rectangle: Cesium.Rectangle.fromDegrees(
+          payload.bounds.minLon,
+          payload.bounds.minLat,
+          payload.bounds.maxLon,
+          payload.bounds.maxLat
+        ),
+        tileWidth: 512,
+        tileHeight: 512,
+      });
+
+      // Atomic replace: remove the previous slice (and free its object URL)
+      // before adding the new one so old imagery never lingers underneath.
+      removeDepthSliceLayer();
+      depthSliceLayerRef.current = currentViewer.imageryLayers.addImageryProvider(provider);
+      depthSliceLayerRef.current.alpha = depthSliceOpacityRef.current;
+      depthSliceSourceReleaseRef.current = source.release;
+      requestRenderRef.current();
+    })();
+
+    return () => {
+      superseded = true;
+    };
   }, [depthSliceVisible, depthSlicePayload, depthSliceRender, removeDepthSliceLayer]);
 
   // Unmount cleanup: the depth-slice imagery layer dies with the viewer, but

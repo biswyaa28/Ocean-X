@@ -205,8 +205,58 @@ export interface ArgoProfile {
   provenance: ScientificProvenance;
 }
 
+/** How a matched level's model value was obtained (backend-reported). */
+export type MatchupMethod = 'native' | 'interpolated';
+
+/**
+ * Observation-model time-separation classification. "too_large" means both
+ * profiles are returned but residual statistics are withheld.
+ */
+export type MatchupTimeGapStatus = 'good' | 'marginal' | 'too_large';
+
+/** Horizontal sub-sampling applied by the backend. */
+export type MatchupSpatialMode = 'bilinear' | 'nearest';
+
+/**
+ * Vertical comparison mode applied by the backend.
+ * - 'model_levels' (default): compare at the model's own depth levels; the
+ *   float is interpolated onto each of them. Pairs are independent and the
+ *   residual excludes model interpolation error.
+ * - 'float_levels': interpolate the model onto every float depth. Includes
+ *   model interpolation error across the model's sparse depth levels.
+ * - 'native': nearest native model level within the matching tolerance.
+ */
+export type MatchupMode = 'model_levels' | 'float_levels' | 'native';
+
+/** Per-level method reported by the backend. */
+export type MatchupLevelMethod =
+  | 'native'
+  | 'interpolated'
+  | 'float_native'
+  | 'float_interpolated';
+
+/**
+ * How the float depth was obtained: "pressure_gsw" (TEOS-10 pressure-to-depth
+ * conversion at the float latitude) or "provided" (source depth_m unchanged).
+ * The profile-level summary may also be "mixed" or "unavailable".
+ */
+export type MatchupDepthSource = 'pressure_gsw' | 'provided' | 'mixed' | 'unavailable';
+
 export interface DepthComparison {
   depthM: number;
+  depthSource?: MatchupDepthSource | 'model_level' | null;
+  method?: MatchupLevelMethod | null;
+  /** model_levels mode only: the float levels bracketing this model level. */
+  modelDepthM?: number | null;
+  floatBracketTopM?: number | null;
+  floatBracketBottomM?: number | null;
+  floatBracketGapM?: number | null;
+  floatBracketMaxGapM?: number | null;
+  floatTemperatureMethod?: string | null;
+  floatSalinityMethod?: string | null;
+  floatTemperatureRejected?: string | null;
+  floatSalinityRejected?: string | null;
+  argoVariableSource?: 'adjusted' | 'raw' | null;
   argoTemperatureC?: number | null;
   modelTemperatureC?: number | null;
   temperatureResidualC?: number | null;
@@ -240,7 +290,57 @@ export interface MatchupDiagnostics {
   deepestMatchedObservationDepthM?: number | null;
   deepestMatchedModelDepthM?: number | null;
   repeatedNativeDepthMatchCount: number;
+  interpolatedLevelCount: number;
+  nativeLevelCount: number;
   interpolationApplied: boolean;
+  /**
+   * Levels whose Argo QC flags were absent from the source and were therefore
+   * accepted on the documented lenient assumption. A count above zero means
+   * part of the sample has no quality-control provenance.
+   */
+  missingQcLevelCount: number;
+  timeDifferenceHours?: number | null;
+  timeGapStatus?: MatchupTimeGapStatus | null;
+}
+
+/** Per-model-depth row of the regional summary. */
+export interface MatchupSummaryDepthRow {
+  modelDepthM: number;
+  temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+}
+
+export interface ArgoMatchupSummary {
+  matchMode: MatchupMode;
+  modelDataset: string;
+  modelDataStatus?: ScientificDataStatus;
+  modelRuns: string[];
+  floatBracketMaxGapM: number;
+  floatBracketMaxGapDeepM: number;
+  floatBracketDeepBreakpointM: number;
+  totalProfileCount: number;
+  includedProfileCount: number;
+  excludedProfileCount: number;
+  excludedProfileReasons: Record<string, number>;
+  excludedProfiles: { profileId: string; reason: string; excludedModelLevels?: string[] }[];
+  byModelDepth: MatchupSummaryDepthRow[];
+  overall: {
+    temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+    salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  };
+  profiles: {
+    profileId: string;
+    floatId: string;
+    observationTimestamp: string;
+    timeDifferenceHours: number | null;
+    timeGapStatus: MatchupTimeGapStatus | null;
+    modelRun?: string | null;
+    pairCount: number;
+    temperaturePairCount: number;
+    salinityPairCount: number;
+    temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+    salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  }[];
 }
 
 export interface ArgoMatchupResponse {
@@ -255,11 +355,31 @@ export interface ArgoMatchupResponse {
   matchedModelLat: number;
   matchedModelLon: number;
   timeDifferenceHours: number;
+  timeInterpolationApplied?: boolean;
+  timeGapStatus?: MatchupTimeGapStatus;
+  timeGapReason?: string | null;
+  statisticsSuppressed?: boolean;
+  modelRun?: string | null;
+  availableModelRuns?: { run: string; timeGapHours: number; leadHours: number; dataStatus?: string }[];
   distanceKm: number;
+  spatialMode?: MatchupSpatialMode;
   matchedDepths: number[];
   matchedPointCount: number;
   matchingToleranceM: number;
+  matchMode?: MatchupMode;
   modelDepthSelection: string;
+  depthSource?: MatchupDepthSource;
+  /** Variable family actually read for the whole profile: "raw" | "adjusted". */
+  variableBasis?: 'raw' | 'adjusted';
+  /** Requested Argo data mode ("R"/"A"/"D") or "auto" when auto-detected. */
+  argoDataMode?: 'R' | 'A' | 'D' | 'auto';
+  missingQcLevelCount?: number;
+  qcFlagsUsed?: { raw?: number[]; adjusted?: number[] };
+  /** model_levels mode: model levels that produced no pair, with the reason. */
+  excludedModelLevels?: { modelDepthM: number; reason: string }[];
+  floatBracketMaxGapM?: number;
+  floatBracketMaxGapDeepM?: number;
+  floatBracketDeepBreakpointM?: number;
   comparisons: DepthComparison[];
   dataStatus: DataStatus;
   source: string;

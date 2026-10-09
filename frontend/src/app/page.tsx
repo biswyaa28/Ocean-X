@@ -57,6 +57,7 @@ export default function Home() {
   const [dataMode, setDataMode] = useState<DataModeType>('REAL');
   const [datasetSynthetic, setDatasetSynthetic] = useState(false);
   const [datasetLoaded, setDatasetLoaded] = useState(false);
+  const [liveTimestamp, setLiveTimestamp] = useState(() => new Date().toISOString());
 
   // Single unified active tool state for all right-side tools
   const [activeRightTool, setActiveRightTool] = useState<ActiveRightTool>('storm');
@@ -193,6 +194,12 @@ export default function Home() {
 
   const currentPoint = activeTrack[Math.min(currentTrackIndex, activeTrack.length - 1)] || activeTrack[0];
 
+  // Single source of truth for the ocean-data timestamp. The legend effect and
+  // the Cesium raster overlay MUST resolve to the same key or Phase 2B's
+  // layer-data cache would key them separately and fetch the full grid twice.
+  const effectiveTimestamp =
+    oceanMode === 'LIVE' ? liveTimestamp : currentPoint?.timestamp;
+
   const metrics = useMemo<KPIMetrics | null>(() => {
     if (oceanMode === 'LIVE') return null;
 
@@ -217,6 +224,7 @@ export default function Home() {
     setOceanMode(newMode);
     setCurrentTrackIndex(0);
     if (newMode === 'LIVE') {
+      setLiveTimestamp(new Date().toISOString());
       setLayers((prev) =>
         prev.map((l) => {
           if (l.id === 'sst') return { ...l, active: true };
@@ -289,27 +297,45 @@ export default function Home() {
         return;
       }
       try {
-        const data = await apiProvider.getLayerData(activeLayer.id, currentPoint?.timestamp, 3, abortController.signal);
+        // Phase 2B: this shares the ApiProvider layer-data cache/dedup with the
+        // Cesium raster overlay, so the same layer + timestamp is fetched once
+        // (no duplicate HTTP request and no second full-grid download).
+        const data = await apiProvider.getLayerData(activeLayer.id, effectiveTimestamp, 3, abortController.signal);
         if (abortController.signal.aborted) return;
         if (data && data.grid && (data.grid.values || data.grid.u)) {
-          let vals: number[] = [];
+          // Single-pass bounds over the valid cells. Deliberately NOT
+          // Math.min(...vals) / Math.max(...vals): spreading a full-stride grid
+          // into an argument list overflows the engine argument limit on large
+          // slices (RangeError) and allocates a second array.
+          let min = Infinity;
+          let max = -Infinity;
           if (data.grid.values) {
-            vals = data.grid.values
-              .flat()
-              .filter((v): v is number => v !== null && v !== undefined && !isNaN(v) && v !== 0);
+            for (const row of data.grid.values) {
+              if (!row) continue;
+              for (const v of row) {
+                // Surface semantics: 0 == masked, so it never contributes bounds.
+                if (v === null || v === undefined || isNaN(v) || v === 0) continue;
+                if (v < min) min = v;
+                if (v > max) max = v;
+              }
+            }
           } else if (data.grid.u && data.grid.v) {
-            const uFlat = data.grid.u.flat();
-            const vFlat = data.grid.v.flat();
-            for (let i = 0; i < uFlat.length; i++) {
-              const u = uFlat[i], v = vFlat[i];
-              if (u !== null && v !== null && !isNaN(u) && !isNaN(v)) {
-                vals.push(Math.sqrt(u * u + v * v));
+            for (let i = 0; i < data.grid.u.length; i++) {
+              const uRow = data.grid.u[i];
+              const vRow = data.grid.v[i];
+              if (!uRow || !vRow) continue;
+              for (let j = 0; j < uRow.length; j++) {
+                const u = uRow[j];
+                const v = vRow[j];
+                if (u === null || u === undefined || v === null || v === undefined) continue;
+                if (isNaN(u) || isNaN(v)) continue;
+                const speed = Math.sqrt(u * u + v * v);
+                if (speed < min) min = speed;
+                if (speed > max) max = speed;
               }
             }
           }
-          if (vals.length > 0) {
-            const min = Math.min(...vals);
-            const max = Math.max(...vals);
+          if (isFinite(min) && isFinite(max)) {
             const mid = (min + max) / 2;
             setLegendBounds({
               min,
@@ -332,7 +358,7 @@ export default function Home() {
     return () => {
       abortController.abort();
     };
-  }, [activeLayer?.id, currentPoint?.timestamp, activeLayer]);
+  }, [activeLayer?.id, effectiveTimestamp, activeLayer]);
 
   // HYCOM model depth slice fetch (Phase 1B). Aborts in-flight requests on
   // rapid depth/variable/timestamp changes; the latest selection wins.
@@ -414,7 +440,7 @@ export default function Home() {
   const currentFlowDepthM = currentFlowFollowsSlice ? depthSliceSelection.depthM : 0;
   const currentFlowTimestamp = currentFlowFollowsSlice
     ? depthSliceSelection.timestamp
-    : currentPoint?.timestamp;
+    : effectiveTimestamp;
 
   useEffect(() => {
     if (!currentsLayerActive) {
@@ -719,7 +745,7 @@ export default function Home() {
           onInspectPoint={handleInspectPoint}
           onAstronomicalUpdate={setAstroData}
           targetLocation={targetLocation}
-          timestamp={oceanMode === 'LIVE' ? new Date().toISOString() : currentPoint?.timestamp}
+          timestamp={effectiveTimestamp}
         />
 
         {/* Vertical Rotated Margin Caption */}

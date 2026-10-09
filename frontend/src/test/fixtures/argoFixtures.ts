@@ -73,10 +73,19 @@ export function makeArgoMatchup(overrides: Partial<ArgoMatchupResponse> = {}): A
     matchedDepths: [0, 50],
     matchedPointCount: 2,
     matchingToleranceM: 15,
+    matchMode: 'native',
+    spatialMode: 'nearest',
+    variableBasis: 'raw',
+    argoDataMode: 'auto',
+    missingQcLevelCount: 0,
     modelDepthSelection: 'nearest native HYCOM model depth (no interpolation)',
+    depthSource: 'pressure_gsw',
+    qcFlagsUsed: { raw: [1, 2], adjusted: [1, 2, 5, 8] },
     comparisons: [
       {
         depthM: 0,
+        depthSource: 'pressure_gsw',
+        method: 'float_native',
         argoTemperatureC: 29.85,
         modelTemperatureC: 29.4,
         temperatureResidualC: -0.45,
@@ -87,6 +96,8 @@ export function makeArgoMatchup(overrides: Partial<ArgoMatchupResponse> = {}): A
       },
       {
         depthM: 50,
+        depthSource: 'pressure_gsw',
+        method: 'float_native',
         argoTemperatureC: 27.6,
         modelTemperatureC: 27.2,
         temperatureResidualC: -0.4,
@@ -112,8 +123,94 @@ export function makeArgoMatchup(overrides: Partial<ArgoMatchupResponse> = {}): A
       deepestMatchedObservationDepthM: 50,
       deepestMatchedModelDepthM: 50,
       repeatedNativeDepthMatchCount: 0,
+      interpolatedLevelCount: 0,
+      nativeLevelCount: 2,
       interpolationApplied: false,
+      missingQcLevelCount: 0,
+      timeDifferenceHours: 3.25,
+      timeGapStatus: 'good',
     },
+    timeGapStatus: 'good',
+    statisticsSuppressed: false,
+    modelRun: 'RSMC_hycom_20261008_bob_subset.nc',
     ...overrides,
   };
+}
+
+/**
+ * An interpolated-mode matchup: extra float levels recovered by vertical
+ * interpolation, and the depth basis reported by the backend.
+ */
+export function makeInterpolatedArgoMatchup(
+  overrides: Partial<ArgoMatchupResponse> = {}
+): ArgoMatchupResponse {
+  return makeArgoMatchup({
+    matchMode: 'float_levels',
+    spatialMode: 'bilinear',
+    modelDepthSelection:
+      'linear interpolation between native HYCOM model depths (includes model interpolation error across sparse levels)',
+    matchedPointCount: 3,
+    matchedDepths: [0, 25, 50],
+    comparisons: [
+      {
+        depthM: 0,
+        depthSource: 'pressure_gsw',
+        method: 'float_native',
+        argoTemperatureC: 29.85,
+        modelTemperatureC: 29.4,
+        temperatureResidualC: -0.45,
+        argoSalinityPSU: 32.84,
+        modelSalinityPSU: 32.9,
+        salinityResidualPSU: 0.06,
+        matchedModelDepthM: 0,
+      },
+      {
+        depthM: 25.05,
+        depthSource: 'pressure_gsw',
+        method: 'float_interpolated',
+        argoTemperatureC: 28.7,
+        modelTemperatureC: 28.1,
+        temperatureResidualC: -0.6,
+        argoSalinityPSU: 33.45,
+        modelSalinityPSU: 33.5,
+        salinityResidualPSU: 0.05,
+        matchedModelDepthM: 25.05,
+      },
+      {
+        depthM: 50,
+        depthSource: 'pressure_gsw',
+        method: 'float_native',
+        argoTemperatureC: 27.6,
+        modelTemperatureC: 27.2,
+        temperatureResidualC: -0.4,
+        argoSalinityPSU: 34.05,
+        modelSalinityPSU: 34.11,
+        salinityResidualPSU: 0.06,
+        matchedModelDepthM: 50,
+      },
+    ],
+    statistics: {
+      temperature: { n: 3, meanResidual: -0.4833, mae: 0.4833, rmse: 0.4986 },
+      salinity: { n: 3, meanResidual: 0.0567, mae: 0.0567, rmse: 0.0566 },
+    },
+    diagnostics: {
+      totalArgoObservations: 3,
+      matchedObservationCount: 3,
+      unmatchedObservationCount: 0,
+      matchedPercentage: 100,
+      deepestMatchedObservationDepthM: 50,
+      deepestMatchedModelDepthM: 50,
+      repeatedNativeDepthMatchCount: 0,
+      interpolatedLevelCount: 1,
+      nativeLevelCount: 2,
+      interpolationApplied: true,
+      missingQcLevelCount: 0,
+      timeDifferenceHours: 3.25,
+      timeGapStatus: 'good',
+    },
+    timeGapStatus: 'good',
+    statisticsSuppressed: false,
+    modelRun: 'RSMC_hycom_20261008_bob_subset.nc',
+    ...overrides,
+  });
 }

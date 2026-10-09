@@ -13,6 +13,13 @@ const getStations = vi.fn();
 const getLayers = vi.fn();
 const getArgoProfiles = vi.fn();
 const getRealCurrentFieldPayload = vi.fn();
+type GetLayerData = (
+  layerName: string,
+  timestamp?: string,
+  stride?: number,
+  signal?: AbortSignal
+) => Promise<null>;
+const getLayerData = vi.fn<GetLayerData>();
 
 vi.mock('../services/ApiProvider', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../services/ApiProvider')>();
@@ -28,7 +35,7 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
     getStations: () => getStations(),
     getLayers: () => getLayers(),
     getArgoProfiles: () => getArgoProfiles(),
-    getLayerData: vi.fn(async () => null),
+    getLayerData: (...args: [string, string | undefined, number, AbortSignal]) => getLayerData(...args),
     inspectPoint: vi.fn(async () => null),
     inspectCyclone: vi.fn(async () => null),
   });
@@ -64,6 +71,7 @@ beforeEach(() => {
   getLayers.mockResolvedValue([]);
   getArgoProfiles.mockResolvedValue([]);
   getRealCurrentFieldPayload.mockResolvedValue(null);
+  getLayerData.mockResolvedValue(null);
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({ available_timestamps: ['2026-09-07T06:00:00.000000000'] }),
@@ -368,8 +376,13 @@ describe('Home — Phase 1C scientific visualization controls', () => {
 
     const adds = layerOps.filter((o) => o.op === 'add');
     const removes = layerOps.filter((o) => o.op === 'remove');
-    expect(adds.length).toBe(addsAfterLoad + 3); // one add per palette change
-    expect(removes.length).toBeGreaterThanOrEqual(3); // every replaced slice cleaned up
+    // Phase 2B: raster encoding is asynchronous, so palette generations that
+    // are superseded before their PNG encode completes are discarded instead of
+    // being added and immediately replaced — one fewer add per superseded
+    // change, not an accumulation. The invariant: exactly ONE slice layer is
+    // live at the end and every replaced slice was freed.
+    expect(adds.length).toBe(addsAfterLoad + 1); // only the final palette raster is applied
+    expect(removes.length).toBe(1); // the one replaced slice was freed
     const lastSlice = adds[adds.length - 1].layer;
     expect(removes.some((r) => r.layer === lastSlice)).toBe(false); // net one slice layer
   });
@@ -675,5 +688,69 @@ describe('Home — Phase 1E real current field', () => {
       d.resolve(null);
       await Promise.resolve();
     });
+  });
+});
+
+// ============================================================
+// Phase 2B — LIVE mode must resolve ONE ocean-data timestamp
+//
+// The legend bounds fetch (page.tsx) and the Cesium raster overlay fetch
+// (CesiumViewerInner.tsx) both hit ApiProvider.getLayerData. If they resolve
+// different timestamps they key the Phase 2B cache separately and download the
+// full grid twice, and the legend describes a different slice than the raster
+// drawn beneath it.
+// ============================================================
+const SST_LAYERS: GISLayer[] = [
+  { id: 'sst', name: 'Sea Surface Temperature', category: 'physical', active: false, status: 'REAL', description: '', unit: '°C' },
+];
+
+describe('Home — Phase 2B LIVE-mode timestamp consistency', () => {
+  it('gives the legend and the Cesium raster the SAME timestamp (one layer-data cache key)', async () => {
+    getLayers.mockResolvedValue(SST_LAYERS);
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole('button', { name: /LIVE OCEAN/i }));
+
+    // legend bounds effect + Cesium surface-raster effect
+    await waitFor(() => {
+      expect(getLayerData.mock.calls.filter((c) => c[0] === 'sst').length).toBeGreaterThanOrEqual(2);
+    });
+
+    const timestamps = new Set(
+      getLayerData.mock.calls.filter((c) => c[0] === 'sst').map((c) => c[1])
+    );
+
+    expect(timestamps.size).toBe(1);
+    expect([...timestamps][0]).toEqual(expect.any(String));
+    expect(String([...timestamps][0]).length).toBeGreaterThan(0);
+  });
+
+  it('keeps that timestamp identical across unrelated re-renders (no per-render refetch storm)', async () => {
+    getLayers.mockResolvedValue(SST_LAYERS);
+
+    render(<Home />);
+    fireEvent.click(await screen.findByRole('button', { name: /LIVE OCEAN/i }));
+
+    await waitFor(() => {
+      expect(getLayerData.mock.calls.filter((c) => c[0] === 'sst').length).toBeGreaterThanOrEqual(2);
+    });
+
+    const before = new Set(
+      getLayerData.mock.calls.filter((c) => c[0] === 'sst').map((c) => c[1])
+    );
+
+    // Unrelated state change: Home re-renders without any change of model time.
+    // A timestamp derived per render would mint a new cache key here.
+    fireEvent.click(await screen.findByTitle(/show model depth slice/i));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const after = new Set(
+      getLayerData.mock.calls.filter((c) => c[0] === 'sst').map((c) => c[1])
+    );
+
+    expect(after).toEqual(before);
+    expect(after.size).toBe(1);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  generateDepthSliceImageDataUrlCached,
-  generateLayerImageDataUrlCached,
+  generateDepthSliceImageSourceCached,
+  generateLayerImageSourceCached,
   paintDepthSliceGrid,
   isMissingDepthValue,
   isSurfaceNoData,
@@ -151,7 +151,7 @@ describe('paintDepthSliceGrid with render options (Phase 1C)', () => {
   });
 });
 
-describe('generateDepthSliceImageDataUrlCached render-config cache keys (Phase 1C)', () => {
+describe('generateDepthSliceImageSourceCached render-config cache keys (Phase 1C)', () => {
   const viridis = getPaletteForVariable('temperature', 'viridis');
   const grid: (number | null)[][] = [[10, 20]];
 
@@ -159,44 +159,44 @@ describe('generateDepthSliceImageDataUrlCached render-config cache keys (Phase 1
     clearRasterCache();
   });
 
-  it('caches by the full render configuration (palette, range, scale) — no stale rasters', () => {
+  it('caches by the full render configuration (palette, range, scale) — no stale rasters', async () => {
     const linearViridis: DepthSliceRenderOptions = { palette: viridis, rangeMin: 10, rangeMax: 20, scale: 'linear' };
-    generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
-    const hit = generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
+    await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
+    const hit = await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', linearViridis);
     expect(hit.cacheHit).toBe(true);
 
     // different palette → regenerate
     const classic: DepthSliceRenderOptions = { palette: CLASSIC_PALETTE, rangeMin: 10, rangeMax: 20, scale: 'linear' };
     expect(
-      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', classic).cacheHit
+      (await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', classic)).cacheHit
     ).toBe(false);
 
     // different range → regenerate
     expect(
-      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, rangeMin: 12 }).cacheHit
+      (await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, rangeMin: 12 })).cacheHit
     ).toBe(false);
 
     // different scale → regenerate
     expect(
-      generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, scale: 'log' }).cacheHit
+      (await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', { ...linearViridis, scale: 'log' })).cacheHit
     ).toBe(false);
   });
 
-  it('a call without render options never collides with a configured raster of the same slice', () => {
+  it('a call without render options never collides with a configured raster of the same slice', async () => {
     const configured: DepthSliceRenderOptions = { palette: viridis, rangeMin: 10, rangeMax: 20, scale: 'linear' };
-    generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1', configured);
-    const plain = generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], grid, 't1');
+    await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1', configured);
+    const plain = await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], grid, 't1');
     expect(plain.cacheHit).toBe(false);
   });
 });
 
-describe('generateDepthSliceImageDataUrlCached (stubbed canvas)', () => {
+describe('generateDepthSliceImageSourceCached (stubbed canvas)', () => {
   beforeEach(() => {
     clearRasterCache();
   });
 
-  it('produces a data URL from the stubbed canvas', () => {
-    const res = generateDepthSliceImageDataUrlCached(
+  it('produces an image source from the stubbed canvas', async () => {
+    const res = await generateDepthSliceImageSourceCached(
       'temperature',
       50,
       [5, 6],
@@ -204,38 +204,39 @@ describe('generateDepthSliceImageDataUrlCached (stubbed canvas)', () => {
       [[20, 21], [null, 19]],
       '2026-09-07T06:00:00'
     );
-    expect(res.dataUrl).toBe('data:image/png;base64,STUB');
+    expect(res.url).toBe('data:image/png;base64,STUB');
+    expect(res.encoding).toBe('dataurl');
     expect(res.cacheHit).toBe(false);
   });
 
-  it('returns a cache hit for an identical variable/depth/timestamp/resolution', () => {
+  it('returns a cache hit for an identical variable/depth/timestamp/resolution', async () => {
     const grid: (number | null)[][] = [[20, 21], [null, 19]];
-    generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
-    const second = generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
+    await generateDepthSliceImageSourceCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
+    const second = await generateDepthSliceImageSourceCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
     expect(second.cacheHit).toBe(true);
   });
 
-  it('does not serve a cached raster across different depths (avoid stale slice)', () => {
+  it('does not serve a cached raster across different depths (avoid stale slice)', async () => {
     const grid = [[20, 21], [null, 19]] as (number | null)[][];
-    generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
-    const other = generateDepthSliceImageDataUrlCached('temperature', 100, [5, 6], [80, 81], grid, 't1');
+    await generateDepthSliceImageSourceCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
+    const other = await generateDepthSliceImageSourceCached('temperature', 100, [5, 6], [80, 81], grid, 't1');
     expect(other.cacheHit).toBe(false);
   });
 
-  it('does not serve a cached raster across different variables', () => {
+  it('does not serve a cached raster across different variables', async () => {
     const grid = [[20, 21], [null, 19]] as (number | null)[][];
-    generateDepthSliceImageDataUrlCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
-    const other = generateDepthSliceImageDataUrlCached('salinity', 50, [5, 6], [80, 81], grid, 't1');
+    await generateDepthSliceImageSourceCached('temperature', 50, [5, 6], [80, 81], grid, 't1');
+    const other = await generateDepthSliceImageSourceCached('salinity', 50, [5, 6], [80, 81], grid, 't1');
     expect(other.cacheHit).toBe(false);
   });
 
-  it('returns empty dataUrl for empty grids', () => {
-    const res = generateDepthSliceImageDataUrlCached('temperature', 50, [], [], [], 't');
-    expect(res.dataUrl).toBe('');
+  it('returns empty url for empty grids', async () => {
+    const res = await generateDepthSliceImageSourceCached('temperature', 50, [], [], [], 't');
+    expect(res.url).toBe('');
     expect(res.cacheHit).toBe(false);
   });
 
-  it('returns empty dataUrl when the 2d canvas context is unavailable', async () => {
+  it('returns empty url (and a safe no-op release) when the 2d canvas context is unavailable', async () => {
     // Fresh module copy: the shared raster context is cached at module level,
     // so the unavailable-canvas path needs an uncontaminated module.
     vi.resetModules();
@@ -243,23 +244,142 @@ describe('generateDepthSliceImageDataUrlCached (stubbed canvas)', () => {
     HTMLCanvasElement.prototype.getContext = vi.fn(() => null);
     try {
       const fresh = await import('./rasterGen');
-      const res = fresh.generateDepthSliceImageDataUrlCached('temperature', 50, [5], [80], [[20]], 't');
-      expect(res.dataUrl).toBe('');
+      const res = await fresh.generateDepthSliceImageSourceCached('temperature', 50, [5], [80], [[20]], 't');
+      expect(res.url).toBe('');
       expect(res.cacheHit).toBe(false);
+      expect(() => res.release()).not.toThrow();
     } finally {
       HTMLCanvasElement.prototype.getContext = original;
       vi.resetModules();
     }
   });
 
-  it('leaves the surface generator behavior intact (surface still caches separately)', () => {
-    const res = generateLayerImageDataUrlCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
-    expect(res.dataUrl).toBe('data:image/png;base64,STUB');
-    const again = generateLayerImageDataUrlCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+  it('leaves the surface generator behavior intact (surface still caches separately)', async () => {
+    const res = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+    expect(res.url).toBe('data:image/png;base64,STUB');
+    const again = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
     expect(again.cacheHit).toBe(true);
     // and a depth slice at the same timestamp does not collide with it
-    const depth = generateDepthSliceImageDataUrlCached('sst', 0, [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+    const depth = await generateDepthSliceImageSourceCached('sst', 0, [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
     expect(depth.cacheHit).toBe(false);
+  });
+});
+
+// ============================================================
+// Phase 2B — PNG Blob / object URL image-source lifecycle
+//
+// jsdom implements neither canvas.toBlob nor URL.createObjectURL, so every
+// test above only exercises the Data URL fallback. These tests install the
+// real browser path explicitly and pin the Phase 2B contract:
+//   * encoding is asynchronous (PNG Blob); no Base64 string is produced
+//   * each materialization owns an independent object URL
+//   * release() revokes exactly once and is idempotent
+//   * a superseded generation releases its URL instead of leaking it
+// ============================================================
+describe('Phase 2B — PNG Blob / object URL image sources', () => {
+  let createdUrls: string[];
+  let revokedUrls: string[];
+  const blobPayload = new Blob(['png-bytes'], { type: 'image/png' });
+
+  beforeEach(() => {
+    clearRasterCache();
+    createdUrls = [];
+    revokedUrls = [];
+
+    let counter = 0;
+    URL.createObjectURL = vi.fn(() => {
+      const url = `blob:oceanx/${++counter}`;
+      createdUrls.push(url);
+      return url;
+    });
+    URL.revokeObjectURL = vi.fn((url: string) => {
+      revokedUrls.push(url);
+    });
+    HTMLCanvasElement.prototype.toBlob = ((callback: BlobCallback) => {
+      callback(blobPayload);
+    }) as HTMLCanvasElement['toBlob'];
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(URL, 'createObjectURL');
+    Reflect.deleteProperty(URL, 'revokeObjectURL');
+    Reflect.deleteProperty(HTMLCanvasElement.prototype, 'toBlob');
+  });
+
+  it('serializes through an async PNG Blob and hands Cesium an object URL', async () => {
+    const res = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+
+    expect(res.encoding).toBe('blob');
+    expect(res.url).toBe(createdUrls[0]);
+    expect(res.url.startsWith('blob:')).toBe(true);
+    expect(res.cacheHit).toBe(false);
+    // the synchronous Base64 string is never built on this path
+    expect(res.url.startsWith('data:')).toBe(false);
+  });
+
+  it('release() revokes the object URL exactly once (idempotent)', async () => {
+    const res = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+
+    expect(revokedUrls).toEqual([]);
+    res.release();
+    expect(revokedUrls).toEqual([res.url]);
+    res.release();
+    res.release();
+    expect(revokedUrls).toEqual([res.url]);
+  });
+
+  it('a cache hit materializes an independent object URL (one consumer cannot break another)', async () => {
+    const first = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+    const second = await generateLayerImageSourceCached('sst', [5, 6], [80, 81], [[28, 29], [30, 31]], 't1');
+
+    expect(second.cacheHit).toBe(true);
+    expect(second.url).not.toBe(first.url);
+    expect(createdUrls).toHaveLength(2);
+
+    // releasing one consumer's URL never revokes the other consumer's URL
+    second.release();
+    expect(revokedUrls).toEqual([second.url]);
+    first.release();
+    expect(revokedUrls).toEqual([second.url, first.url]);
+  });
+
+  it('a superseded generation can release its URL without touching the live one (depth churn)', async () => {
+    const superseded = await generateDepthSliceImageSourceCached('temperature', 50, [5], [80], [[20]], 't1');
+    const live = await generateDepthSliceImageSourceCached('temperature', 100, [5], [80], [[20]], 't1');
+
+    // the superseded slice is discarded by the caller before it is ever drawn
+    superseded.release();
+    expect(revokedUrls).toEqual([superseded.url]);
+    expect(live.url.startsWith('blob:')).toBe(true);
+    expect(revokedUrls).not.toContain(live.url);
+  });
+
+  it('falls back to the Data URL path when the Blob encoder yields nothing', async () => {
+    HTMLCanvasElement.prototype.toBlob = ((callback: BlobCallback) => {
+      callback(null); // encoder failure
+    }) as HTMLCanvasElement['toBlob'];
+
+    const res = await generateLayerImageSourceCached('sst', [5], [80], [[28]], 't1');
+    expect(res.encoding).toBe('dataurl');
+    expect(res.url).toBe('data:image/png;base64,STUB');
+    expect(createdUrls).toEqual([]); // no object URL was ever created
+    expect(() => res.release()).not.toThrow();
+  });
+
+  it('falls back to the Data URL path when object URLs are unavailable', async () => {
+    Reflect.deleteProperty(URL, 'createObjectURL');
+
+    const res = await generateLayerImageSourceCached('sst', [5], [80], [[28]], 't1');
+    expect(res.encoding).toBe('dataurl');
+    expect(res.url).toBe('data:image/png;base64,STUB');
+    expect(revokedUrls).toEqual([]);
+  });
+
+  it('a surface raster and a depth slice at the same timestamp get separate object URLs', async () => {
+    const surface = await generateLayerImageSourceCached('sst', [5], [80], [[28]], 't1');
+    const slice = await generateDepthSliceImageSourceCached('sst', 0, [5], [80], [[28]], 't1');
+    expect(surface.url).not.toBe(slice.url);
+    expect(createdUrls).toHaveLength(2);
   });
 });
 

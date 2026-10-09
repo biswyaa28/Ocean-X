@@ -345,3 +345,62 @@ describe('normalizeArgoObservations — extreme but legitimate profiles', () => 
     expect(result.stats.maxDepthM).toBe(500);
   });
 });
+
+describe('normalizeArgoMatchupComparisons — interpolated vs native method', () => {
+  it('carries the backend method through to the model chart points', () => {
+    const normalized = normalizeArgoMatchupComparisons([
+      {
+        depthM: 0,
+        method: 'native',
+        argoTemperatureC: 29.85,
+        modelTemperatureC: 29.4,
+        matchedModelDepthM: 0,
+      },
+      {
+        depthM: 25.05,
+        method: 'interpolated',
+        argoTemperatureC: 28.7,
+        modelTemperatureC: 28.1,
+        matchedModelDepthM: 25.05,
+      },
+    ]);
+
+    const modelPoints = normalized.temperaturePoints.filter((p) => p.series === 'HYCOM MODEL');
+    expect(modelPoints.map((p) => p.method)).toEqual(['native', 'interpolated']);
+    expect(normalized.stats.interpolationApplied).toBe(true);
+    expect(normalized.stats.interpolatedCount).toBe(1);
+    expect(normalized.stats.nativeCount).toBe(1);
+  });
+
+  it('reports no interpolation when every matched level is native', () => {
+    const normalized = normalizeArgoMatchupComparisons([
+      {
+        depthM: 50,
+        method: 'native',
+        argoTemperatureC: 27.6,
+        modelTemperatureC: 27.2,
+        matchedModelDepthM: 50,
+      },
+    ]);
+
+    expect(normalized.stats.interpolationApplied).toBe(false);
+    expect(normalized.stats.interpolatedCount).toBe(0);
+    expect(normalized.stats.nativeCount).toBe(1);
+  });
+
+  it('never invents a method when the backend omits it', () => {
+    const normalized = normalizeArgoMatchupComparisons([
+      {
+        depthM: 50,
+        argoTemperatureC: 27.6,
+        modelTemperatureC: 27.2,
+        matchedModelDepthM: 50,
+      },
+    ]);
+
+    expect(
+      normalized.temperaturePoints.every((p) => p.method === undefined)
+    ).toBe(true);
+    expect(normalized.stats.interpolationApplied).toBe(false);
+  });
+});

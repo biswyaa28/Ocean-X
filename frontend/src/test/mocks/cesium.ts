@@ -9,6 +9,25 @@ import { vi } from 'vitest';
 
 export const layerOps: { op: 'add' | 'remove'; layer: unknown }[] = [];
 
+/** Viewer constructor options, in creation order (Phase 2B assertions). */
+export const viewerOptions: unknown[] = [];
+
+/** Every Viewer created since the last reset (Phase 2B assertions). */
+export const createdViewers: FakeViewer[] = [];
+
+/** Explicit scene.requestRender() calls recorded across all viewers. */
+export const requestRenderCalls: unknown[] = [];
+
+export function resetViewerOptions() {
+  viewerOptions.length = 0;
+  createdViewers.length = 0;
+  requestRenderCalls.length = 0;
+  inputActions.length = 0;
+}
+
+/** Registered ScreenSpaceEventHandler input actions, in registration order. */
+export const inputActions: { type: number; action: (arg: unknown) => void }[] = [];
+
 export class FakeImageryLayer {
   alpha = 1;
   show = true;
@@ -39,7 +58,9 @@ class FakeImageryLayerCollection {
 }
 
 class FakeScreenSpaceEventHandler {
-  setInputAction = vi.fn();
+  setInputAction = vi.fn((action: (arg: unknown) => void, type: number) => {
+    inputActions.push({ type, action });
+  });
   destroy = vi.fn();
 }
 
@@ -95,6 +116,66 @@ function fakeColor() {
   return c;
 }
 
+/**
+ * Fake Cesium Viewer. Records constructor options (Phase 2B asserts
+ * `requestRenderMode`), explicit `scene.requestRender()` invalidation calls and
+ * the registered `scene.postRender` frame listeners.
+ */
+export class FakeViewer {
+  imageryLayers = new FakeImageryLayerCollection();
+  entities = { add: vi.fn(() => ({})), remove: vi.fn(() => true) };
+  postRenderListeners: Array<() => void> = [];
+  scene = {
+    canvas: {},
+    pick: vi.fn(),
+    light: null,
+    globe: {} as Record<string, unknown>,
+    skyBox: null,
+    sun: null,
+    moon: null,
+    skyAtmosphere: null,
+    fog: null,
+    backgroundColor: null,
+    requestRender: vi.fn(() => {
+      requestRenderCalls.push(this);
+    }),
+    postRender: {
+      addEventListener: vi.fn((listener: () => void) => {
+        this.postRenderListeners.push(listener);
+        return () => {
+          const idx = this.postRenderListeners.indexOf(listener);
+          if (idx >= 0) this.postRenderListeners.splice(idx, 1);
+        };
+      }),
+      removeEventListener: vi.fn(),
+    },
+    preRender: { addEventListener: vi.fn(() => () => {}), removeEventListener: vi.fn() },
+    camera: { getPickRay: vi.fn(), flyTo: vi.fn() },
+  };
+  camera = {
+    flyTo: vi.fn(),
+    positionWC: new FakeCartesian3(1, 2, 3),
+    moveStart: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    moveEnd: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+  };
+  clock = { currentTime: null, shouldAnimate: false };
+  destroy = vi.fn();
+  isDestroyed = vi.fn(() => false);
+  /** The container element the viewer was constructed with (Cesium's 1st arg). */
+  container: unknown = null;
+
+  constructor(container?: unknown, options?: unknown) {
+    this.container = container;
+    viewerOptions.push(options);
+    createdViewers.push(this);
+  }
+
+  /** Test helper mirroring Cesium's postRender frame notification. */
+  emitPostRender() {
+    for (const listener of [...this.postRenderListeners]) listener();
+  }
+}
+
 export const cesiumMock = {
   Ion: { defaultAccessToken: '' },
   ImageryLayer: FakeImageryLayer,
@@ -114,34 +195,7 @@ export const cesiumMock = {
     show = true;
     onlySunLighting = true;
   },
-  Viewer: class {
-    imageryLayers = new FakeImageryLayerCollection();
-    entities = { add: vi.fn(() => ({})), remove: vi.fn(() => true) };
-    scene = {
-      canvas: {},
-      pick: vi.fn(),
-      light: null,
-      globe: {} as Record<string, unknown>,
-      skyBox: null,
-      sun: null,
-      moon: null,
-      skyAtmosphere: null,
-      fog: null,
-      backgroundColor: null,
-      postRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-      preRender: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-      camera: { getPickRay: vi.fn(), flyTo: vi.fn() },
-    };
-    camera = {
-      flyTo: vi.fn(),
-      positionWC: new FakeCartesian3(1, 2, 3),
-      moveStart: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-      moveEnd: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-    };
-    clock = { currentTime: null, shouldAnimate: false };
-    destroy = vi.fn();
-    isDestroyed = vi.fn(() => false);
-  },
+  Viewer: FakeViewer,
   ScreenSpaceEventHandler: FakeScreenSpaceEventHandler,
   ScreenSpaceEventType: { LEFT_CLICK: 1, MOUSE_MOVE: 2 },
   Cartesian2: class {
@@ -204,7 +258,8 @@ export const cesiumMock = {
   Cartographic: { fromCartesian: vi.fn(() => ({ latitude: 0, longitude: 0 })) },
   VerticalOrigin: { BOTTOM: 1 },
   LabelStyle: { FILL_AND_OUTLINE: 2 },
-  defined: vi.fn(() => true),
+  // Mirrors Cesium.defined: false for null/undefined (short-circuits pick guards).
+  defined: vi.fn((value: unknown) => value !== undefined && value !== null),
 };
 
 export function resetLayerOps() {
