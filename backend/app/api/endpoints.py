@@ -1,4 +1,5 @@
-from typing import List, Optional
+import math
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import settings
@@ -28,7 +29,19 @@ from app.providers.incois_provider import (
 )
 from app.providers.argo_provider import argo_provider
 from app.services.risk_engine import calculate_prototype_risk
-from app.services.model_observation_matchup import match_argo_with_hycom
+from app.services.model_observation_matchup import (
+    DEFAULT_MATCH_MODE,
+    match_argo_with_hycom,
+)
+from app.services.matchup_summary import (
+    REASON_COARSE,
+    REASON_NO_OVERLAP,
+    REASON_NO_PAIRS,
+    REASON_TIME_GAP,
+    REASON_UNAVAILABLE,
+    exclusion_counts,
+    summarize_matches,
+)
 
 
 router = APIRouter()
@@ -439,11 +452,158 @@ def get_argo_observations(profile_id: str):
 
 
 @router.get("/argo/{profile_id}/matchup", response_model=ArgoMatchupResponse)
-def get_argo_hycom_matchup(profile_id: str):
-    matchup = match_argo_with_hycom(profile_id)
+def get_argo_hycom_matchup(
+    profile_id: str,
+    matchMode: Optional[str] = Query(
+        None,
+        description="Vertical sub-sampling: 'interpolated' (default) blends between native HYCOM depths; "
+                    "'native' uses the nearest native level within the tolerance only",
+    ),
+    spatialMode: Optional[str] = Query(
+        None,
+        description="Horizontal sub-sampling: 'bilinear' (default) blends the four surrounding cells; "
+                    "'nearest' uses the closest grid cell only",
+    ),
+    # snake_case aliases so both the wire convention and the response field
+    # names work for callers.
+    match_mode: Optional[str] = Query(None, include_in_schema=False),
+    spatial_mode: Optional[str] = Query(None, include_in_schema=False),
+):
+    matchup = match_argo_with_hycom(
+        profile_id,
+        match_mode=matchMode if matchMode is not None else match_mode,
+        spatial_mode=spatialMode if spatialMode is not None else spatial_mode,
+    )
     if not matchup:
         raise HTTPException(status_code=404, detail="Could not match Argo profile with HYCOM dataset")
     return matchup
+
+
+def _finite(value: Any) -> Optional[float]:
+    """``math.isfinite`` that tolerates ``None`` and non-numeric model cells."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(value) else None
+    return None
+
+
+def _exclusion_reason(matchup: Dict[str, Any]) -> str:
+    """Classify a profile that yielded no comparison row at all.
+
+    Three findings look identical in the response (an empty ``comparisons``
+    list) but mean different things, so they are told apart here rather than
+    collapsing every one of them into "no overlap".
+    """
+    rejected = [entry.get("reason") for entry in (matchup.get("excludedModelLevels") or [])]
+    if any(value == "float_sampling_too_coarse" for value in rejected):
+        return REASON_COARSE
+    if not rejected:
+        # The float never entered the model's depth range, so no model level was
+        # even a candidate.
+        return REASON_NO_OVERLAP
+    # Model levels were in range but every one of them was rejected.
+    return REASON_NO_PAIRS
+
+
+@router.get("/argo/matchup/summary")
+def get_argo_matchup_summary():
+    """Regional model-vs-observation summary across every ingested profile.
+
+    Runs the default ``model_levels`` matchup for each profile and aggregates
+    per model depth. Only profiles whose observation-model time gap is
+    "good" contribute; every excluded profile is counted with a reason so a
+    missing contribution is visible rather than silent.
+
+    Statistics are aggregated per profile and then per depth (see
+    ``matchup_summary``), so a profile that sampled finely does not dominate.
+    """
+    profiles = argo_provider.get_profiles()
+    matches = []
+    exclusions = []
+
+    for profile in profiles:
+        matchup = match_argo_with_hycom(profile["profile_id"])
+        if matchup is None:
+            exclusions.append((REASON_UNAVAILABLE, {"profileId": profile["profile_id"]}))
+            continue
+
+        profile_id = profile["profile_id"]
+        if matchup.get("statusMessage"):
+            exclusions.append((REASON_UNAVAILABLE, {"profileId": profile_id}))
+            continue
+        if matchup.get("timeGapStatus") != "good":
+            exclusions.append((REASON_TIME_GAP, {"profileId": profile_id}))
+            continue
+
+        comparisons = matchup.get("comparisons") or []
+        if not comparisons:
+            exclusions.append((_exclusion_reason(matchup), {
+                "profileId": profile_id,
+                "excludedModelLevels": [
+                    entry.get("reason")
+                    for entry in (matchup.get("excludedModelLevels") or [])
+                ],
+            }))
+            continue
+
+        # A profile can produce comparison rows whose every model and/or float
+        # value was rejected downstream (QC, or a nil model cell). Such a profile
+        # has rows but no usable statistic, so counting it as included would
+        # inflate the denominator of the regional figures.
+        if not any(
+            _finite(pair.get("temperatureResidualC")) is not None
+            or _finite(pair.get("salinityResidualPSU")) is not None
+            for pair in comparisons
+        ):
+            exclusions.append((REASON_NO_PAIRS, {
+                "profileId": profile_id,
+                "excludedModelLevels": [
+                    entry.get("reason")
+                    for entry in (matchup.get("excludedModelLevels") or [])
+                ],
+            }))
+            continue
+
+        matches.append({
+            "profileId": profile_id,
+            "floatId": matchup.get("floatId"),
+            "observationTimestamp": matchup.get("observationTimestamp"),
+            "timeDifferenceHours": matchup.get("timeDifferenceHours"),
+            "timeGapStatus": matchup.get("timeGapStatus"),
+            "modelRun": matchup.get("modelRun"),
+            "modelDataStatus": matchup.get("modelDataStatus"),
+            "comparisons": comparisons,
+        })
+
+    summary = summarize_matches(matches)
+    counts = exclusion_counts(exclusions)
+    excluded_profiles = [
+        {"profileId": detail.get("profileId"), "reason": reason, **{
+            k: v for k, v in detail.items() if k != "profileId"
+        }}
+        for reason, detail in exclusions
+    ]
+
+    return {
+        "matchMode": DEFAULT_MATCH_MODE,
+        "modelDataset": "INCOIS HYCOM",
+        "modelDataStatus": next(
+            (m.get("modelDataStatus") for m in matches if m.get("modelDataStatus")), "UNAVAILABLE"
+        ),
+        "modelRuns": sorted({m.get("modelRun") for m in matches if m.get("modelRun")}),
+        "floatBracketMaxGapM": settings.FLOAT_BRACKET_MAX_GAP_M,
+        "floatBracketMaxGapDeepM": settings.FLOAT_BRACKET_MAX_GAP_DEEP_M,
+        "floatBracketDeepBreakpointM": settings.FLOAT_BRACKET_DEEP_BREAKPOINT_M,
+        "totalProfileCount": len(profiles),
+        "includedProfileCount": summary["profileCount"],
+        "excludedProfileCount": len(exclusions),
+        "excludedProfileReasons": counts,
+        "excludedProfiles": excluded_profiles,
+        "byModelDepth": summary["byModelDepth"],
+        "overall": summary["overall"],
+        "profiles": summary["profiles"],
+    }
 
 
 @router.get("/inspect")

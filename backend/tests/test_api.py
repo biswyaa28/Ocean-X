@@ -118,8 +118,23 @@ def test_inspect_point():
     assert "salnPSU" in data
     assert "currentSpeedMS" in data
 
+def _available_model_timestamp():
+    """A model timestamp that is actually inside the installed dataset.
+
+    The endpoint deliberately refuses a timestamp outside the dataset's
+    temporal coverage rather than silently substituting the nearest slice, so
+    the contract is exercised with a timestamp derived from the real (or
+    fixture) coverage instead of a hardcoded run date.
+    """
+    from app.providers.incois_provider import IncoisProvider
+
+    timestamps = IncoisProvider().get_available_timestamps()
+    assert timestamps, "installed dataset exposes no model timestamps"
+    return timestamps[0]
+
+
 def test_2026_hycom_sst_inspect():
-    response = client.get("/inspect?lat=18.2&lon=88.4&timestamp=2026-09-08T12:00:00")
+    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -128,7 +143,7 @@ def test_2026_hycom_sst_inspect():
     assert isinstance(data["tempC"], float)
 
 def test_2026_hycom_salinity_inspect():
-    response = client.get("/inspect?lat=18.2&lon=88.4&timestamp=2026-09-08T12:00:00")
+    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -137,7 +152,7 @@ def test_2026_hycom_salinity_inspect():
     assert isinstance(data["salnPSU"], float)
 
 def test_2026_hycom_currents_inspect():
-    response = client.get("/inspect?lat=18.2&lon=88.4&timestamp=2026-09-08T12:00:00")
+    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"

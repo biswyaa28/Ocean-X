@@ -570,6 +570,17 @@ class IncoisProvider:
 
         try:
             pt = ds_sel.sel(LAT=lat, LON=lon, method="nearest")
+
+            # A point inspection reports the SEA SURFACE. Real RSMC HYCOM files
+            # carry a full DEPTH dimension, so after selecting LAT/LON the field
+            # is still an array along DEPTH; the surface level must be chosen
+            # explicitly. Selecting the SHALLOWEST level (rather than assuming
+            # index 0) keeps this correct whichever way DEPTH is ordered. On a
+            # depth-less processed surface file this is a no-op.
+            if "DEPTH" in pt.dims:
+                depth_values = np.atleast_1d(pt["DEPTH"].values)
+                pt = pt.isel(DEPTH=int(np.argmin(depth_values)))
+
             matched_lat = float(pt["LAT"].values)
             matched_lon = float(pt["LON"].values)
             matched_time = str(pt["TIME"].values)

@@ -20,7 +20,12 @@ class MatchupDiagnostics(TypedDict):
     deepestMatchedObservationDepthM: Optional[float]
     deepestMatchedModelDepthM: Optional[float]
     repeatedNativeDepthMatchCount: int
+    interpolatedLevelCount: int
+    nativeLevelCount: int
     interpolationApplied: bool
+    missingQcLevelCount: int
+    timeDifferenceHours: Optional[float]
+    timeGapStatus: Optional[str]
 
 
 def _finite_float(value: Any) -> Optional[float]:
@@ -37,18 +42,35 @@ def _deepest(values: Iterable[Any]) -> Optional[float]:
 def build_matchup_diagnostics(
     total_observations: int,
     comparisons: Iterable[dict[str, Any]],
+    missing_qc_level_count: int = 0,
+    time_difference_hours: Optional[float] = None,
+    time_gap_status: Optional[str] = None,
 ) -> MatchupDiagnostics:
     """Describe an existing matchup without changing its matching semantics.
 
     ``matchedObservationCount`` is the number of backend comparison rows: the
-    existing matcher emits exactly one row per Argo observation that found a
-    native HYCOM level inside the accepted depth tolerance. It is therefore the
-    matched *observation* count - not the number of valid temperature/salinity
-    statistical pairs, which Phase 2B statistics report separately because a
-    depth-matched pair may still carry missing or non-finite values.
+    matcher emits exactly one row per Argo observation that found a usable
+    model value - either at a native HYCOM level inside the accepted depth
+    tolerance (``matchMode="native"``) or by vertical interpolation inside the
+    model's valid depth range (``matchMode="interpolated"``). It is therefore
+    the matched *observation* count - not the number of valid
+    temperature/salinity statistical pairs, which the statistics report
+    separately because a matched pair may still carry missing or non-finite
+    values.
 
-    Repeated native model depths do NOT collapse rows: two observations matched
-    to the same native HYCOM level remain two matched observations.
+    ``interpolatedLevelCount`` / ``nativeLevelCount`` split those rows by whether
+    the pair required an interpolation on either side, so the caller can see how
+    much of the sample is interpolated. In the default ``model_levels`` mode the
+    model value is always native and any interpolation is on the float side. Repeated native model depths do NOT collapse
+    rows: two observations matched to the same native HYCOM level remain two
+    matched observations.
+
+    ``missing_qc_level_count`` is a property of the whole Argo profile rather
+    than of the matched rows, so it is passed in by the caller: it counts the
+    levels whose QC flags were absent from the source and were therefore
+    accepted on the lenient assumption documented in ``argo_levels``.
+    ``time_difference_hours`` / ``time_gap_status`` are likewise properties of
+    the observation-model pair, so they are passed in rather than derived here.
     """
     rows = list(comparisons)
 
@@ -60,6 +82,15 @@ def build_matchup_diagnostics(
         depth for depth in (_finite_float(row.get("matchedModelDepthM")) for row in rows) if depth is not None
     ]
 
+    # Method naming differs by comparison mode: "float_levels"/"native" use
+    # interpolated|native on the MODEL side, while "model_levels" reports
+    # float_interpolated|float_native. Both describe the same split, so both
+    # spellings are counted as interpolated.
+    INTERPOLATED_METHODS = frozenset({"interpolated", "float_interpolated"})
+    interpolated = sum(1 for row in rows if row.get("method") in INTERPOLATED_METHODS)
+    native = matched - interpolated
+    missing_qc = missing_qc_level_count if isinstance(missing_qc_level_count, int) else 0
+
     return {
         "totalArgoObservations": total,
         "matchedObservationCount": matched,
@@ -69,5 +100,11 @@ def build_matchup_diagnostics(
         "deepestMatchedObservationDepthM": _deepest(row.get("depthM") for row in rows),
         "deepestMatchedModelDepthM": _deepest(native_depths),
         "repeatedNativeDepthMatchCount": len(native_depths) - len(set(native_depths)),
-        "interpolationApplied": False,
+        "interpolatedLevelCount": interpolated,
+        "nativeLevelCount": native,
+        # True only when at least one row was actually interpolated.
+        "interpolationApplied": interpolated > 0,
+        "missingQcLevelCount": max(missing_qc, 0),
+        "timeDifferenceHours": _finite_float(time_difference_hours),
+        "timeGapStatus": time_gap_status,
     }

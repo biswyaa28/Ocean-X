@@ -226,6 +226,16 @@ class ArgoObservationPoint(BaseModel):
     salinity_psu: Optional[float] = None
     temp_qc: int = 1
     psal_qc: int = 1
+    # Delayed-mode (adjusted) values, present only when the source supplies
+    # them. The matchup reads exactly one basis per profile according to the
+    # Argo data mode (R -> raw, A/D -> adjusted); see services/argo_levels.py.
+    pressure_dbar_adjusted: Optional[float] = None
+    pressure_dbar_adjusted_qc: Optional[int] = None
+    depth_m_adjusted: Optional[float] = None
+    temperature_c_adjusted: Optional[float] = None
+    temperature_c_adjusted_qc: Optional[int] = None
+    salinity_psu_adjusted: Optional[float] = None
+    salinity_psu_adjusted_qc: Optional[int] = None
 
 class ArgoProfile(BaseModel):
     profile_id: str
@@ -253,6 +263,14 @@ class ArgoFloat(BaseModel):
 
 class DepthComparison(BaseModel):
     depthM: float
+    # How the float depth was obtained: "pressure_gsw" (TEOS-10 conversion of
+    # Argo pressure) or "provided" (source depth_m used unchanged).
+    depthSource: Optional[str] = None
+    # How the model value was obtained: "native" (one native HYCOM level) or
+    # "interpolated" (linear blend of two native levels).
+    method: Optional[str] = None
+    # "adjusted" (delayed-mode value used) or "raw" (in-situ fallback).
+    argoVariableSource: Optional[str] = None
     argoTemperatureC: Optional[float] = None
     modelTemperatureC: Optional[float] = None
     temperatureResidualC: Optional[float] = None
@@ -279,6 +297,8 @@ class MatchupDiagnostics(BaseModel):
     comparison rows (one per depth-matched Argo observation); valid
     temperature/salinity statistical pairs are reported separately by
     ``MatchupStatisticsByVariable`` and may be smaller.
+    ``interpolatedLevelCount`` + ``nativeLevelCount`` split those rows by how
+    the model value was obtained.
     """
     totalArgoObservations: int = 0
     matchedObservationCount: int = 0
@@ -287,7 +307,17 @@ class MatchupDiagnostics(BaseModel):
     deepestMatchedObservationDepthM: Optional[float] = None
     deepestMatchedModelDepthM: Optional[float] = None
     repeatedNativeDepthMatchCount: int = 0
+    interpolatedLevelCount: int = 0
+    nativeLevelCount: int = 0
     interpolationApplied: bool = False
+    # Levels whose Argo QC flags were absent and were accepted on the lenient
+    # assumption documented in argo_levels.
+    missingQcLevelCount: int = 0
+    # Observation-model time separation and its classification. Passed in by
+    # the caller because it is a property of the profile/model pair, not of the
+    # matched rows.
+    timeDifferenceHours: Optional[float] = None
+    timeGapStatus: Optional[str] = None
 
 class ArgoMatchupResponse(BaseModel):
     argoProfileId: str
@@ -301,11 +331,49 @@ class ArgoMatchupResponse(BaseModel):
     matchedModelLat: float
     matchedModelLon: float
     timeDifferenceHours: float
+    # True when the model field was linearly blended between two model time
+    # slices bracketing the observation time.
+    timeInterpolationApplied: bool = False
+    # Observation-model time separation classification:
+    # "good" (<= MATCHUP_TIME_GAP_GOOD_H), "marginal" (<= MATCHUP_TIME_GAP_MAX_H),
+    # "too_large" (beyond it). When "too_large" both profiles are returned but
+    # `statistics` is empty and `timeGapReason` explains why.
+    timeGapStatus: str = "too_large"
+    timeGapReason: Optional[str] = None
+    statisticsSuppressed: bool = False
+    # The archived model run selected, and every run that was considered with
+    # its time gap and forecast lead time.
+    modelRun: Optional[str] = None
+    availableModelRuns: List[Dict[str, Any]] = Field(default_factory=list)
     distanceKm: float
+    # Horizontal sub-sampling actually applied: "bilinear" or "nearest".
+    spatialMode: str = "bilinear"
     matchedDepths: List[float]
     matchedPointCount: int = 0
+    # Only constrains matchMode="native"; interpolation is bounded by the
+    # model's valid depth range instead.
     matchingToleranceM: float = 15.0
-    modelDepthSelection: str = "nearest native HYCOM model depth (no interpolation)"
+    # Vertical sub-sampling actually applied: "interpolated" or "native".
+    matchMode: str = "model_levels"
+    modelDepthSelection: str = (
+        "model values at native HYCOM depth levels; float interpolated onto them"
+    )
+    # model_levels mode: model levels that produced no pair, with the reason.
+    excludedModelLevels: List[Dict[str, Any]] = Field(default_factory=list)
+    floatBracketMaxGapM: float = 50.0
+    floatBracketMaxGapDeepM: float = 100.0
+    floatBracketDeepBreakpointM: float = 150.0
+    # Depth basis of the float side: "pressure_gsw", "provided", "mixed" or
+    # "unavailable".
+    depthSource: str = "unavailable"
+    # Variable family actually read for the whole profile: "raw" or "adjusted".
+    variableBasis: str = "raw"
+    # Requested Argo data mode ("R", "A", "D") or "auto" when auto-detected.
+    argoDataMode: str = "auto"
+    # Levels accepted because their QC flags were absent from the source.
+    missingQcLevelCount: int = 0
+    # Accepted Argo QC flags for raw and adjusted values.
+    qcFlagsUsed: Dict[str, Any] = Field(default_factory=dict)
     comparisons: List[DepthComparison]
     dataStatus: DataStatus = "REAL"
     source: str = "Argo Global Data (GDAC) + INCOIS RSMC HYCOM"
