@@ -51,6 +51,36 @@ function makeSummary(overrides: Partial<ArgoMatchupSummary> = {}): ArgoMatchupSu
         salinity: { n: 1, bias: -0.35, mae: 0.36, rmse: 0.42 },
       },
     ],
+    tchp: {
+      n: 2,
+      bias: 13.7,
+      mae: 20.1,
+      rmse: 25.0,
+      medianBias: 13.7,
+      meanModelMinusFloat: 13.7,
+      meanFloat: 82.4,
+      meanModel: 96.1,
+    },
+    tchpScatter: [
+      {
+        profileId: 'p1',
+        floatId: '2902746',
+        tchpFloatKjCm2: 82.4,
+        tchpModelKjCm2: 96.1,
+        residualKjCm2: 13.7,
+      },
+      {
+        profileId: 'p2',
+        floatId: '2902747',
+        tchpFloatKjCm2: 71.2,
+        tchpModelKjCm2: 64.0,
+        residualKjCm2: -7.2,
+      },
+    ],
+    tchpProfiles: [],
+    tchpIsothermC: 26,
+    tchpDefinitionStatus: 'Model TCHP formula not published in the file.',
+    tchpRuleOfThumbKJPerCm2: 50,
     overall: {
       temperature: { n: 2, bias: 1.11, mae: 1.18, rmse: 1.42 },
       salinity: { n: 2, bias: -0.324, mae: 0.373, rmse: 0.439 },
@@ -158,5 +188,69 @@ describe('RegionalSummary', () => {
     // A null bias is shown as an em dash, never as 0.000.
     expect(screen.getAllByText('— °C').length).toBeGreaterThan(0);
     expect(screen.queryByText('0.000 °C')).toBeNull();
+  });
+});
+describe('RegionalSummary — TCHP scatter', () => {
+  it('plots float against model heat potential with a 1:1 line', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    const { container } = render(<RegionalSummary />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/FLOAT VS MODEL HEAT POTENTIAL/)).toBeTruthy()
+    );
+    expect(container.querySelectorAll('.recharts-scatter-symbol').length).toBeGreaterThan(0);
+    // The reference diagonal plus the two rule-of-thumb lines.
+    const lines = container.querySelectorAll('.recharts-reference-line line');
+    expect(lines.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reports mean, median and RMSE for the heat residual', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByText('HEAT POTENTIAL MEAN BIAS')).toBeTruthy());
+    // bias and medianBias happen to be equal in this fixture, so they are
+    // disambiguated by the row they sit in.
+    const row = (label: string) =>
+      screen.getByText(label).parentElement?.textContent ?? '';
+    expect(row('HEAT POTENTIAL MEAN BIAS')).toContain('13.700');
+    expect(row('MEDIAN BIAS')).toContain('13.700');
+    expect(screen.getByText('25.000 kJ/cm2')).toBeTruthy();
+    expect(screen.getByText('82.4 / 96.1 kJ/cm2')).toBeTruthy();
+  });
+
+  it('says the scatter is empty rather than plotting a single zero point', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary({ tchpScatter: [] }));
+    render(<RegionalSummary />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText(/NO HEAT-POTENTIAL COMPARISON AVAILABLE/).length).toBe(1)
+    );
+  });
+
+  it('never claims a cyclone will intensify', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByText(/FLOAT VS MODEL HEAT POTENTIAL/)).toBeTruthy());
+    const text = (document.body.textContent ?? '').toLowerCase();
+    // The caption legitimately negates these; strip it before scanning.
+    const withoutCaption = text.split('this is a comparison, not a forecast').join(' ');
+    expect(withoutCaption).not.toContain('will intensify');
+    expect(withoutCaption).not.toContain('expected to');
+    expect(withoutCaption).not.toContain('warning');
+  });
+
+  it('carries the caveat that the model formula is unpublished', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    render(<RegionalSummary />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/HOW COMPARABLE IS THE MODEL HEAT POTENTIAL\?/i)).toBeTruthy()
+    );
+    const details = screen
+      .getByText(/how comparable is the model heat potential\?/i)
+      .closest('details');
+    expect(details?.textContent).toMatch(/not published in the file/i);
   });
 });

@@ -30,15 +30,18 @@ import {
 import {
   Bar,
   BarChart,
+  Scatter,
+  ScatterChart,
   CartesianGrid,
   Cell,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
+  ZAxis,
   XAxis,
   YAxis,
 } from 'recharts';
-import type { ArgoMatchupSummary } from '../types/oceanlens';
+import type { ArgoMatchupSummary, TchpScatterPoint } from '../types/oceanlens';
 import { apiProvider } from '../services/ApiProvider';
 
 /** Human-readable exclusion reasons, mirroring the backend constants. */
@@ -165,6 +168,154 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
   );
 }
 
+
+/**
+ * Float-derived vs model heat potential, one point per profile.
+ *
+ * The 1:1 line is the reference that makes the plot readable: points on it are
+ * profiles where the model carries exactly the heat the float measured. The
+ * widely quoted rule-of-thumb value is drawn as a SECOND, explicitly labelled
+ * screening line. It is a published threshold used for context, NOT a
+ * threshold this model is being judged against and NOT a forecast of anything.
+ */
+const TchpScatter: React.FC<{
+  points: TchpScatterPoint[];
+  ruleOfThumb: number;
+}> = ({ points, ruleOfThumb }) => {
+  if (points.length === 0) {
+    return (
+      <div
+        role="status"
+        className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-2.5 font-mono text-[9.5px] text-slate-400"
+      >
+        <AlertCircle className="w-4 h-4 text-slate-500 shrink-0" />
+        <span>
+          NO HEAT-POTENTIAL COMPARISON AVAILABLE — NO PROFILE PRODUCED BOTH A FLOAT AND A
+          MODEL VALUE.
+        </span>
+      </div>
+    );
+  }
+
+  const values = points.flatMap((p) => [p.tchpFloatKjCm2, p.tchpModelKjCm2]);
+  const max = Math.max(...values, ruleOfThumb) * 1.08;
+  const below = points.filter((p) => p.residualKjCm2 !== null && p.residualKjCm2 < 0).length;
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1">
+      <div className="flex items-center justify-between font-mono px-0.5">
+        <span className="text-[9px] font-bold text-slate-300 tracking-wider">
+          FLOAT VS MODEL HEAT POTENTIAL — kJ/cm2
+        </span>
+        <span className="text-[8px] text-slate-500">N = {points.length}</span>
+      </div>
+      <ResponsiveContainer
+        width="100%"
+        height={190}
+        initialDimension={{ width: 372, height: 190 }}
+      >
+        <ScatterChart margin={{ top: 8, right: 14, bottom: 16, left: 4 }}>
+          <CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="2 4" />
+          <XAxis
+            type="number"
+            dataKey="tchpFloatKjCm2"
+            name="Float"
+            domain={[0, max]}
+            stroke="rgba(255,255,255,0.15)"
+            tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
+            tickLine={false}
+            label={{
+              value: 'FLOAT kJ/cm2',
+              position: 'insideBottomRight',
+              offset: -2,
+              fill: '#64748b',
+              fontSize: 8,
+            }}
+          />
+          <YAxis
+            type="number"
+            dataKey="tchpModelKjCm2"
+            name="Model"
+            domain={[0, max]}
+            width={44}
+            stroke="rgba(255,255,255,0.15)"
+            tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
+            tickLine={false}
+            label={{
+              value: 'MODEL kJ/cm2',
+              angle: -90,
+              position: 'insideLeft',
+              fill: '#64748b',
+              fontSize: 8,
+            }}
+          />
+          <ZAxis range={[70, 71]} />
+          <Tooltip
+            cursor={{ strokeDasharray: '3 3' }}
+            contentStyle={{
+              background: '#05070a',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 8,
+              fontSize: 10,
+              fontFamily: 'inherit',
+              padding: '4px 8px',
+            }}
+            formatter={(value, name) => [
+              typeof value === 'number' ? `${value.toFixed(1)} kJ/cm2` : '—',
+              String(name),
+            ]}
+          />
+          {/* 1:1 agreement: model heat potential equal to the float's. */}
+          <ReferenceLine
+            segment={[
+              { x: 0, y: 0 },
+              { x: max, y: max },
+            ]}
+            stroke="rgba(255,255,255,0.45)"
+            strokeWidth={1.2}
+          />
+          {/* Widely quoted screening value. Context, not a pass/fail line. */}
+          {ruleOfThumb > 0 && ruleOfThumb < max && (
+            <>
+              <ReferenceLine
+                x={ruleOfThumb}
+                stroke="#f97316"
+                strokeDasharray="4 3"
+                strokeWidth={1}
+                label={{
+                  value: `${ruleOfThumb} rule of thumb`,
+                  position: 'top',
+                  fill: '#f97316',
+                  fontSize: 7.5,
+                  fontFamily: 'inherit',
+                }}
+              />
+              <ReferenceLine
+                y={ruleOfThumb}
+                stroke="#f97316"
+                strokeDasharray="4 3"
+                strokeWidth={1}
+              />
+            </>
+          )}
+          <Scatter
+            data={points}
+            fill="#22d3ee"
+            isAnimationActive={false}
+            shape="circle"
+          />
+        </ScatterChart>
+      </ResponsiveContainer>
+      <div className="font-mono text-[7.5px] text-slate-500 leading-relaxed">
+        THE DIAGONAL IS 1:1 AGREEMENT. ABOVE IT THE MODEL CARRIES MORE HEAT THAN THE FLOAT
+        MEASURED. {below} OF {points.length} PROFILE{points.length === 1 ? '' : 'S'} FALL BELOW
+        IT. THE ORANGE LINES MARK A COMMONLY QUOTED SCREENING VALUE, SHOWN FOR CONTEXT ONLY.
+        THIS IS A COMPARISON, NOT A FORECAST.
+      </div>
+    </div>
+  );
+};
+
 interface RegionalSummaryProps {
   /** Render inline (inside the drawer) or as a standalone panel. */
   compact?: boolean;
@@ -272,6 +423,49 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
               <div className="text-slate-200 font-bold mt-0.5">{summary.modelRuns.length}</div>
             </div>
           </div>
+
+          <TchpScatter
+            points={summary.tchpScatter}
+            ruleOfThumb={summary.tchpRuleOfThumbKJPerCm2}
+          />
+
+          {summary.tchp.n > 0 && (
+            <div className="bg-[#05070a] border border-white/10 rounded-lg p-2 font-mono text-[8.5px] space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-500">HEAT POTENTIAL MEAN BIAS</span>
+                <span className="text-slate-200 font-bold">
+                  {metric(summary.tchp.bias)} kJ/cm2
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">MEDIAN BIAS</span>
+                <span className="text-slate-200 font-bold">
+                  {metric(summary.tchp.medianBias)} kJ/cm2
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">RMSE</span>
+                <span className="text-slate-200 font-bold">
+                  {metric(summary.tchp.rmse)} kJ/cm2
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">MEAN FLOAT / MODEL</span>
+                <span className="text-slate-200 font-bold">
+                  {metric(summary.tchp.meanFloat, 1)} / {metric(summary.tchp.meanModel, 1)} kJ/cm2
+                </span>
+              </div>
+            </div>
+          )}
+
+          {summary.tchpDefinitionStatus && (
+            <details className="text-[7.5px] text-slate-500 leading-relaxed">
+              <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
+                HOW COMPARABLE IS THE MODEL HEAT POTENTIAL?
+              </summary>
+              <p className="mt-1">{summary.tchpDefinitionStatus}</p>
+            </details>
+          )}
 
           <BiasVsDepthChart rows={temperatureRows} unit="°C" />
           <BiasVsDepthChart rows={salinityRows} unit="PSU" />

@@ -292,6 +292,11 @@ export interface MatchupDiagnostics {
   repeatedNativeDepthMatchCount: number;
   interpolatedLevelCount: number;
   nativeLevelCount: number;
+  /** What matchedPercentage is measured against. */
+  matchedPercentageBasis?: 'model_levels' | 'argo_observations';
+  totalModelLevels?: number | null;
+  /** Surface levels that borrowed a shallow float sample (not native, not interpolated). */
+  nearSurfaceSubstitutionCount?: number;
   interpolationApplied: boolean;
   /**
    * Levels whose Argo QC flags were absent from the source and were therefore
@@ -324,6 +329,34 @@ export interface ArgoMatchupSummary {
   excludedProfileReasons: Record<string, number>;
   excludedProfiles: { profileId: string; reason: string; excludedModelLevels?: string[] }[];
   byModelDepth: MatchupSummaryDepthRow[];
+  /** Regional TCHP residual statistics, reduced per profile. */
+  tchp: {
+    n: number;
+    bias: number | null;
+    mae: number | null;
+    rmse: number | null;
+    medianBias: number | null;
+    meanModelMinusFloat: number | null;
+    meanFloat: number | null;
+    meanModel: number | null;
+  };
+  tchpScatter: TchpScatterPoint[];
+  tchpProfiles: {
+    profileId: string;
+    floatId: string;
+    tchpFloatKjCm2: number | null;
+    tchpModelKjCm2: number | null;
+    tchpResidualKjCm2: number | null;
+    tchpResidualPercent: number | null;
+    d26FloatM: number | null;
+    mldModelM: number | null;
+    metricsStatus?: string | null;
+    metricsReason?: string | null;
+  }[];
+  tchpIsothermC: number;
+  tchpDefinitionStatus?: string | null;
+  /** Widely quoted screening threshold, drawn as a reference line only. */
+  tchpRuleOfThumbKJPerCm2: number;
   overall: {
     temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
     salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
@@ -341,6 +374,44 @@ export interface ArgoMatchupSummary {
     temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
     salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
   }[];
+}
+
+/**
+ * Float-derived cyclone heat content against the model's own products.
+ *
+ * TCHP is in kJ/cm2 (the unit the model's field carries) and the residual is
+ * `model - float`, matching the temperature convention: positive means the
+ * model carries more heat than the float measured.
+ *
+ * `metricsStatus`/`metricsReason` explain a missing value. A missing
+ * measurement and a measurement of zero are different claims and are never
+ * conflated - `tchpFloatKjCm2` is 0 only when the float's surface really is
+ * below the isotherm.
+ */
+export interface ArgoOceanHeat {
+  tchpFloatKjCm2: number | null;
+  tchpModelKjCm2: number | null;
+  tchpResidualKjCm2: number | null;
+  tchpResidualPercent: number | null;
+  d26FloatM: number | null;
+  mldModelM: number | null;
+  metricsStatus?: string | null;
+  metricsReason?: string | null;
+  metricsSurfaceDepthM?: number | null;
+  metricsSurfaceTemperatureC?: number | null;
+  /** Why the model's own TCHP may not be directly comparable. */
+  tchpDefinitionStatus?: string | null;
+  tchpIsothermC: number;
+  tchpMetricsMaxGapM: number;
+}
+
+/** One point of the regional float-vs-model TCHP scatter. */
+export interface TchpScatterPoint {
+  profileId: string;
+  floatId: string;
+  tchpFloatKjCm2: number;
+  tchpModelKjCm2: number;
+  residualKjCm2: number | null;
 }
 
 export interface ArgoMatchupResponse {
@@ -387,6 +458,25 @@ export interface ArgoMatchupResponse {
   statusMessage?: string | null;
   statistics?: MatchupStatisticsByVariable | null;
   diagnostics?: MatchupDiagnostics | null;
+  /**
+   * Cyclone-relevant heat content: float-derived TCHP/D26 against the model's
+   * own 2D TCHP and MLD products at the same location and time. See
+   * `ArgoOceanHeat` for the zero-versus-missing contract.
+   */
+  heat?: ArgoOceanHeat;
+  tchpFloatKjCm2?: number | null;
+  tchpModelKjCm2?: number | null;
+  tchpResidualKjCm2?: number | null;
+  tchpResidualPercent?: number | null;
+  d26FloatM?: number | null;
+  mldModelM?: number | null;
+  metricsStatus?: string | null;
+  metricsReason?: string | null;
+  metricsSurfaceDepthM?: number | null;
+  metricsSurfaceTemperatureC?: number | null;
+  tchpDefinitionStatus?: string | null;
+  tchpIsothermC?: number;
+  tchpMetricsMaxGapM?: number;
 }
 
 export interface AstronomicalData {

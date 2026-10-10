@@ -32,6 +32,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts';
 import { AlertCircle } from 'lucide-react';
 import {
@@ -48,6 +49,15 @@ export interface ArgoProfileChartProps {
   comparison?: NormalizedArgoMatchup;
   /** Pixel height of each variable panel. */
   heightPx?: number;
+  /**
+   * Float 26 C isotherm depth. When supplied (with `isothermC`) the temperature
+   * panel draws a dashed isotherm line and a D26 marker, so the reader can see
+   * where the float's warm layer ends rather than inferring it from the shape.
+   * Suppressed entirely when the float never reaches the isotherm.
+   */
+  d26M?: number | null;
+  /** Isotherm value to draw. Defaults to nothing; the caller passes 26. */
+  isothermC?: number;
 }
 
 type VariableKey = 'temperatureC' | 'salinityPsu';
@@ -89,7 +99,15 @@ const VariableChart: React.FC<{
   points: ArgoProfileChartPoint[];
   spec: VariablePanelSpec;
   heightPx: number;
-}> = ({ points, spec, heightPx }) => {
+  /**
+   * The 26 C isotherm. Drawn as a dashed vertical line on the temperature
+   * panel only, because it is a temperature, and only when the float actually
+   * crosses it, so a line is never painted across a profile that has no warm
+   * layer. `d26M` marks where that crossing is.
+   */
+  isothermC?: number;
+  d26M?: number | null;
+}> = ({ points, spec, heightPx, isothermC, d26M }) => {
   const segments = useMemo(() => splitContiguousSegments(points, spec.key), [points, spec.key]);
 
   // Depth domain: surface (0) at top, deepest observation at the bottom.
@@ -144,6 +162,39 @@ const VariableChart: React.FC<{
             fontSize: 8,
           }}
         />
+        {/* The 26 C isotherm and its float depth, drawn only when the profile
+            actually reaches 26 C. A dashed line across a profile with no warm
+            layer would imply a crossing that was never measured. */}
+        {isothermC !== undefined && d26M !== undefined && d26M !== null && (
+          <ReferenceLine
+            x={isothermC}
+            stroke="#fb923c"
+            strokeWidth={1.2}
+            strokeDasharray="6 3"
+            label={{
+              value: `${isothermC}°C`,
+              position: 'top',
+              fill: '#fb923c',
+              fontSize: 8,
+              fontFamily: 'inherit',
+            }}
+          />
+        )}
+        {isothermC !== undefined && d26M !== undefined && d26M !== null && (
+          <ReferenceLine
+            y={d26M}
+            stroke="#fb923c"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            label={{
+              value: `D26 ${d26M.toFixed(0)} m`,
+              position: 'insideRight',
+              fill: '#fb923c',
+              fontSize: 8,
+              fontFamily: 'inherit',
+            }}
+          />
+        )}
         <Tooltip
           cursor={{ stroke: 'rgba(148,163,184,0.35)', strokeWidth: 1 }}
           contentStyle={{
@@ -343,6 +394,8 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
   normalized,
   comparison,
   heightPx = 200,
+  d26M = null,
+  isothermC,
 }) => {
   const { points, stats } = normalized;
 
@@ -452,7 +505,15 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
             <span className="text-[8px] text-slate-500">{spec.validCount} VALID LEVELS</span>
           </div>
           {spec.validCount > 0 ? (
-            <VariableChart points={points} spec={spec} heightPx={heightPx} />
+            <VariableChart
+              points={points}
+              spec={spec}
+              heightPx={heightPx}
+              // The isotherm is a temperature: it is drawn on the temperature
+              // panel only, and only when the float actually crosses it.
+              isothermC={spec.key === 'temperatureC' ? isothermC : undefined}
+              d26M={spec.key === 'temperatureC' ? d26M : undefined}
+            />
           ) : (
             <UnavailablePanel text={spec.unavailableText} />
           )}

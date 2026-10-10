@@ -35,6 +35,148 @@ const TAB_LABELS: Record<DrawerTab, string> = {
 
 const OBSERVATIONS_UNAVAILABLE = 'ARGO OBSERVATIONS UNAVAILABLE';
 
+/**
+ * "Cyclone heat" - the cyclone-relevant view of one float.
+ *
+ * Wording rule enforced here: this is a heat-potential COMPARISON, never a
+ * forecast. Nothing in this panel says or implies that a cyclone will form,
+ * intensify, or track anywhere. The plain-language line states the measured
+ * difference between the model's heat potential and the float's estimate.
+ *
+ * Every missing value is shown as "Not available" together with the backend's
+ * reason, because "we could not measure it" and "there is no heat here" are
+ * different claims and must not look the same on screen.
+ */
+const CycloneHeatPanel: React.FC<{ matchup: ArgoMatchupResponse }> = ({ matchup }) => {
+  const floatTchp = matchup.tchpFloatKjCm2 ?? null;
+  const modelTchp = matchup.tchpModelKjCm2 ?? null;
+  const residual = matchup.tchpResidualKjCm2 ?? null;
+  const residualPercent = matchup.tchpResidualPercent ?? null;
+  const d26 = matchup.d26FloatM ?? null;
+  const mld = matchup.mldModelM ?? null;
+  const isotherm = matchup.tchpIsothermC ?? 26;
+  const reason = matchup.metricsReason ?? null;
+  const status = matchup.metricsStatus ?? null;
+
+  // A real measurement of zero (surface below the isotherm) is NOT unavailable.
+  const floatIsZero = floatTchp === 0;
+
+  const headline = useMemo(() => {
+    if (residual === null || floatTchp === null || modelTchp === null) {
+      return null;
+    }
+    if (floatIsZero) {
+      return 'THE FLOAT MEASURED NO WATER AT OR ABOVE 26 C, SO THE MODEL\u2019S HEAT POTENTIAL CANNOT BE COMPARED WITH IT.';
+    }
+    const direction = residual >= 0 ? 'ABOVE' : 'BELOW';
+    return `MODEL HEAT POTENTIAL IS ${Math.abs(residual).toFixed(1)} KJ/CM2 ${direction} THE FLOAT ESTIMATE.`;
+  }, [residual, floatTchp, modelTchp, floatIsZero]);
+
+  const value = (text: string) => (
+    <span className="text-cyan-300 font-bold">{text}</span>
+  );
+  const unavailable = (
+    <span className="text-slate-500">Not available</span>
+  );
+
+  return (
+    <div className="bg-white/5 border border-orange-500/25 rounded-xl p-2.5 space-y-2 font-mono">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold text-orange-300 tracking-wider">
+          CYCLONE HEAT
+        </span>
+        <span className="text-[8px] text-slate-500">
+          ABOVE THE {isotherm} C ISOTHERM
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5 text-[9px]">
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">Float heat potential</div>
+          <div className="mt-0.5 text-[11px]">
+            {floatTchp === null ? unavailable : value(`${floatTchp.toFixed(1)} kJ/cm2`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">Model heat potential</div>
+          <div className="mt-0.5 text-[11px]">
+            {modelTchp === null ? unavailable : value(`${modelTchp.toFixed(1)} kJ/cm2`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">Model residual</div>
+          <div
+            className={`mt-0.5 text-[11px] font-bold ${
+              residual === null
+                ? 'text-slate-500'
+                : residual > 0
+                  ? 'text-orange-300'
+                  : 'text-cyan-300'
+            }`}
+          >
+            {residual === null
+              ? 'Not available'
+              : `${residual > 0 ? '+' : ''}${residual.toFixed(1)} kJ/cm2`}
+          </div>
+          {residualPercent !== null && (
+            <div className="text-[7.5px] text-slate-500 mt-0.5">
+              {residualPercent > 0 ? '+' : ''}
+              {residualPercent.toFixed(1)}% of the float estimate
+            </div>
+          )}
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">
+            Float {isotherm} C depth (D26)
+          </div>
+          <div className="mt-0.5 text-[11px]">
+            {d26 === null ? unavailable : value(`${d26.toFixed(1)} m`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10 col-span-2">
+          <div className="text-[7.5px] text-slate-500 uppercase">Model mixed layer depth</div>
+          <div className="mt-0.5 text-[11px]">
+            {mld === null ? unavailable : value(`${mld.toFixed(1)} m`)}
+          </div>
+        </div>
+      </div>
+
+      {headline ? (
+        <div
+          role="status"
+          className="text-[9px] text-slate-200 bg-[#05070a] border border-white/10 rounded-lg p-2 leading-relaxed"
+        >
+          {headline}
+        </div>
+      ) : (
+        <div
+          role="status"
+          className="text-[9px] text-amber-300/90 bg-amber-500/5 border border-amber-500/25 rounded-lg p-2 leading-relaxed"
+        >
+          HEAT METRIC NOT AVAILABLE
+          {reason ? `: ${reason}` : '.'}
+        </div>
+      )}
+
+      <div className="text-[7.5px] text-slate-500 leading-relaxed">
+        {status && status !== 'OK' ? `STATUS: ${status}. ` : ''}
+        THIS IS A COMPARISON OF MEASURED AND MODELLED HEAT CONTENT, NOT A FORECAST. IT
+        SAYS NOTHING ABOUT WHETHER A CYCLONE WILL FORM, INTENSIFY OR TRACK.
+      </div>
+
+      {matchup.tchpDefinitionStatus && (
+        <details className="text-[7.5px] text-slate-500 leading-relaxed">
+          <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
+            HOW COMPARABLE IS THE MODEL VALUE?
+          </summary>
+          <p className="mt-1">{matchup.tchpDefinitionStatus}</p>
+        </details>
+      )}
+    </div>
+  );
+};
+
+
 const MATCH_MODES: MatchupMode[] = ['model_levels', 'float_levels', 'native'];
 
 const MATCH_MODE_LABELS: Record<MatchupMode, string> = {
@@ -208,8 +350,14 @@ function formatDiagnosticCount(value: number | null | undefined, noun: string): 
   return typeof value === 'number' && Number.isFinite(value) ? `${value} ${noun}` : 'Unavailable';
 }
 
-function formatMatchedPercentage(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}% matched` : 'Unavailable';
+function formatMatchedPercentage(
+  value: number | null | undefined,
+  basis?: 'model_levels' | 'argo_observations'
+): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Unavailable';
+  return basis === 'model_levels'
+    ? `${value.toFixed(2)}% of model levels matched`
+    : `${value.toFixed(2)}% matched`;
 }
 
 /**
@@ -361,7 +509,7 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
           </span>
           <span className="text-slate-500">MATCHED PERCENTAGE</span>
           <span className="text-right text-slate-200 font-bold">
-            {formatMatchedPercentage(diagnostics?.matchedPercentage)}
+            {formatMatchedPercentage(diagnostics?.matchedPercentage, diagnostics?.matchedPercentageBasis)}
           </span>
           <span className="text-slate-500">OBSERVATION–MODEL TIME SEPARATION</span>
           <span className="text-right text-slate-200 font-bold">
@@ -807,7 +955,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
               {/* Depth-profile charts + normalization disclosure */}
               {!obsLoading && !obsUnavailable && (
                 <>
-                  <ArgoProfileChart normalized={normalized} />
+                  <ArgoProfileChart
+                    normalized={normalized}
+                    d26M={matchup?.d26FloatM ?? null}
+                    isothermC={matchup?.tchpIsothermC ?? 26}
+                  />
                   <div className="bg-[#05070a] border border-white/10 rounded-xl p-2 space-y-1 font-mono text-[8.5px]">
                     <div className="flex justify-between">
                       <span className="text-slate-500">RAW OBSERVATIONS</span>
@@ -995,6 +1147,8 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                   />
                 </div>
               )}
+
+              {matchup && !matchup.statusMessage && <CycloneHeatPanel matchup={matchup} />}
 
               {matchup && !matchup.statusMessage && <MatchupDiagnosticsPanel matchup={matchup} />}
 

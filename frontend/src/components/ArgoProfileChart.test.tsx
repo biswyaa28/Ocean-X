@@ -275,3 +275,42 @@ describe('ArgoProfileChart — robustness', () => {
     expect(container.querySelectorAll('.recharts-wrapper').length).toBe(2);
   });
 });
+
+describe('ArgoProfileChart — 26 C isotherm and D26 marker', () => {
+  it('draws the isotherm and D26 line on the temperature panel when D26 exists', () => {
+    const { container } = render(
+      <ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} d26M={64.2} isothermC={26} />
+    );
+    // One vertical isotherm line plus one horizontal D26 line.
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBeGreaterThanOrEqual(2);
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/26/);
+  });
+
+  it('draws no isotherm line when the float never reaches 26 C', () => {
+    const { container } = render(
+      <ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} d26M={null} isothermC={26} />
+    );
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBe(0);
+  });
+
+  it('draws no isotherm line when D26 was not supplied at all', () => {
+    const { container } = render(<ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} />);
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBe(0);
+  });
+});

@@ -109,7 +109,24 @@ export function makeArgoMatchup(overrides: Partial<ArgoMatchupResponse> = {}): A
     ],
     dataStatus: 'REAL SOURCE — INGESTION PENDING',
     source: 'Argo Global Data (GDAC) + INCOIS RSMC HYCOM',
-    residualConvention: 'ΔT = HYCOM - Argo, ΔS = HYCOM - Argo',
+    residualConvention: 'ΔT = HYCOM - Argo, ΔS = HYCOM - Argo, ΔTCHP = HYCOM - Argo',
+    // Cyclone-relevant heat content. Present by default so the drawer's
+    // "Cyclone heat" section is exercised; override to null to test the
+    // "Not available" path.
+    tchpFloatKjCm2: 82.4,
+    tchpModelKjCm2: 96.1,
+    tchpResidualKjCm2: 13.7,
+    tchpResidualPercent: 16.6,
+    d26FloatM: 64.2,
+    mldModelM: 11.5,
+    metricsStatus: 'OK',
+    metricsReason: null,
+    metricsSurfaceDepthM: 2.4,
+    metricsSurfaceTemperatureC: 29.8,
+    tchpDefinitionStatus:
+      "The model's TCHP field publishes only long_name and units; it carries no standard_name and no documented formula.",
+    tchpIsothermC: 26,
+    tchpMetricsMaxGapM: 25,
     statusMessage: null,
     statistics: {
       temperature: { n: 2, meanResidual: -0.425, mae: 0.425, rmse: 0.4253 },
