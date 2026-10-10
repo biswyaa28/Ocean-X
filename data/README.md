@@ -216,6 +216,75 @@ QC flags and the real-time/adjusted `data_mode`, and derives `depth_m` from
 pressure with the same TEOS-10/GSW conversion the matchup uses. Without this,
 Argo and model windows can drift a month apart and every residual is invalid.
 
+### Vertical levels: the published axis is 6, and it is complete
+
+Verified against the THREDDS server on 2026-10-09 for the newest run
+(`RSMC_hycom_20261009.nc`), through three independent endpoints:
+
+| source | what it reports |
+| --- | --- |
+| NCSS `dataset.xml` | `<axis name="DEPTH" type="float" shape="[6]">` |
+| OPeNDAP `.dds` | `Float32 DEPTH[DEPTH = 6]` and every 3D variable `[TIME=28][DEPTH=6][LAT][LON]` |
+| OPeNDAP `.das` | `DEPTH { positive="down"; point_spacing="uneven"; axis="Z"; standard_name="depth"; bounds="DEPTH_bnds" }` |
+| INCOIS product page | "Horizontal resolution and Vertical levels: 0.25x0.25 and **6 levels**" |
+
+So the 6 levels are the WHOLE designed vertical axis of this product, not a
+subset chosen by the archiver. The archiver sends `verticalStride=1` and no
+`depth` parameter, so it receives every level the server has.
+
+Depth values and layer bounds as served by NCSS:
+
+| level | depth (m) | layer bounds (m) | note |
+| --- | --- | --- | --- |
+| 0 | 0.0 | -5.0, 5.0 | surface layer |
+| 1 | 17.5 | 5.0, 30.0 | |
+| 2 | 52.5 | 30.0, 75.0 | |
+| 3 | 125.0 | 75.0, 175.0 | the level the bias diagnosis focused on |
+| 4 | 275.0 | 175.0, 375.0 | |
+| 5 | 500.0 | 375.0, 625.0 | deepest published |
+
+### NCSS rewrites DEPTH
+
+- **Raw OPeNDAP & HTTPServer files**: INCOIS's raw files publish `DEPTH = [0, 10, 50, 100, 250, 500]` with `DEPTH_bnds = [[-5, 5], [5, 30], [30, 75], [75, 175], [175, 375], [375, 625]]`.
+- **Bounds derivation**: The bounds in the raw file are derived from the raw `DEPTH` values (interior midpoints between neighbours and mirrored ends $0 \pm 5$ m and $500 \pm 125$ m; 12/12 elements match).
+- **NCSS behavior**: When Bay-of-Bengal subsets are retrieved via the THREDDS NetCDF Subset Service (NCSS), the server renames `DEPTH_bnds` to `DEPTH_bounds` and rewrites the coordinate `DEPTH` values to the cell midpoints `[0, 17.5, 52.5, 125, 275, 500]`.
+- **Pipeline depth axis**: `OCEANX_MODEL_DEPTH_AXIS` defaults to `native`. It detects when `DEPTH` equals its bounds midpoints, inverts the bounds to recover the producer's raw file levels `[0, 10, 50, 100, 250, 500]` (`rule="native_from_bounds"`), and falls back to stored `DEPTH` if bounds are absent or already raw (`rule="native_file"`). Legacy `ncss_file` (and deprecated alias `file`) remains available to read the stored NCSS midpoint coordinate directly.
+- **Open question**: Whether these six values represent layer centres or node depths in INCOIS's model formulation remains unconfirmed with INCOIS. The default native axis is not claimed to be physically proven correct; it matches the producer's raw file.
+
+**Two metadata caveats worth knowing before comparing with published figures:**
+
+1. The DEPTH values served by NCSS are the **layer midpoints**, which is what the NCSS
+   service publishes and what the archived subsets contain. The OPeNDAP
+   `.ascii?DEPTH` view of the same file reports `[0, 10, 50, 100, 250, 500]`
+   for the same 6 levels, while `DEPTH_bnds` reports exactly the bounds in the
+   table above. The two services therefore disagree on the *label* of each level
+   (e.g. index 3 is "100 m" on the OPeNDAP view and "125 m" on the NCSS view)
+   while agreeing on the bounds and on the data at each level index.
+2. `DEPTH` carries `standard_name="depth"` and `positive="down"` but **no
+   `units` attribute** (it is present but empty). Units are therefore metres
+   below the sea surface by inference from `standard_name`, not declared.
+
+### TCHP and MLD definitions (from the publisher)
+
+The INCOIS RSMC product page (`https://incois.gov.in/oceanservices/osf_gc_rsmc.jsp`)
+documents:
+
+- **TCHP**: "computed as the heat content between the sea surface and the 26°
+  isotherm."
+- **MLD**: "computed based on a temperature criterion wherein the MLD is
+  regarded as the depth at which the temperature drops to 0.8 °C from its
+  surface value (Kara et al. 2008)."
+
+The isotherm therefore matches the one `ocean_heat_metrics` uses. Two gaps remain
+in the published information, both recorded in the API response:
+
+- The page lists TCHP units as **J/m2**, while the file attribute says
+  **KJ/cm2**. These differ by 1e7. The observed values (~40-140) are consistent
+  with kJ/cm2, so the page's unit appears to be wrong and the file's is the
+  usable one. No conversion is applied; values are passed through as published.
+- The page states the isotherm but **not** the seawater density or specific heat
+  used, and the file publishes neither.
+
 ### Depth-matching modes
 
 The default is `model_levels`: the comparison happens at the **model's own six
