@@ -1,10 +1,10 @@
 {
   "dataset_name": "Argo Bay of Bengal Regional In-Situ Profiles",
   "source": "Argo Global Data Assembly Centre (GDAC) / IFREMER ERDDAP",
-  "source_url": "https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.json",
+  "source_url": "https://erddap.ifremer.fr/erddap/tabledap/ArgoFloats.csv",
   "status": "REAL SOURCE \u2014 INGESTION PENDING",
   "provider": "Indian National Centre for Ocean Information Services (INCOIS) / Argo Steering Team",
-  "download_date": "2026-09-08",
+  "download_date": "2026-10-08",
   "geographic_coverage": {
     "region": "Bay of Bengal",
     "min_latitude": 5.0,
@@ -13,11 +13,11 @@
     "max_longitude": 100.0
   },
   "temporal_coverage": {
-    "start": "2026-09-07T14:30:00Z",
-    "end": "2026-09-08T09:10:00Z"
+    "start": "2026-10-02T14:06:46Z",
+    "end": "2026-10-07T20:28:35Z"
   },
-  "float_count": 5,
-  "profile_count": 5,
+  "float_count": 23,
+  "profile_count": 23,
   "variables": {
     "temperature_c": {
       "units": "\u00b0C",
@@ -36,6 +36,8 @@
       "description": "Observation depth"
     }
   },
-  "quality_control_handling": "Enforced Argo QC flags (QC 1/2 accepted, QC 3/4 rejected). Missing depth parameters left missing without fake vertical interpolation.",
-  "status_label": "REAL SOURCE \u2014 INGESTION PENDING"
+  "quality_control_handling": "Per-level GDAC QC flags (pres_qc/temp_qc/psal_qc) are preserved on every observation; the matchup applies its own flag policy (raw 1/2, adjusted 1/2/5) at matchup time. Missing values stay missing.",
+  "depth_source_note": "GDAC publishes pressure only. depth_m is DERIVED from pres with the TEOS-10/GSW conversion gsw.z_from_p at the profile latitude; it is not a source field.",
+  "temporal_coverage_note": "Profiles are ingested for the installed HYCOM model runs plus one day either side, so observation and model windows overlap.",
+  "status_label": "REAL"
 }
