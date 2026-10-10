@@ -111,12 +111,15 @@ def test_model_observation_matchup_calculation():
     # HYCOM runs go to 500 m, so levels below the model are correctly unmatched
     # rather than extrapolated.
     diagnostics = matchup["diagnostics"]
+    # model_levels (the default) measures coverage against the MODEL levels
+    # that could have matched, not against hundreds of float observations.
+    assert diagnostics["matchedPercentageBasis"] == "model_levels"
     assert diagnostics["matchedObservationCount"] + diagnostics["unmatchedObservationCount"] == (
-        diagnostics["totalArgoObservations"]
+        diagnostics["totalModelLevels"]
     )
     assert diagnostics["matchedPercentage"] == pytest.approx(
         round(
-            diagnostics["matchedObservationCount"] / diagnostics["totalArgoObservations"] * 100.0, 2
+            diagnostics["matchedObservationCount"] / diagnostics["totalModelLevels"] * 100.0, 2
         )
     )
     from app.providers.incois_provider import IncoisProvider
@@ -133,6 +136,7 @@ def test_model_observation_matchup_calculation():
     assert all(row["method"] in ("float_native", "float_interpolated") for row in matchup["comparisons"])
     assert (
         diagnostics["interpolatedLevelCount"] + diagnostics["nativeLevelCount"]
+        + diagnostics["nearSurfaceSubstitutionCount"]
         == diagnostics["matchedObservationCount"]
     )
 
@@ -314,11 +318,12 @@ def test_api_matchup_diagnostics_reuse_existing_matchup_semantics():
     # One comparison row per matched Argo observation.
     assert diagnostics["matchedObservationCount"] == len(data["comparisons"])
     assert diagnostics["matchedObservationCount"] == data["matchedPointCount"]
+    assert diagnostics["matchedPercentageBasis"] == "model_levels"
     assert diagnostics["unmatchedObservationCount"] == (
-        diagnostics["totalArgoObservations"] - diagnostics["matchedObservationCount"]
+        diagnostics["totalModelLevels"] - diagnostics["matchedObservationCount"]
     )
     assert diagnostics["matchedPercentage"] == pytest.approx(
-        round(diagnostics["matchedObservationCount"] / diagnostics["totalArgoObservations"] * 100.0, 2)
+        round(diagnostics["matchedObservationCount"] / diagnostics["totalModelLevels"] * 100.0, 2)
     )
 
     # Matching methodology is reported explicitly, never redefined here.
@@ -341,6 +346,7 @@ def test_api_matchup_diagnostics_reuse_existing_matchup_semantics():
     )
     assert (
         diagnostics["interpolatedLevelCount"] + diagnostics["nativeLevelCount"]
+        + diagnostics["nearSurfaceSubstitutionCount"]
         == diagnostics["matchedObservationCount"]
     )
 

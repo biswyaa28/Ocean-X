@@ -150,6 +150,9 @@ def test_no_interpolation_is_reported_and_no_quality_score_is_produced():
         "missingQcLevelCount",
         "timeDifferenceHours",
         "timeGapStatus",
+        "matchedPercentageBasis",
+        "totalModelLevels",
+        "nearSurfaceSubstitutionCount",
     }
 
 
@@ -162,3 +165,31 @@ def test_missing_qc_level_count_is_carried_through_from_the_profile():
     assert build_matchup_diagnostics(9, rows)["missingQcLevelCount"] == 0
     assert build_matchup_diagnostics(9, rows, -3)["missingQcLevelCount"] == 0
     assert build_matchup_diagnostics(9, rows, None)["missingQcLevelCount"] == 0
+
+
+def test_model_level_basis_uses_levels_not_float_observations():
+    rows = [{"depthM": 0.0, "matchedModelDepthM": 0.0}] * 5
+    result = build_matchup_diagnostics(300, rows, total_model_levels=6)
+
+    assert result["matchedPercentageBasis"] == "model_levels"
+    assert result["matchedPercentage"] == pytest.approx(83.33)
+    assert result["unmatchedObservationCount"] == 1
+    assert result["totalModelLevels"] == 6
+    assert result["totalArgoObservations"] == 300
+
+
+def test_near_surface_rows_are_counted_apart_from_native():
+    rows = [
+        {"depthM": 0.0, "method": "float_native", "floatNearSurfaceDepthM": 3.0},
+        {"depthM": 10.0, "method": "float_native", "floatNearSurfaceDepthM": None},
+        {"depthM": 50.0, "method": "float_interpolated", "floatNearSurfaceDepthM": None},
+    ]
+    result = build_matchup_diagnostics(9, rows, total_model_levels=6)
+
+    assert result["nearSurfaceSubstitutionCount"] == 1
+    assert result["nativeLevelCount"] == 1
+    assert result["interpolatedLevelCount"] == 1
+    assert (
+        result["nativeLevelCount"] + result["interpolatedLevelCount"]
+        + result["nearSurfaceSubstitutionCount"] == result["matchedObservationCount"]
+    )

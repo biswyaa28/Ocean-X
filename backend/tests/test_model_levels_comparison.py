@@ -2,8 +2,9 @@
 
 Covers the float-side bracketing rule, the no-extrapolation rule, the coarse
 sampling-gap rejection, native-vs-interpolated float values against a known
-linear profile, the <= 6 pairs bound, and the regional aggregation on a
-hand-computed small example.
+linear profile, the one-pair-per-model-level bound (counted against the levels
+the file actually publishes, never a hardcoded 6), and the regional aggregation
+on a hand-computed small example.
 """
 
 import math
@@ -324,3 +325,158 @@ def test_summary_endpoint_excludes_rows_without_any_usable_residual():
     assert usable(nil_row) is False
     assert usable(live_row) is True
     assert _finite(nil_row["temperatureResidualC"]) is None
+
+
+# --- surface level: the 0 m model level may borrow a shallow float sample ---
+
+def test_surface_level_accepts_a_three_metre_sample():
+    """A float starting at 3 m must still pair with the model's 0 m level."""
+    from app.services.matchup_interpolation import (
+        interpolate_float_at_depth,
+    )
+
+    value, method, bracket, reject = interpolate_float_at_depth(
+        [3.0, 10.0, 25.0], [29.5, 29.4, 27.0], 0.0, 50.0,
+        allow_surface_substitute=True,
+    )
+    assert value == 29.5
+    assert method == "float_near_surface"
+    # The bracket discloses the depth the value was actually measured at, so the
+    # substitution is visible rather than implied.
+    assert bracket == (3.0, 3.0)
+    assert reject is None
+
+
+def test_surface_level_rejects_an_eight_metre_sample():
+    """8 m is below the 5 m limit, so the sample is not borrowed."""
+    from app.services.matchup_interpolation import (
+        interpolate_float_at_depth,
+    )
+
+    value, method, _bracket, reject = interpolate_float_at_depth(
+        [8.0, 10.0, 25.0], [29.5, 29.4, 27.0], 0.0, 50.0,
+        allow_surface_substitute=True,
+    )
+    assert value is None
+    assert method is None
+    assert reject == "outside_float_range"
+
+
+def test_surface_substitution_is_opt_in():
+    """Without the flag the 0 m level keeps rejecting a shallow-first profile."""
+    from app.services.matchup_interpolation import (
+        interpolate_float_at_depth,
+    )
+
+    value, method, _bracket, reject = interpolate_float_at_depth(
+        [3.0, 10.0, 25.0], [29.5, 29.4, 27.0], 0.0, 50.0
+    )
+    assert value is None
+    assert method is None
+    assert reject == "outside_float_range"
+
+
+def test_surface_substitution_never_applies_to_other_model_levels():
+    """A shallow float sample may only ever stand in for 0 m, never for 17.5 m."""
+    from app.services.matchup_interpolation import (
+        interpolate_float_at_depth,
+    )
+
+    for depth in (17.5, 52.5, 125.0, 275.0, 500.0):
+        value, method, _bracket, reject = interpolate_float_at_depth(
+            [3.0, 10.0, 25.0], [29.5, 29.4, 27.0], depth, 50.0,
+            allow_surface_substitute=True,
+        )
+        if depth > 25.0:
+            assert (value, method, reject) == (None, None, "outside_float_range")
+        else:
+            # Inside the profile it must still be a genuine bracket, never the
+            # 3 m surface sample standing in for a mid-water level.
+            assert value is not None
+            assert method in ("float_native", "float_interpolated")
+
+
+def test_surface_level_never_extrapolates_beyond_the_limit():
+    """A float whose shallowest sample is at 5.5 m is outside the rule."""
+    from app.services.matchup_interpolation import (
+        interpolate_float_at_depth,
+    )
+
+    value, _method, _bracket, reject = interpolate_float_at_depth(
+        [5.5, 10.0, 25.0], [29.5, 29.4, 27.0], 0.0, 50.0,
+        allow_surface_substitute=True,
+    )
+    assert value is None
+    assert reject == "outside_float_range"
+
+
+def test_live_matchup_includes_the_surface_level_and_discloses_the_depth():
+    """End to end: the 0 m level produces a pair and reports what it borrowed."""
+    from app.providers.argo_provider import argo_provider
+    from app.services.model_observation_matchup import match_argo_with_hycom
+
+    found = 0
+    for profile in argo_provider.get_profiles():
+        matchup = match_argo_with_hycom(profile["profile_id"])
+        if matchup is None or matchup.get("statusMessage"):
+            continue
+        surface_rows = [
+            row for row in matchup["comparisons"]
+            if abs(row["modelDepthM"]) < 1e-9
+        ]
+        for row in surface_rows:
+            if row["floatTemperatureMethod"] == "float_near_surface":
+                found += 1
+                disclosed = row["floatNearSurfaceDepthM"]
+                assert disclosed is not None
+                assert 0.0 <= disclosed <= 5.0
+                # The borrowed value must be the shallowest accepted sample,
+                # never a value extrapolated up from deeper in the column.
+                assert row["argoTemperatureC"] is not None
+        # The surface row may only ever be the model's own 0 m level.
+        for row in surface_rows:
+            assert abs(row["depthM"]) < 1e-9
+    assert found > 0, "no profile exercised the near-surface rule"
+
+
+# --- the level count is read from the file, never assumed ------------------
+
+def test_pairs_are_produced_for_every_level_the_file_publishes():
+    """A denser vertical grid must produce more pairs with no code change.
+
+    The archived INCOIS runs publish 6 levels, but that is a property of the
+    PRODUCT, not of this code: the comparison builder reads the DEPTH coordinate
+    and must pair every level it finds. This test locks that in with a synthetic
+    10-level column containing the 75/100/150 m levels the real archive lacks,
+    which is exactly the region where the 125 m bias was diagnosed.
+    """
+    import numpy as np
+
+    from app.services.model_observation_matchup import (
+        _build_model_level_comparisons,
+    )
+
+    float_levels = [
+        {
+            "depth_m": depth,
+            "temperature_c": temperature,
+            "salinity_psu": 34.0,
+            "depth_source": "pressure_gsw",
+        }
+        for depth, temperature in [
+            (0.0, 30.0), (10.0, 29.5), (20.0, 29.0), (50.0, 28.0),
+            (75.0, 26.5), (100.0, 24.0), (125.0, 20.0), (150.0, 16.0),
+            (200.0, 12.0), (300.0, 9.0),
+        ]
+    ]
+    depths = np.array([0.0, 10.0, 20.0, 50.0, 75.0, 100.0, 125.0, 150.0, 200.0, 300.0])
+    temp = np.array([30.0, 29.5, 29.0, 28.0, 26.5, 24.0, 20.0, 16.0, 12.0, 9.0])
+    saln = np.full(10, 34.0)
+
+    comparisons, excluded = _build_model_level_comparisons(float_levels, depths, temp, saln)
+
+    assert len(comparisons) == len(depths) == 10
+    assert [row["modelDepthM"] for row in comparisons] == list(depths)
+    # Every level is paired, still at most one pair per level.
+    assert len({row["modelDepthM"] for row in comparisons}) == len(depths)
+    assert excluded == []
