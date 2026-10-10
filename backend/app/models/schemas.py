@@ -313,6 +313,13 @@ class MatchupDiagnostics(BaseModel):
     # Levels whose Argo QC flags were absent and were accepted on the lenient
     # assumption documented in argo_levels.
     missingQcLevelCount: int = 0
+    # What matchedPercentage / unmatchedObservationCount are measured against:
+    # "model_levels" (default matching mode) or "argo_observations".
+    matchedPercentageBasis: str = "argo_observations"
+    totalModelLevels: Optional[int] = None
+    # Surface levels that borrowed a shallow float sample (not native, not
+    # interpolated).
+    nearSurfaceSubstitutionCount: int = 0
     # Observation-model time separation and its classification. Passed in by
     # the caller because it is a property of the profile/model pair, not of the
     # matched rows.
@@ -358,11 +365,39 @@ class ArgoMatchupResponse(BaseModel):
     modelDepthSelection: str = (
         "model values at native HYCOM depth levels; float interpolated onto them"
     )
+    modelDepthAxis: str = "native"
+    modelDepthAxisRule: Optional[str] = None
+    modelDepths: List[float] = Field(default_factory=list)
+    storedFileDepths: List[float] = Field(default_factory=list)
     # model_levels mode: model levels that produced no pair, with the reason.
     excludedModelLevels: List[Dict[str, Any]] = Field(default_factory=list)
     floatBracketMaxGapM: float = 50.0
     floatBracketMaxGapDeepM: float = 100.0
     floatBracketDeepBreakpointM: float = 150.0
+    # --- Cyclone-relevant heat content (float-derived TCHP/D26 vs model TCHP/MLD) ---
+    # TCHP is in kJ/cm2, the unit the model's TCHP field carries. The residual is
+    # model - float, matching the temperature convention, so a positive value
+    # means the model carries more heat than the float measured.
+    #
+    # ``metricsStatus``/``metricsReason`` explain a missing value. A missing
+    # measurement and a measurement of zero are different claims and are never
+    # conflated: ``tchpFloatKjCm2`` is 0.0 only when the float's surface is below
+    # the isotherm, which is a real observation of no heat above 26 C.
+    tchpFloatKjCm2: Optional[float] = None
+    tchpModelKjCm2: Optional[float] = None
+    tchpResidualKjCm2: Optional[float] = None
+    tchpResidualPercent: Optional[float] = None
+    d26FloatM: Optional[float] = None
+    mldModelM: Optional[float] = None
+    metricsStatus: Optional[str] = None
+    metricsReason: Optional[str] = None
+    metricsSurfaceDepthM: Optional[float] = None
+    metricsSurfaceTemperatureC: Optional[float] = None
+    # Why the model's own TCHP may not be directly comparable: its formula is
+    # not published anywhere in the file.
+    tchpDefinitionStatus: Optional[str] = None
+    tchpIsothermC: float = 26.0
+    tchpMetricsMaxGapM: float = 25.0
     # Depth basis of the float side: "pressure_gsw", "provided", "mixed" or
     # "unavailable".
     depthSource: str = "unavailable"

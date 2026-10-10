@@ -25,6 +25,7 @@ def _hycom_data_status(ds=None) -> str:
         except Exception:
             pass
     return 'REAL'
+from app.services.model_depth_axis import apply_model_depth_axis
 from app.models.schemas import (
     LayerDataResponse, LayerGridData, DepthSliceResponse, DepthSliceGridData,
     ScientificProvenance,
@@ -126,7 +127,9 @@ class IncoisProvider:
         """
         if self._depth_dataset is None and self._depth_nc_path is not None and self._depth_nc_path.exists():
             try:
-                self._depth_dataset = xr.open_dataset(self._depth_nc_path, engine="netcdf4", chunks={})
+                opened = xr.open_dataset(self._depth_nc_path, engine="netcdf4", chunks={})
+                # One depth axis for every consumer; see model_depth_axis.
+                self._depth_dataset, _rule = apply_model_depth_axis(opened)
             except Exception as e:
                 print(f"Error opening depth-aware INCOIS HYCOM NetCDF: {e}")
                 self._depth_dataset = None

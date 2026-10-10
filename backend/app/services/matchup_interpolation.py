@@ -33,6 +33,23 @@ import numpy as np
 # native HYCOM vertical spacing yet comfortably above float depth resolution.
 NATIVE_DEPTH_MATCH_TOLERANCE_M = 1.0
 
+# Surface-level rule.
+#
+# A float almost never samples exactly 0 m: the first CTD reading is typically
+# 1-5 m down because the instrument has to be wet before it can measure. The
+# model's 0 m level therefore had no float bracket at all for most profiles and
+# was reported as "outside_float_range", which reads as a data failure when it
+# is really just the surface pumping dry.
+#
+# For the 0 m MODEL level only, the shallowest accepted float sample is allowed
+# to stand in for the surface when it is within this depth. The value is used as
+# measured - it is NOT extrapolated to 0 m - and the depth it was taken from is
+# disclosed so the reader can judge the substitution. Nothing else about the
+# vertical matching changes: no other model level may use this rule, and no
+# deeper model level can borrow a surface sample.
+SURFACE_MODEL_LEVEL_M = 0.0
+SURFACE_SAMPLE_MAX_DEPTH_M = 5.0
+
 
 def _finite(value) -> Optional[float]:
     try:
@@ -50,6 +67,7 @@ def interpolate_float_at_depth(
     target_depth_m: float,
     max_gap_m: float,
     native_tolerance_m: float = NATIVE_DEPTH_MATCH_TOLERANCE_M,
+    allow_surface_substitute: bool = False,
 ) -> Tuple[Optional[float], Optional[str], Optional[Tuple[float, float]], Optional[str]]:
     """Interpolate a FLOAT profile onto a target (model) depth.
 
@@ -60,6 +78,12 @@ def interpolate_float_at_depth(
     * ``"float_native"``    - a float level lies within ``native_tolerance_m``.
     * ``"float_interpolated"`` - a linear blend of the two bracketing float
       levels, accepted only when their separation is <= ``max_gap_m``.
+    * ``"float_near_surface"`` - only for a target of 0 m and only when
+      ``allow_surface_substitute`` is set: the shallowest accepted float sample
+      stands in for the surface when it is <= ``SURFACE_SAMPLE_MAX_DEPTH_M``
+      deep. The value is used as measured, never extrapolated, and the bracket
+      returned is the depth it was actually taken from so the caller can
+      disclose the substitution.
     * ``None`` with rejection ``"outside_float_range"`` - the target is above
       the shallowest or below the deepest available float level. The float is
       NEVER extrapolated.
@@ -73,15 +97,34 @@ def interpolate_float_at_depth(
     if target is None:
         return None, None, None, "invalid_target_depth"
 
-    usable = [
-        (d, v)
-        for d, v in (
-            (_finite(depth), _finite(value)) for depth, value in zip(depths, values)
-        )
-        if d is not None and v is not None
-    ]
+    # Sorted by depth: the bracket search below is a binary search and is only
+    # valid on an ascending axis, and a source that lists levels out of order
+    # would otherwise be bracketed wrongly without any error.
+    usable = sorted(
+        (
+            (d, v)
+            for d, v in (
+                (_finite(depth), _finite(value)) for depth, value in zip(depths, values)
+            )
+            if d is not None and v is not None
+        ),
+        key=lambda item: item[0],
+    )
     if not usable:
         return None, None, None, "no_valid_float_levels"
+
+    # Surface exception, enabled only for the 0 m model level and only when the
+    # caller opted in. Checked before the no-extrapolation rule so that a float
+    # whose shallowest sample sits at 3 m can still pair with the surface level
+    # instead of being rejected as "above the float range".
+    if (
+        allow_surface_substitute
+        and abs(target - SURFACE_MODEL_LEVEL_M) < 1e-9
+        and usable[0][0] <= SURFACE_SAMPLE_MAX_DEPTH_M
+    ):
+        surface_depth, surface_value = usable[0]
+        return surface_value, "float_near_surface", (surface_depth, surface_depth), None
+
     if len(usable) == 1:
         only_depth = usable[0][0]
         if abs(only_depth - target) <= native_tolerance_m:
@@ -95,10 +138,11 @@ def interpolate_float_at_depth(
     if target < usable_depths[0] or target > usable_depths[-1]:
         return None, None, None, "outside_float_range"
 
-    # Exact (or near-exact) hit on a real float level.
-    for depth, value in usable:
-        if abs(depth - target) <= native_tolerance_m:
-            return value, "float_native", (depth, depth), None
+    # Exact (or near-exact) hit on a real float level: the CLOSEST level inside
+    # the tolerance, not merely the first one met scanning downward.
+    nearest_depth, nearest_value = min(usable, key=lambda item: abs(item[0] - target))
+    if abs(nearest_depth - target) <= native_tolerance_m:
+        return nearest_value, "float_native", (nearest_depth, nearest_depth), None
 
     upper_index = int(np.searchsorted(usable_depths, target, side="left"))
     if upper_index == 0:
@@ -187,9 +231,11 @@ def interpolate_model_profile(
         if target > segment_depths[-1] + native_tolerance_m:
             continue
 
-        for depth, value in zip(segment_depths, segment_values):
-            if abs(depth - target) <= native_tolerance_m:
-                return value, "native"
+        nearest_depth, nearest_value = min(
+            zip(segment_depths, segment_values), key=lambda item: abs(item[0] - target)
+        )
+        if abs(nearest_depth - target) <= native_tolerance_m:
+            return nearest_value, "native"
 
         # Linear blend between the two bracketing native levels. Because the
         # segment has no gap inside it, these two are adjacent in the native
@@ -210,6 +256,45 @@ def interpolate_model_profile(
         return float(value), "interpolated"
 
     return None, None
+
+
+def nodes_from_cell_bounds(
+    bounds: Sequence[Sequence[float]],
+    first_node_m: Optional[float] = None,
+) -> Optional[List[float]]:
+    """Recover level NODES from cell bounds built as midpoints between nodes.
+
+    If a vertical axis was published as nodes ``z_0 < z_1 < ...`` and its
+    ``bounds`` were generated as the midpoints between neighbouring nodes, then
+    the lower edge of cell ``k`` is ``e_k = (z_{k-1} + z_k) / 2`` and the nodes
+    follow from ``z_k = 2 * e_k - z_{k-1}``, starting from ``z_0`` (the midpoint
+    of the first cell unless ``first_node_m`` is given).
+
+    This is an inverse problem with a unique answer, so it can be checked:
+    for bounds ``[-5,5],[5,30],[30,75],[75,175],[175,375],[375,625]`` it returns
+    ``[0, 10, 50, 100, 250, 500]``. Returns None when the bounds are malformed
+    or the result is not strictly increasing (the recursion alternates sign, so
+    bounds that are NOT midpoint-built quickly produce a non-monotonic axis).
+    """
+    try:
+        edges = [(float(lo), float(hi)) for lo, hi in bounds]
+    except (TypeError, ValueError):
+        return None
+    if not edges or any(not (np.isfinite(lo) and np.isfinite(hi)) for lo, hi in edges):
+        return None
+    if any(hi <= lo for lo, hi in edges):
+        return None
+    if any(abs(edges[k][1] - edges[k + 1][0]) > 1e-6 for k in range(len(edges) - 1)):
+        return None  # cells are not contiguous
+
+    node = float(first_node_m) if first_node_m is not None else 0.5 * (edges[0][0] + edges[0][1])
+    nodes = [node]
+    for lower_edge, _upper in edges[1:]:
+        node = 2.0 * lower_edge - node
+        nodes.append(node)
+    if any(b <= a for a, b in zip(nodes, nodes[1:])):
+        return None
+    return nodes
 
 
 def bilinear_stencil(
@@ -311,10 +396,11 @@ def weighted_cells(
 ) -> Optional[np.ndarray]:
     """Blend stencil cells into one profile, renormalizing over valid cells.
 
-    ``fields`` holds one array per stencil entry. Cells that are entirely
-    non-finite are land / masked seabed / missing data: their weight is dropped
-    and the remaining weights are renormalized to sum to 1, so a partially
-    masked cell does not bias the result toward zero.
+    ``fields`` holds one array per stencil entry, in stencil order, and each is
+    scaled by the stencil entry's bilinear weight. Cells that are non-finite
+    are land / masked seabed / missing data: their weight is dropped and the
+    remaining weights are renormalized to sum to 1, so a partially masked cell
+    does not bias the result toward zero.
 
     Returns None when fewer than ``min_valid_cells`` stencil entries carry
     data. A stencil that legitimately has only one entry (the target sits
@@ -325,15 +411,23 @@ def weighted_cells(
         return None
 
     arrays = [np.asarray(field, dtype=float) for field in fields]
+    if len(arrays) != len(stencil):
+        raise ValueError(
+            f"weighted_cells needs one field per stencil entry "
+            f"({len(arrays)} fields, {len(stencil)} stencil entries)"
+        )
     shape = arrays[0].shape
     numerator = np.zeros(shape, dtype=float)
     weight = np.zeros(shape, dtype=float)
     valid_count = np.zeros(shape, dtype=np.int64)
 
-    for array in arrays:
+    # Each cell is scaled by ITS bilinear weight. Dividing by the summed weight
+    # of the valid cells renormalizes over land / masked cells, so a masked
+    # corner hands its share to the survivors in proportion to their weights.
+    for array, (_lat_index, _lon_index, cell_weight) in zip(arrays, stencil):
         valid = np.isfinite(array)
-        numerator = numerator + np.where(valid, array, 0.0)
-        weight = weight + valid
+        numerator = numerator + cell_weight * np.where(valid, array, 0.0)
+        weight = weight + cell_weight * valid
         valid_count = valid_count + valid.astype(np.int64)
 
     if len(stencil) >= min_valid_cells:

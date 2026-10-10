@@ -31,8 +31,10 @@ from app.providers.argo_provider import argo_provider
 from app.services.risk_engine import calculate_prototype_risk
 from app.services.model_observation_matchup import (
     DEFAULT_MATCH_MODE,
+    MODEL_DEPTH_SELECTION_MODEL_LEVELS,
     match_argo_with_hycom,
 )
+from app.services.ocean_heat_metrics import TCHP_DEFINITION_STATUS
 from app.services.matchup_summary import (
     REASON_COARSE,
     REASON_NO_OVERLAP,
@@ -574,6 +576,22 @@ def get_argo_matchup_summary():
             "modelRun": matchup.get("modelRun"),
             "modelDataStatus": matchup.get("modelDataStatus"),
             "comparisons": comparisons,
+            # Cyclone-relevant heat content, carried through the same inclusion
+            # decision so the scatter and the temperature rows describe the same
+            # set of profiles.
+            "tchpFloatKjCm2": matchup.get("tchpFloatKjCm2"),
+            "tchpModelKjCm2": matchup.get("tchpModelKjCm2"),
+            "tchpResidualKjCm2": matchup.get("tchpResidualKjCm2"),
+            "tchpResidualPercent": matchup.get("tchpResidualPercent"),
+            "d26FloatM": matchup.get("d26FloatM"),
+            "mldModelM": matchup.get("mldModelM"),
+            "metricsStatus": matchup.get("metricsStatus"),
+            "metricsReason": matchup.get("metricsReason"),
+            "modelDepthAxis": matchup.get("modelDepthAxis"),
+            "modelDepthAxisRule": matchup.get("modelDepthAxisRule"),
+            "modelDepths": matchup.get("modelDepths"),
+            "storedFileDepths": matchup.get("storedFileDepths"),
+            "modelDepthSelection": matchup.get("modelDepthSelection"),
         })
 
     summary = summarize_matches(matches)
@@ -592,6 +610,26 @@ def get_argo_matchup_summary():
             (m.get("modelDataStatus") for m in matches if m.get("modelDataStatus")), "UNAVAILABLE"
         ),
         "modelRuns": sorted({m.get("modelRun") for m in matches if m.get("modelRun")}),
+        "modelDepthAxis": next(
+            (m.get("modelDepthAxis") for m in matches if m.get("modelDepthAxis")),
+            "native",
+        ),
+        "modelDepthAxisRule": next(
+            (m.get("modelDepthAxisRule") for m in matches if m.get("modelDepthAxisRule")),
+            "native",
+        ),
+        "modelDepths": next(
+            (m.get("modelDepths") for m in matches if m.get("modelDepths")),
+            [],
+        ),
+        "storedFileDepths": next(
+            (m.get("storedFileDepths") for m in matches if m.get("storedFileDepths")),
+            [],
+        ),
+        "modelDepthSelection": next(
+            (m.get("modelDepthSelection") for m in matches if m.get("modelDepthSelection")),
+            MODEL_DEPTH_SELECTION_MODEL_LEVELS,
+        ),
         "floatBracketMaxGapM": settings.FLOAT_BRACKET_MAX_GAP_M,
         "floatBracketMaxGapDeepM": settings.FLOAT_BRACKET_MAX_GAP_DEEP_M,
         "floatBracketDeepBreakpointM": settings.FLOAT_BRACKET_DEEP_BREAKPOINT_M,
@@ -602,6 +640,13 @@ def get_argo_matchup_summary():
         "excludedProfiles": excluded_profiles,
         "byModelDepth": summary["byModelDepth"],
         "overall": summary["overall"],
+        # --- cyclone-relevant heat content ---
+        "tchp": summary["tchp"],
+        "tchpScatter": summary["tchpScatter"],
+        "tchpProfiles": summary["tchpProfiles"],
+        "tchpIsothermC": 26.0,
+        "tchpDefinitionStatus": TCHP_DEFINITION_STATUS,
+        "tchpRuleOfThumbKJPerCm2": settings.TCHP_RULE_OF_THUMB_KJ_CM2,
         "profiles": summary["profiles"],
     }
 

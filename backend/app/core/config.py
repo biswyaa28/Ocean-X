@@ -138,10 +138,33 @@ class Settings:
     # smear a real gradient across tens of metres and the "residual" would be
     # dominated by the straight line rather than by model error. Deeper than
     # the breakpoint the profile is flatter and a wider bracket is acceptable.
+    # Which vertical axis the model values are assigned to.
+    #   "native"       (default) matches the producer's raw file. If the file's
+    #                  DEPTH variable is the midpoint of its bounds (e.g. from
+    #                  THREDDS NCSS), reconstructs the producer's native nodes
+    #                  from DEPTH_bounds / DEPTH_bnds; otherwise uses DEPTH as stored.
+    #   "ncss_file"    (legacy) trust the NetCDF's own stored DEPTH variable
+    #                  (0, 17.5, 52.5, 125, 275, 500 for NCSS subsets).
+    #   "file"         deprecated alias for "ncss_file".
+    #   "bounds_nodes" deprecated alias for "native".
+    # Note: Still unconfirmed with INCOIS whether these six values are layer
+    # centres. Matches the producer's raw file.
+    # See resolve_model_depths and scripts/test_depth_label_hypothesis.py.
+    MODEL_DEPTH_AXIS = os.environ.get("OCEANX_MODEL_DEPTH_AXIS", "native")
+
     FLOAT_BRACKET_MAX_GAP_M = float(os.environ.get("OCEANX_FLOAT_BRACKET_MAX_GAP_M", "50"))
     FLOAT_BRACKET_MAX_GAP_DEEP_M = float(os.environ.get("OCEANX_FLOAT_BRACKET_MAX_GAP_DEEP_M", "100"))
     FLOAT_BRACKET_DEEP_BREAKPOINT_M = float(
         os.environ.get("OCEANX_FLOAT_BRACKET_DEEP_BREAKPOINT_M", "150")
+    )
+
+    # Rule-of-thumb TCHP threshold drawn as a reference line on the regional
+    # scatter, in kJ/cm2. This is a widely quoted cyclone-potential screening
+    # value, NOT a forecast or a claim that a cyclone above it will intensify:
+    # it is published here purely as a visual reference so a reader can place
+    # the floats on a familiar scale. Override with OCEANX_TCHP_RULE_OF_THUMB.
+    TCHP_RULE_OF_THUMB_KJ_CM2 = float(
+        os.environ.get("OCEANX_TCHP_RULE_OF_THUMB", "50")
     )
 
     @property
@@ -160,11 +183,18 @@ class Settings:
         return Path(env).resolve() if env else self.DATA_DIR / "processed" / "ocean" / "argo" / "argo_bob_metadata.json"
 
     # CORS configuration
+    # A wildcard origin combined with allow_credentials=True lets any website
+    # make credentialed requests, so there is no "*" here. Add deployed
+    # frontends with OCEANX_CORS_ORIGINS="https://a.example,https://b.example".
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8000",
-        "*"
+        *[
+            origin.strip()
+            for origin in os.environ.get("OCEANX_CORS_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
     ]
 
 

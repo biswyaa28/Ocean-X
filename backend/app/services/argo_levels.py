@@ -183,10 +183,24 @@ def _qc_flag(source: Dict[str, Any], keys: Iterable[str]) -> Tuple[int, bool]:
     An absent flag resolves to ``DEFAULT_QC_FLAG`` (lenient) with
     ``was_present=False`` so the caller can count the assumption.
     """
-    value = _first_finite(source, keys)
-    if value is None:
-        return DEFAULT_QC_FLAG, False
-    return int(value), True
+    for key in keys:
+        if key not in source:
+            continue
+        raw = source[key]
+        # Argo NetCDF reads QC flags as single characters ('1', '4'). Treating a
+        # string flag as absent would silently promote a BAD value ('4') to the
+        # lenient default of 1 (good).
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("ascii", errors="ignore")
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if raw.isdigit():
+                return int(raw), True
+            continue
+        value = _finite(raw)
+        if value is not None:
+            return int(value), True
+    return DEFAULT_QC_FLAG, False
 
 
 def depth_from_pressure(pressure_dbar: float, latitude_deg: float) -> Optional[float]:
@@ -352,6 +366,12 @@ def build_matchup_levels(
         if not level.pop("qc_present", True):
             missing_qc_levels += 1
         levels.append(level)
+
+    # Downstream interpolation brackets levels by depth, which requires an
+    # ascending axis; a source that lists observations out of order (or a
+    # profile with a mix of pressure- and provided-depth levels) must not
+    # produce wrong brackets silently.
+    levels.sort(key=lambda level: level["depth_m"])
 
     sources = {level["depth_source"] for level in levels}
     depth_source = next(iter(sources)) if len(sources) == 1 else ("mixed" if sources else "unavailable")

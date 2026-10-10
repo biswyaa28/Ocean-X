@@ -27,6 +27,7 @@ different findings.
 """
 
 import math
+import statistics
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # Excluded-profile reasons. Kept as constants so the API contract and the UI
@@ -57,6 +58,20 @@ def reduce_residuals(residuals: Iterable[Optional[float]]) -> Dict[str, Any]:
         "bias": round(sum(usable) / n, 4),
         "mae": round(sum(abs(value) for value in usable) / n, 4),
         "rmse": round(math.sqrt(sum(value * value for value in usable) / n), 4),
+    }
+
+
+def _overall_from_profiles(reduced: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Equal-weight-per-profile bias / MAE / RMSE from per-profile reductions."""
+    rows = [row for row in reduced if row.get("n")]
+    if not rows:
+        return {"n": 0, "bias": None, "mae": None, "rmse": None}
+    count = len(rows)
+    return {
+        "n": count,
+        "bias": round(sum(row["bias"] for row in rows) / count, 4),
+        "mae": round(sum(row["mae"] for row in rows) / count, 4),
+        "rmse": round(math.sqrt(sum(row["rmse"] ** 2 for row in rows) / count), 4),
     }
 
 
@@ -114,6 +129,66 @@ def summarize_matches(matches: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             "salinity": reduce_residuals(salinity_residuals),
         })
 
+    # --- TCHP -----------------------------------------------------------------
+    # Aggregated per profile, like the depth rows, so one profile contributes at
+    # most one TCHP residual no matter how many levels it sampled. The median is
+    # reported alongside the mean because a regional TCHP bias is a
+    # heavy-tailed quantity: a handful of shallow, very warm profiles can move
+    # the mean a long way without describing the region.
+    tchp_residuals: List[float] = []
+    tchp_scatter: List[Dict[str, Any]] = []
+    tchp_rows: List[Dict[str, Any]] = []
+    for match in matches:
+        float_tchp = _finite(match.get("tchpFloatKjCm2"))
+        model_tchp = _finite(match.get("tchpModelKjCm2"))
+        residual = _finite(match.get("tchpResidualKjCm2"))
+        if residual is not None:
+            tchp_residuals.append(residual)
+        if float_tchp is not None and model_tchp is not None:
+            tchp_scatter.append({
+                "profileId": match.get("profileId"),
+                "floatId": match.get("floatId"),
+                "tchpFloatKjCm2": float_tchp,
+                "tchpModelKjCm2": model_tchp,
+                "residualKjCm2": residual,
+            })
+        tchp_rows.append({
+            "profileId": match.get("profileId"),
+            "floatId": match.get("floatId"),
+            "tchpFloatKjCm2": float_tchp,
+            "tchpModelKjCm2": model_tchp,
+            "tchpResidualKjCm2": residual,
+            "tchpResidualPercent": _finite(match.get("tchpResidualPercent")),
+            "d26FloatM": _finite(match.get("d26FloatM")),
+            "mldModelM": _finite(match.get("mldModelM")),
+            "metricsStatus": match.get("metricsStatus"),
+            "metricsReason": match.get("metricsReason"),
+        })
+
+    tchp_reduced = reduce_residuals(tchp_residuals)
+    if tchp_residuals:
+        tchp_reduced["medianBias"] = round(statistics.median(tchp_residuals), 4)
+        tchp_reduced["meanModelMinusFloat"] = round(
+            statistics.fmean(
+                [
+                    row["tchpModelKjCm2"] - row["tchpFloatKjCm2"]
+                    for row in tchp_scatter
+                ]
+            ),
+            4,
+        )
+        tchp_reduced["meanFloat"] = round(
+            statistics.fmean([row["tchpFloatKjCm2"] for row in tchp_scatter]), 4
+        )
+        tchp_reduced["meanModel"] = round(
+            statistics.fmean([row["tchpModelKjCm2"] for row in tchp_scatter]), 4
+        )
+    else:
+        tchp_reduced.update({
+            "medianBias": None, "meanModelMinusFloat": None,
+            "meanFloat": None, "meanModel": None,
+        })
+
     all_depths = sorted(set(temperature_by_depth) | set(salinity_by_depth))
     per_depth: List[Dict[str, Any]] = []
     for depth in all_depths:
@@ -123,20 +198,22 @@ def summarize_matches(matches: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             "salinity": reduce_residuals(salinity_by_depth.get(depth, [])),
         })
 
-    # Overall: the mean of the per-profile biases, so every profile counts once
-    # regardless of how many pairs it contributed.
+    # Overall: every profile counts once regardless of how many pairs it
+    # contributed. Bias is the mean of per-profile biases; MAE and RMSE are
+    # built from each profile's own MAE / MSE. Reducing the per-profile BIASES
+    # instead would let a profile's +3 C and -3 C residuals cancel to a zero
+    # bias and then contribute zero error, understating MAE and RMSE.
     overall = {
-        "temperature": reduce_residuals(
-            [row["temperature"]["bias"] for row in profile_rows if row["temperature"]["bias"] is not None]
-        ),
-        "salinity": reduce_residuals(
-            [row["salinity"]["bias"] for row in profile_rows if row["salinity"]["bias"] is not None]
-        ),
+        "temperature": _overall_from_profiles([row["temperature"] for row in profile_rows]),
+        "salinity": _overall_from_profiles([row["salinity"] for row in profile_rows]),
     }
 
     return {
         "byModelDepth": per_depth,
         "overall": overall,
+        "tchp": tchp_reduced,
+        "tchpScatter": tchp_scatter,
+        "tchpProfiles": tchp_rows,
         "profiles": profile_rows,
         "profileCount": len(profile_rows),
     }

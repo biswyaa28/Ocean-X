@@ -48,7 +48,14 @@ from app.services.matchup_interpolation import (
     weighted_cells,
     weighted_time_slices,
 )
+from app.services.model_depth_axis import resolve_model_depths  # noqa: F401  (re-exported)
 from app.services.matchup_statistics import calculate_matchup_statistics
+from app.services.ocean_heat_metrics import (
+    METRICS_MAX_GAP_M,
+    TCHP_DEFINITION_STATUS,
+    TCHP_ISOTHERM_C,
+    compute_ocean_heat_metrics,
+)
 
 MATCHING_DEPTH_TOLERANCE_M = 15.0
 
@@ -101,7 +108,9 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2.0)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2.0)**2
-    return round(2.0 * R * math.asin(math.sqrt(a)), 2)
+    # Clamp: rounding can push `a` a hair above 1 for near-antipodal points,
+    # which would raise a math domain error in asin.
+    return round(2.0 * R * math.asin(math.sqrt(min(1.0, max(0.0, a)))), 2)
 
 
 def _model_depth_selection(match_mode: str) -> str:
@@ -233,6 +242,10 @@ def _unavailable_matchup(
         "spatialMode": DEFAULT_SPATIAL_MODE,
         "matchedDepths": [],
         "matchedPointCount": 0,
+        "modelDepthAxis": "native",
+        "modelDepthAxisRule": "unavailable",
+        "modelDepths": [],
+        "storedFileDepths": [],
         "matchingToleranceM": MATCHING_DEPTH_TOLERANCE_M,
         "matchMode": DEFAULT_MATCH_MODE,
         "modelDepthSelection": MODEL_DEPTH_SELECTION_MODEL_LEVELS,
@@ -254,7 +267,28 @@ def _unavailable_matchup(
         "diagnostics": build_matchup_diagnostics(observation_count, [], missing_qc_level_count),
         "dataStatus": profile.get("data_status", "REAL SOURCE — INGESTION PENDING"),
         "source": "Argo Global Data (GDAC) + INCOIS RSMC HYCOM",
-        "residualConvention": "ΔT = HYCOM - Argo, ΔS = HYCOM - Argo",
+        "residualConvention": "ΔT = HYCOM - Argo, ΔS = HYCOM - Argo, ΔTCHP = HYCOM - Argo",
+        # --- cyclone-relevant heat content: honest nulls, never a zero ---
+        # No model profile exists, so neither a model TCHP nor a residual can be
+        # produced. The float side is not reported either: a float TCHP beside a
+        # missing model value would invite a reader to subtract one from nothing.
+        # The definition caveat still travels with the response.
+        "tchpFloatKjCm2": None,
+        "tchpModelKjCm2": None,
+        "tchpResidualKjCm2": None,
+        "tchpResidualPercent": None,
+        "d26FloatM": None,
+        "mldModelM": None,
+        "metricsStatus": "MODEL_DATA_UNAVAILABLE",
+        "metricsReason": (
+            "No model profile was available for this float, so no TCHP or D26 "
+            "comparison could be made."
+        ),
+        "metricsSurfaceDepthM": None,
+        "metricsSurfaceTemperatureC": None,
+        "tchpDefinitionStatus": TCHP_DEFINITION_STATUS,
+        "tchpIsothermC": TCHP_ISOTHERM_C,
+        "tchpMetricsMaxGapM": METRICS_MAX_GAP_M,
         "statusMessage": status_message,
     }
 
@@ -284,6 +318,73 @@ def _read_cell_profile(
         blended = weighted_cells(collected[key], stencil, min_valid_cells=2)
         profile[key] = np.full(depths.shape, np.nan) if blended is None else blended
     return profile
+
+
+def _read_cell_2d(
+    dataset: xr.Dataset,
+    time_index: int,
+    stencil: List[Tuple[int, int, float]],
+    field: str,
+) -> Optional[float]:
+    """Horizontally resolve one TIME slice of a 2D (depth-less) model field.
+
+    TCHP and MLD carry no DEPTH axis - they are already vertically integrated
+    (TCHP) or surface-defined (MLD) products, so there is no vertical step and
+    nothing to interpolate down the column. The horizontal and temporal
+    treatment is deliberately identical to ``_read_cell_profile`` (bilinear
+    with land renormalised, then a linear blend of the bracketing time slices)
+    so the residual against them is not confounded by different sampling.
+    """
+    values: List[np.ndarray] = []
+    for lat_index, lon_index, _weight in stencil:
+        cell = dataset.isel(TIME=time_index, LAT=lat_index, LON=lon_index)
+        if field not in cell:
+            return None
+        variable = cell[field]
+        # Real files carry these fields as (TIME, LAT, LON) with no vertical
+        # axis, but a synthetic fixture may repeat a 2D product along DEPTH. If
+        # a DEPTH axis survives the selection, take the level nearest the
+        # surface rather than silently reading whichever element came first.
+        if "DEPTH" in getattr(variable, "dims", ()):
+            depth_values = np.atleast_1d(dataset["DEPTH"].values).astype(float)
+            index = int(np.argmin(np.abs(depth_values)))
+            variable = variable.isel(DEPTH=index)
+        values.append(np.atleast_1d(variable.values).astype(float))
+
+    blended = weighted_cells(values, stencil, min_valid_cells=2)
+    if blended is None:
+        return None
+    array = np.atleast_1d(blended)
+    if not array.size or not np.isfinite(array[0]):
+        return None
+    return float(array[0])
+
+
+# 2D model fields sampled at the float alongside the 3D temperature/salinity.
+MODEL_2D_FIELDS = ("TCHP", "MLD")
+
+
+def _sample_2d_field(
+    dataset: xr.Dataset,
+    field: str,
+    stencil: List[Tuple[int, int, float]],
+    brackets: List[Tuple[int, float]],
+) -> Optional[float]:
+    """Blend one 2D field over the stencil and then over the time bracket."""
+    if field not in dataset.variables:
+        return None
+    per_slice = [_read_cell_2d(dataset, index, stencil, field) for index, _w in brackets]
+    if any(entry is None for entry in per_slice):
+        return None
+    weights = [1.0] if len(brackets) == 1 else [weight for _i, weight in brackets]
+    blended = weighted_time_slices(
+        [np.array([value], dtype=float) for value in per_slice if value is not None],
+        weights,
+    )
+    if blended is None:
+        return None
+    array = np.atleast_1d(blended)
+    return float(array[0]) if array.size and np.isfinite(array[0]) else None
 
 
 def _extract_model_profiles(
@@ -324,8 +425,12 @@ def _extract_model_profiles(
     if not brackets:
         return None
 
-    depths = np.atleast_1d(dataset["DEPTH"].values) if "DEPTH" in dataset.coords else np.array([0.0])
-    depths = np.atleast_1d(depths).astype(float)
+    depths, depth_axis = resolve_model_depths(dataset)
+    stored_depths = (
+        np.atleast_1d(dataset["DEPTH"].values).astype(float)
+        if "DEPTH" in dataset.coords
+        else np.array([0.0])
+    )
 
     slices = [_read_cell_profile(dataset, index, stencil, depths) for index, _weight in brackets]
     weights = [weight for _index, weight in brackets]
@@ -351,10 +456,19 @@ def _extract_model_profiles(
         else 0.0
     )
 
+    # 2D products (no vertical axis) through the identical horizontal and
+    # temporal path, so their residual is not confounded by different sampling.
+    for field in MODEL_2D_FIELDS:
+        profiles[field.lower()] = _sample_2d_field(dataset, field, stencil, brackets)
+
     return {
         "depths": depths,
+        "depthAxis": depth_axis,
+        "storedDepths": stored_depths,
         "temp": profiles["temp"],
         "saln": profiles["saln"],
+        "tchp": profiles.get("tchp"),
+        "mld": profiles.get("mld"),
         "matchedModelLat": float(lats[nearest_lat_index]),
         "matchedModelLon": float(lons[nearest_lon_index]),
         "modelTimestamp": str(nearest_time),
@@ -388,9 +502,10 @@ def _build_model_level_comparisons(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Compare the model AT ITS OWN DEPTH LEVELS (the default mode).
 
-    Physics: the model carries only a handful of depth levels (0, 17.5, 52.5,
-    125, 275, 500 m for RSMC HYCOM) while a float profiles the column every
-    ~1-10 m. Interpolating the model onto every float depth compares a
+    Physics: the model carries only a handful of depth levels (the INCOIS RSMC
+    HYCOM OSF product publishes 6, and its product page documents "0.25x0.25 and
+    6 levels" as the complete vertical axis) while a float profiles the column
+    every ~1-10 m. Interpolating the model onto every float depth compares a
     three-segment straight line against a real thermocline, so the residual is
     dominated by the interpolation of the model rather than by model error, and
     the matched-pair count is inflated by neighbouring float levels that are not
@@ -399,8 +514,12 @@ def _build_model_level_comparisons(
     Comparing at the model's own levels inverts that: the model value is used
     exactly as published (no vertical model interpolation at all), and the FLOAT
     is interpolated onto each of the few model depths. The resulting pairs are
-    independent of one another - at most one per model level, so at most 6 per
-    profile - and the RMSE measures model error rather than resampling error.
+    independent of one another - at most one per model level - and the RMSE
+    measures model error rather than resampling error.
+
+    The level count is read from the file, never assumed: ``model_depths`` is the
+    dataset's own DEPTH coordinate, so a run published on a denser vertical grid
+    would automatically produce more pairs at more depths with no code change.
 
     The float side is still an interpolation, so it is bounded by two rules:
     never extrapolate past the float's sampled range, and reject any bracket
@@ -428,11 +547,16 @@ def _build_model_level_comparisons(
             settings.FLOAT_BRACKET_DEEP_BREAKPOINT_M,
         )
 
+        # The 0 m model level may borrow a shallow float sample (see
+        # SURFACE_SAMPLE_MAX_DEPTH_M). Opt-in per level so no other depth can.
+        surface_allowed = abs(depth_m) < 1e-9
         temp_value, temp_method, temp_bracket, temp_reject = interpolate_float_at_depth(
-            float_depths, float_temp, depth_m, limit
+            float_depths, float_temp, depth_m, limit,
+            allow_surface_substitute=surface_allowed,
         )
         saln_value, saln_method, saln_bracket, saln_reject = interpolate_float_at_depth(
-            float_depths, float_saln, depth_m, limit
+            float_depths, float_saln, depth_m, limit,
+            allow_surface_substitute=surface_allowed,
         )
 
         if temp_value is None and saln_value is None:
@@ -449,7 +573,14 @@ def _build_model_level_comparisons(
         method = "float_interpolated" if "float_interpolated" in (
             temp_method, saln_method
         ) else "float_native"
-        bracket = temp_bracket or saln_bracket
+        # The bracket must belong to a variable that actually produced a value:
+        # a rejected (too coarse) bracket is still returned by the interpolator
+        # for reporting, and must not be disclosed as the one that was used.
+        bracket = (
+            temp_bracket if temp_value is not None
+            else saln_bracket if saln_value is not None
+            else None
+        )
 
         temperature_residual = (
             round(round(model_t, 2) - round(temp_value, 2), 2)
@@ -486,6 +617,13 @@ def _build_model_level_comparisons(
             "floatSalinityMethod": saln_method,
             "floatTemperatureRejected": temp_reject,
             "floatSalinityRejected": saln_reject,
+            # When the 0 m level borrowed a shallow float sample, the depth it
+            # was taken from is disclosed here. None in every other case.
+            "floatNearSurfaceDepthM": (
+                bracket[0]
+                if (bracket and "float_near_surface" in (temp_method, saln_method))
+                else None
+            ),
             "argoVariableSource": level_result_variable_source(levels),
             "_temperatureResidualRaw": (
                 model_t - temp_value
@@ -698,12 +836,17 @@ def match_argo_with_hycom(
                 "dataStatus": status,
             })
             # Lower window gap wins; on a tie the shorter forecast lead wins.
+            # A run only becomes the winner if it can actually be sampled at the
+            # float: a better-scored run whose grid does not cover the position
+            # must not displace a usable one with an empty profile.
             if best_score is None or score < best_score:
-                best_score = score
-                model_data_status = status
-                model_run_file = candidate
-                model_run_name = candidate.name
-                model_profile = _extract_model_profiles(dataset, argo_lat, argo_lon, argo_dt, spatial_mode)
+                extracted = _extract_model_profiles(dataset, argo_lat, argo_lon, argo_dt, spatial_mode)
+                if extracted is not None or model_profile is None:
+                    best_score = score
+                    model_data_status = status
+                    model_run_file = candidate
+                    model_run_name = candidate.name
+                    model_profile = extracted
         except Exception as e:
             print(f"Error querying HYCOM NetCDF dataset ({candidate.name}): {e}")
         finally:
@@ -746,6 +889,49 @@ def match_argo_with_hycom(
     time_gap_status, time_gap_reason = classify_time_gap(model_profile["timeDifferenceHours"])
     statistics_suppressed = time_gap_status == "too_large"
 
+    # Cyclone-relevant heat metrics. The float side comes from the same QC-accepted
+    # levels the temperature comparison used, so the two cannot disagree about
+    # which observations were trusted.
+    heat = compute_ocean_heat_metrics(levels)
+    tchp_float = heat["tchpKjCm2"]
+    tchp_model = model_profile.get("tchp")
+    d26_float = heat["d26M"]
+    mld_model = model_profile.get("mld")
+
+    # The time-gap guard applies to the heat residual exactly as it does to the
+    # temperature residual: a residual across two different ocean states is not
+    # model error. The measured values are still returned; only the residual and
+    # its percentage are withheld.
+    if statistics_suppressed:
+        tchp_residual = None
+        tchp_residual_percent = None
+        metrics_status = "TIME_GAP_TOO_LARGE"
+        metrics_reason = (
+            "Observation-model time gap too large, so the TCHP residual is withheld. "
+            + (heat["reason"] or "")
+        ).strip()
+    elif tchp_float is None:
+        tchp_residual = None
+        tchp_residual_percent = None
+        metrics_status = "FLOAT_METRICS_UNAVAILABLE"
+        metrics_reason = heat["reason"] or "float heat metrics unavailable"
+    elif tchp_model is None:
+        tchp_residual = None
+        tchp_residual_percent = None
+        metrics_status = "MODEL_FIELD_UNAVAILABLE"
+        metrics_reason = "model TCHP field is absent or masked at this location"
+    else:
+        tchp_residual = round(tchp_model - tchp_float, 4)
+        # Percent against the float value. Guarded against a zero float TCHP,
+        # which is a real measurement (surface below 26 C) and would divide by 0.
+        tchp_residual_percent = (
+            round((tchp_model - tchp_float) / tchp_float * 100.0, 2)
+            if tchp_float > 0
+            else None
+        )
+        metrics_status = heat["status"] or "OK"
+        metrics_reason = heat["reason"]
+
     return {
         "argoProfileId": profile_id,
         "floatId": profile["float_id"],
@@ -768,6 +954,10 @@ def match_argo_with_hycom(
         "spatialMode": spatial_mode,
         "matchedDepths": matched_depths,
         "matchedPointCount": len(comparisons),
+        "modelDepthAxis": model_profile.get("depthAxis", "native"),
+        "modelDepthAxisRule": model_profile.get("depthAxis", "native"),
+        "modelDepths": [float(d) for d in model_profile.get("depths", [])],
+        "storedFileDepths": [float(d) for d in model_profile.get("storedDepths", [])],
         "matchingToleranceM": MATCHING_DEPTH_TOLERANCE_M,
         "matchMode": match_mode,
         "modelDepthSelection": _model_depth_selection(match_mode),
@@ -783,7 +973,23 @@ def match_argo_with_hycom(
         "comparisons": comparisons,
         "dataStatus": profile.get("data_status", "REAL SOURCE — INGESTION PENDING"),
         "source": "Argo Global Data (GDAC) + INCOIS RSMC HYCOM",
-        "residualConvention": "ΔT = HYCOM - Argo, ΔS = HYCOM - Argo",
+        "residualConvention": "ΔT = HYCOM - Argo, ΔS = HYCOM - Argo, ΔTCHP = HYCOM - Argo",
+        # --- cyclone-relevant heat content ---
+        # Float-derived TCHP / D26 from the float's own QC-accepted levels,
+        # compared with the model's 2D TCHP and MLD at the same place and time.
+        "tchpFloatKjCm2": tchp_float,
+        "tchpModelKjCm2": round(tchp_model, 4) if tchp_model is not None else None,
+        "tchpResidualKjCm2": tchp_residual,
+        "tchpResidualPercent": tchp_residual_percent,
+        "d26FloatM": d26_float,
+        "mldModelM": round(mld_model, 3) if mld_model is not None else None,
+        "metricsStatus": metrics_status,
+        "metricsReason": metrics_reason,
+        "metricsSurfaceDepthM": heat["surfaceDepthM"],
+        "metricsSurfaceTemperatureC": heat["surfaceTemperatureC"],
+        "tchpDefinitionStatus": TCHP_DEFINITION_STATUS,
+        "tchpIsothermC": TCHP_ISOTHERM_C,
+        "tchpMetricsMaxGapM": METRICS_MAX_GAP_M,
         "statusMessage": None,
         "statistics": {
             "temperature": calculate_matchup_statistics(
@@ -796,5 +1002,9 @@ def match_argo_with_hycom(
         "diagnostics": build_matchup_diagnostics(
             len(argo_obs), comparisons, missing_qc_level_count,
             model_profile["timeDifferenceHours"], time_gap_status,
+            total_model_levels=(
+                len(comparisons) + len(excluded_model_levels)
+                if match_mode == "model_levels" else None
+            ),
         ),
     }
