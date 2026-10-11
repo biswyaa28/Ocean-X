@@ -52,7 +52,7 @@ backend/data/processed/**/*.json
 !backend/data/processed/ocean/argo/argo_bob_processed.json
 !backend/data/processed/ocean/argo/argo_bob_metadata.json
 !backend/data/processed/ocean/incois_hycom_bob_metadata.json
-!backend/data/raw/ocean/argo/argo_bob_raw.json
+
 
 # IDE & OS
 .vscode/
@@ -67,3 +67,9 @@ yarn-debug.log*
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Casestudy, diagnostics, and root lockfile
+backend_casestudy/
+frontend_casestudy/
+package-lock.json
+docs/diagnostics/
