@@ -169,10 +169,41 @@ def download(run_date, filename, time_start, time_end, force, attempts=3):
 
 
 def record_provenance(entries):
-    """Record the archived runs in data/manifest.json."""
+    """Merge the archived runs into data/manifest.json.
+
+    The archive is a rolling operation: INCOIS publishes only the most recent
+    runs, so every invocation sees a DIFFERENT subset of what is already on
+    disk. This manifest is the provenance record of every subset ever fetched,
+    so an entry for a run this invocation did not touch has to survive it.
+    Replacing the list outright dropped every run fetched by an earlier session
+    the moment a newer run was archived, which is how the record of the
+    20261004-20261008 subsets was lost when 20261011 was fetched.
+
+    Entries are keyed by runDate: a run handled again is updated in place, a run
+    not handled is left untouched, and the result is sorted by run date so the
+    list reads chronologically however the runs were fetched.
+    """
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    datasets = [d for d in manifest["datasets"] if d["name"] != "HYCOM_RSMC_RAW_SUBSETS"]
-    datasets.append({
+    existing = next(
+        (d for d in manifest["datasets"] if d["name"] == "HYCOM_RSMC_RAW_SUBSETS"),
+        None,
+    )
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    for entry in (existing or {}).get("archived_runs") or []:
+        run_date = entry.get("runDate")
+        if run_date:
+            merged[run_date] = entry
+    for entry in entries:
+        run_date = entry.get("runDate")
+        if run_date:
+            merged[run_date] = entry
+    ordered = [merged[run_date] for run_date in sorted(merged)]
+
+    # Start from the existing dataset entry so fields added by a later version
+    # of this script are not silently dropped, then refresh the descriptive ones.
+    dataset = dict(existing) if existing else {}
+    dataset.update({
         "name": "HYCOM_RSMC_RAW_SUBSETS",
         "category": "local-scientific",
         "required": False,
@@ -190,16 +221,20 @@ def record_provenance(entries):
         "regenerate_command": "python scripts/archive_hycom_runs.py",
         "region": {"min_lat": MIN_LAT, "max_lat": MAX_LAT, "min_lon": MIN_LON, "max_lon": MAX_LON},
         "variables": VARIABLES,
-        "archived_runs": entries,
+        "archived_runs": ordered,
         "provenance_note": (
             "Genuine INCOIS model output restricted to the Bay of Bengal by the "
             "publisher's own NetcdfSubset service; native depth axis, grid and "
             "time steps are unchanged. Never committed to Git."
         ),
     })
+
+    datasets = [d for d in manifest["datasets"] if d["name"] != "HYCOM_RSMC_RAW_SUBSETS"]
+    datasets.append(dataset)
     manifest["datasets"] = datasets
     MANIFEST.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"  recorded {len(entries)} run(s) in data/manifest.json")
+    print(f"  recorded {len(entries)} run(s) in data/manifest.json "
+          f"({len(ordered)} archived in total)")
 
 
 def main():
