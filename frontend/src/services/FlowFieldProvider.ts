@@ -9,7 +9,7 @@ export function generateBayOfBengalFlowField(
   type: 'wind' | 'current',
   cycloneLat: number = 18.2,
   cycloneLon: number = 88.4,
-  maxWindKts: number = 125,
+  maxWindKts?: number | null,
   timestampStr: string = '2026-09-08T12:00:00Z'
 ): EnvironmentalFlowField {
   const minLat = 5.0;
@@ -32,7 +32,11 @@ export function generateBayOfBengalFlowField(
   const vGrid: number[][] = [];
 
   const isWind = type === 'wind';
-  const maxVelocity = isWind ? maxWindKts * 0.514444 : 3.2; // Convert kts to m/s for wind, m/s for current
+  // Convert kts to m/s for wind, m/s for current. When no wind observation is
+  // available we fall back to a scale that simply makes particles invisible
+  // rather than inventing a 125 kt storm.
+  const windMs = maxWindKts === null || maxWindKts === undefined ? 0 : maxWindKts * 0.514444;
+  const maxVelocity = isWind ? windMs : 3.2;
 
   for (let i = 0; i < latitudes.length; i++) {
     const lat = latitudes[i];

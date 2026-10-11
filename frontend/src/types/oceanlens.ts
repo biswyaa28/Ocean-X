@@ -6,6 +6,7 @@ export type DataStatus =
   | 'SIMULATED'
   | 'NOT CURRENTLY INTEGRATED'
   | 'DEMO'
+  | 'UNAVAILABLE'
   | 'OBSERVATION'
   | 'FORECAST';
 
@@ -67,25 +68,35 @@ export type CycloneCategory =
   | 'Extremely Severe Cyclonic Storm'
   | 'Super Cyclonic Storm';
 
+/** Which agency a best-track value was actually read from. */
+export type ObservationSource = 'WMO' | 'IMD';
+
 export interface CycloneTrackPoint {
   id: string;
   timestamp: string; // ISO 8601 string
   latitude: number;
   longitude: number;
-  maxWindKts: number;
-  centralPressureMb: number;
-  category: CycloneCategory;
+  /**
+   * Observable fields are nullable: the backend reports absence rather than
+   * substituting a plausible constant. Every consumer must handle `null`.
+   */
+  maxWindKts: number | null;
+  centralPressureMb: number | null;
+  category: CycloneCategory | null;
+  windSource?: ObservationSource | null;
+  pressureSource?: ObservationSource | null;
   status: 'OBSERVATION' | 'FORECAST';
-  distanceToCoastKm: number;
-  stormSpeedKts: number;
-  stormDirDeg: number;
-  forecastConfidencePct?: number;
+  distanceToCoastKm: number | null;
+  stormSpeedKts: number | null;
+  stormDirDeg: number | null;
+  forecastConfidencePct?: number | null;
 }
 
 export interface WindRadius {
-  r34ktsKm: number;
-  r50ktsKm: number;
-  r64ktsKm: number;
+  r34ktsKm: number | null;
+  r50ktsKm: number | null;
+  r64ktsKm: number | null;
+  source?: string | null;
 }
 
 export interface ForecastConePoint {
@@ -102,17 +113,24 @@ export interface Cyclone {
   dataStatus: DataStatus;
   currentTrackIndex: number;
   track: CycloneTrackPoint[];
+  /** Always empty: IBTrACS holds best-track history, not forecasts. */
   forecastCone: ForecastConePoint[];
   windRadius: WindRadius;
+  dataCompleteness?: {
+    trackPoints: number;
+    withWind: number;
+    withPressure: number;
+  } | null;
   sourceAttribution: string;
   isHistorical?: boolean;
 }
 
 export interface Evidence {
   variable: string;
-  value: string;
+  /** Null when the underlying observation is genuinely absent. */
+  value: string | null;
   unit: string;
-  trend: 'increasing' | 'decreasing' | 'neutral';
+  trend: 'increasing' | 'decreasing' | 'neutral' | 'unknown';
   relevance: string;
   status: DataStatus;
 }
@@ -124,12 +142,23 @@ export interface Explanation {
   generatedAt: string;
 }
 
+/**
+ * An UNVALIDATED demo heuristic. `status` is authoritative: when it is
+ * 'UNAVAILABLE' the score is null and `unavailableReason` says why. Never
+ * present this number as a forecast or an official warning.
+ */
 export interface RiskAssessment {
-  score: number; // 0 to 100
-  category: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  status: 'OK' | 'UNAVAILABLE';
+  unavailableReason?: string | null;
+  heuristicDemoScore: number | null; // 0 to 100, demo only
+  category: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
   modelType: 'prototype_rule_based';
+  validated: false;
+  operationalUse: string;
+  disclaimer: string;
+  weights: Record<string, number>;
   evidence: Evidence[];
-  explanation: Explanation;
+  explanation: Explanation | null;
   affectedRegions: string[];
 }
 
@@ -137,7 +166,7 @@ export interface Hazard {
   id: string;
   title: string;
   type: 'cyclone' | 'high_wave' | 'strong_wind' | 'storm_surge' | 'coastal_erosion';
-  severity: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  severity: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
   location: string;
   dataStatus: DataStatus;
   riskAssessment: RiskAssessment;
@@ -173,10 +202,13 @@ export interface GISLayer {
 
 export interface KPIMetrics {
   activeCyclones: number;
-  maxWindKts: number;
-  maxWaveHeightM: number;
-  avgSSTC: number;
-  coastalRiskLevel: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  /** Null when the observation is genuinely absent from the source. */
+  maxWindKts: number | null;
+  maxWaveHeightM: number | null;
+  avgSSTC: number | null;
+  /** Null when the unvalidated demo heuristic declined to score. */
+  coastalRiskLevel: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
+  coastalRiskUnavailableReason?: string | null;
   dataConfidencePct: number;
   forecastConfidencePct: number;
 }

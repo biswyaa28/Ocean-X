@@ -922,5 +922,3 @@ describe('Phase 2B — hover picking and camera interaction remain functional', 
     expect(viewer.camera.flyTo.mock.calls.length).toBeGreaterThan(flyToCalls);
   });
 });
-
-

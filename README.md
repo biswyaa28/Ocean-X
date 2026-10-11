@@ -264,7 +264,7 @@ graph TD
 ## 🚀 Getting Started
 
 ### **Prerequisites**
-- **Node.js** >= 18.0.0
+- **Node.js** >= 20.9.0
 - **npm** >= 9.0.0
 - **Python** >= 3.10
 - **Git**

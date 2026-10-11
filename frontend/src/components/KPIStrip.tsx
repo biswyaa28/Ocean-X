@@ -67,9 +67,11 @@ export const KPIStrip: React.FC<KPIStripProps> = ({ metrics }) => {
 
           <div className="flex items-center gap-1.5">
             <span className="text-[9px] text-slate-500 uppercase">COASTAL RISK</span>
-            <span className={`text-xs ${getRiskStyle(metrics.coastalRiskLevel)}`}>
-              {metrics.coastalRiskLevel}
+            <span className={`text-xs ${metrics.coastalRiskLevel ? getRiskStyle(metrics.coastalRiskLevel) : 'text-slate-500'}`}>
+              {metrics.coastalRiskLevel ?? 'UNAVAILABLE'}
             </span>
+            {/* Unvalidated demo heuristic, never an official warning. */}
+            <span className="text-[9px] text-amber-500/80 uppercase">demo · not validated</span>
           </div>
 
           <div className="h-3 w-[1px] bg-slate-800/80" />

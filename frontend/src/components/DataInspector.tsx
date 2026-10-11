@@ -30,10 +30,10 @@ export interface InspectionData {
   customValue?: string;
   customUnit?: string;
   cycloneName?: string;
-  maxWindKts?: number;
-  centralPressureMb?: number;
-  category?: string;
-  distanceToCoastKm?: number;
+  maxWindKts?: number | null;
+  centralPressureMb?: number | null;
+  category?: string | null;
+  distanceToCoastKm?: number | null;
   observationType?: string;
 }
 
@@ -186,15 +186,15 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
               </div>
               <div className="text-right">
                 <div className="text-[8px] text-slate-400 uppercase">MAX SUSTAINED WIND</div>
-                <div className="text-cyan-300 font-bold mt-0.5">{inspection.maxWindKts} KTS</div>
+                <div className={`font-bold mt-0.5 ${inspection.maxWindKts === null || inspection.maxWindKts === undefined ? 'text-slate-500' : 'text-cyan-300'}`}>{inspection.maxWindKts === null || inspection.maxWindKts === undefined ? 'NOT OBSERVED' : `${inspection.maxWindKts} KTS`}</div>
               </div>
               <div>
                 <div className="text-[8px] text-slate-400 uppercase">CENTRAL PRESSURE</div>
-                <div className="text-slate-200 font-bold mt-0.5">{inspection.centralPressureMb} MB</div>
+                <div className={`font-bold mt-0.5 ${inspection.centralPressureMb === null || inspection.centralPressureMb === undefined ? 'text-slate-500' : 'text-slate-200'}`}>{inspection.centralPressureMb === null || inspection.centralPressureMb === undefined ? 'NOT OBSERVED' : `${inspection.centralPressureMb} MB`}</div>
               </div>
               <div className="text-right">
                 <div className="text-[8px] text-slate-400 uppercase">COASTAL DISTANCE</div>
-                <div className="text-amber-300 font-bold mt-0.5">{inspection.distanceToCoastKm} KM</div>
+                <div className={`font-bold mt-0.5 ${inspection.distanceToCoastKm === null || inspection.distanceToCoastKm === undefined ? 'text-slate-500' : 'text-amber-300'}`}>{inspection.distanceToCoastKm === null || inspection.distanceToCoastKm === undefined ? 'NOT OBSERVED' : `${inspection.distanceToCoastKm} KM`}</div>
               </div>
             </div>
           </div>

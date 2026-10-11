@@ -1,15 +1,83 @@
 import csv
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from app.core.config import settings
-from app.models.schemas import Cyclone, CycloneTrackPoint, ForecastConePoint, WindRadius
+from app.models.schemas import (
+    Cyclone,
+    CycloneTrackPoint,
+    DataCompleteness,
+    WindRadius,
+)
+
+
+def _to_float(raw: Optional[str]) -> Optional[float]:
+    """Parse a CSV cell into a float, returning None when it is blank/absent.
+
+    Never returns a fallback constant: an absent observation stays absent so it
+    can be reported honestly downstream.
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _first_available(
+    row: List[str], indices: Dict[str, int], names: Tuple[str, ...]
+) -> Tuple[Optional[float], Optional[str]]:
+    """Return the first parseable value among ``names`` plus which column it came from.
+
+    Used to prefer the WMO consensus value and fall back to the IMD (New Delhi)
+    value, which is the authoritative reporting agency for the North Indian
+    Ocean. Returns ``(None, None)`` when every candidate is blank.
+    """
+    for name in names:
+        idx = indices.get(name)
+        if idx is None or idx >= len(row):
+            continue
+        value = _to_float(row[idx])
+        if value is not None:
+            return value, 'IMD' if name.startswith('NEWDELHI') else 'WMO'
+    return None, None
+
+
+def _quadrant_mean(
+    row: List[str], indices: Dict[str, int], prefix: str
+) -> Optional[float]:
+    """Mean of the available quadrant radii for a wind threshold.
+
+    IBTrACS stores R34/R50/R64 as up to four quadrant radii (NE/SE/SW/NW). We
+    average whichever quadrants are actually present. Returns None when the
+    agency reported no radii at all for this point.
+    """
+    values = []
+    for quadrant in ('NE', 'SE', 'SW', 'NW'):
+        idx = indices.get(f'{prefix}_{quadrant}')
+        if idx is None or idx >= len(row):
+            continue
+        value = _to_float(row[idx])
+        if value is not None and value > 0:
+            values.append(value)
+    if not values:
+        return None
+    return round(sum(values) / len(values), 1)
+
 
 class IBTrACSProvider:
     def __init__(self, csv_path: Path = settings.RAW_IBTRACS_CSV):
         self.csv_path = csv_path
         self._cached_cyclones: Optional[List[Cyclone]] = None
+        # (sid, point_index) -> {'R34': float|None, 'R50': ..., 'R64': ...}
+        self._radii_cache: Dict[tuple, Dict[str, Optional[float]]] = {}
 
-    def _get_category(self, wind_kts: float) -> str:
+    def _get_category(self, wind_kts: Optional[float]) -> Optional[str]:
+        if wind_kts is None:
+            return None
         if wind_kts >= 120:
             return 'Super Cyclonic Storm'
         elif wind_kts >= 90:
@@ -38,31 +106,25 @@ class IBTrACSProvider:
             with open(self.csv_path, 'r', encoding='utf-8', errors='ignore') as f:
                 reader = csv.reader(f)
                 header = next(reader)
-                units = next(reader) # Skip units row
+                next(reader)  # units row
+                indices = {name: i for i, name in enumerate(header)}
 
-                # Index mapping
-                sid_idx = header.index('SID') if 'SID' in header else 0
-                year_idx = header.index('SEASON') if 'SEASON' in header else 1
-                name_idx = header.index('NAME') if 'NAME' in header else 5
-                time_idx = header.index('ISO_TIME') if 'ISO_TIME' in header else 6
-                lat_idx = header.index('LAT') if 'LAT' in header else 8
-                lon_idx = header.index('LON') if 'LON' in header else 9
-                wmo_wind_idx = header.index('WMO_WIND') if 'WMO_WIND' in header else 10
-                wmo_pres_idx = header.index('WMO_PRES') if 'WMO_PRES' in header else 11
-                dist2land_idx = header.index('DIST2LAND') if 'DIST2LAND' in header else 14
-                speed_idx = header.index('STORM_SPEED') if 'STORM_SPEED' in header else -2
-                dir_idx = header.index('STORM_DIR') if 'STORM_DIR' in header else -1
+                sid_idx = indices.get('SID', 0)
+                year_idx = indices.get('SEASON', 1)
+                name_idx = indices.get('NAME', 5)
+                time_idx = indices.get('ISO_TIME', 6)
+                lat_idx = indices.get('LAT', 8)
+                lon_idx = indices.get('LON', 9)
 
                 for row in reader:
                     if len(row) <= max(sid_idx, name_idx, time_idx, lat_idx, lon_idx):
                         continue
 
-                    # Filter by year immediately for fast processing
                     try:
                         year = int(row[year_idx].strip())
                         if year < 2020:
                             continue
-                    except ValueError:
+                    except (ValueError, IndexError):
                         continue
 
                     sid = row[sid_idx].strip()
@@ -72,106 +134,129 @@ class IBTrACSProvider:
                     if not sid or not iso_time or name == 'UNNAMED':
                         continue
 
-                    try:
-                        lat = float(row[lat_idx])
-                        lon = float(row[lon_idx])
-                    except (ValueError, TypeError):
+                    lat = _to_float(row[lat_idx])
+                    lon = _to_float(row[lon_idx])
+                    if lat is None or lon is None:
                         continue
 
-                    # Parse wind & pressure
-                    try:
-                        wind = float(row[wmo_wind_idx]) if row[wmo_wind_idx].strip() else 45.0
-                    except ValueError:
-                        wind = 45.0
+                    # Wind: prefer the WMO consensus column, fall back to IMD
+                    # (New Delhi), which is authoritative for this basin. If both
+                    # are blank the value stays None — we never invent one.
+                    wind, wind_src = _first_available(
+                        row, indices, ('WMO_WIND', 'NEWDELHI_WIND')
+                    )
+                    pres, pres_src = _first_available(
+                        row, indices, ('WMO_PRES', 'NEWDELHI_PRES')
+                    )
 
-                    try:
-                        pres = float(row[wmo_pres_idx]) if row[wmo_pres_idx].strip() else 990.0
-                    except ValueError:
-                        pres = 990.0
-
-                    try:
-                        dist2land = float(row[dist2land_idx]) if row[dist2land_idx].strip() else 250.0
-                    except ValueError:
-                        dist2land = 250.0
-
-                    try:
-                        speed = float(row[speed_idx]) if row[speed_idx].strip() else 15.0
-                    except ValueError:
-                        speed = 15.0
-
-                    try:
-                        sdir = float(row[dir_idx]) if row[dir_idx].strip() else 340.0
-                    except ValueError:
-                        sdir = 340.0
+                    dist2land = _to_float(
+                        row[indices['DIST2LAND']] if 'DIST2LAND' in indices else None
+                    )
+                    speed = _to_float(
+                        row[indices['STORM_SPEED']] if 'STORM_SPEED' in indices else None
+                    )
+                    sdir = _to_float(
+                        row[indices['STORM_DIR']] if 'STORM_DIR' in indices else None
+                    )
 
                     if sid not in storms_by_id:
                         storms_by_id[sid] = {
                             'id': sid,
                             'name': name,
                             'basin': 'North Indian Ocean (Bay of Bengal)',
-                            'track': []
+                            'track': [],
                         }
 
                     pt_idx = len(storms_by_id[sid]['track'])
-                    storms_by_id[sid]['track'].append(CycloneTrackPoint(
-                        id=f"{sid}-pt-{pt_idx}",
-                        timestamp=iso_time,
-                        latitude=lat,
-                        longitude=lon,
-                        maxWindKts=wind,
-                        centralPressureMb=pres,
-                        category=self._get_category(wind),
-                        status='OBSERVATION',
-                        distanceToCoastKm=dist2land,
-                        stormSpeedKts=speed,
-                        stormDirDeg=sdir,
-                        forecastConfidencePct=None
-                    ))
+                    self._radii_cache[(sid, pt_idx)] = {
+                        key: _quadrant_mean(row, indices, f'USA_{key}')
+                        for key in ('R34', 'R50', 'R64')
+                    }
+                    storms_by_id[sid]['track'].append(
+                        CycloneTrackPoint(
+                            id=f"{sid}-pt-{pt_idx}",
+                            timestamp=iso_time,
+                            latitude=lat,
+                            longitude=lon,
+                            maxWindKts=wind,
+                            centralPressureMb=pres,
+                            windSource=wind_src,
+                            pressureSource=pres_src,
+                            category=self._get_category(wind),
+                            status='OBSERVATION',
+                            distanceToCoastKm=dist2land,
+                            stormSpeedKts=speed,
+                            stormDirDeg=sdir,
+                            forecastConfidencePct=None,
+                        )
+                    )
 
         except Exception as e:
             print(f"Error reading IBTrACS CSV: {e}")
             return []
 
-        # Convert to list of Cyclone objects
         cyclones: List[Cyclone] = []
         for sid, sdata in storms_by_id.items():
-            track = sdata['track']
+            track: List[CycloneTrackPoint] = sdata['track']
             if len(track) < 3:
                 continue
 
             current_idx = min(5, len(track) - 1)
-            forecast_cone = [
-                ForecastConePoint(
-                    latitude=pt.latitude,
-                    longitude=pt.longitude,
-                    radiusKm=40 + idx * 25,
-                    timestamp=pt.timestamp
-                ) for idx, pt in enumerate(track[current_idx:])
-            ]
 
-            c_obj = Cyclone(
-                id=sid,
-                name=f"{sdata['name']}",
-                basin=sdata['basin'],
-                dataStatus='REAL',
-                currentTrackIndex=current_idx,
-                track=track,
-                forecastCone=forecast_cone,
-                windRadius=WindRadius(r34ktsKm=260, r50ktsKm=140, r64ktsKm=75),
-                sourceAttribution='NOAA IBTrACS v04r01 (Real Observations)',
-                isHistorical=True
+            n = len(track)
+            with_wind = sum(1 for pt in track if pt.maxWindKts is not None)
+            with_pres = sum(1 for pt in track if pt.centralPressureMb is not None)
+            completeness = DataCompleteness(
+                trackPoints=n,
+                withWind=round(with_wind / n, 4),
+                withPressure=round(with_pres / n, 4),
             )
-            cyclones.append(c_obj)
+
+            # Wind radii come from the observed quadrant radii at the point the
+            # API actually serves. Absent agency radii stay None rather than
+            # being filled with one generic constant for every storm.
+            radii = self._radii_cache.get((sid, current_idx), {})
+            wind_radius = WindRadius(
+                r34ktsKm=radii.get('R34'),
+                r50ktsKm=radii.get('R50'),
+                r64ktsKm=radii.get('R64'),
+                source=(
+                    'USA quadrant radii (IBTrACS)'
+                    if any(radii.get(k) is not None for k in ('R34', 'R50', 'R64'))
+                    else None
+                ),
+            )
+
+            cyclones.append(
+                Cyclone(
+                    id=sid,
+                    name=sdata['name'],
+                    basin=sdata['basin'],
+                    dataStatus='REAL',
+                    currentTrackIndex=current_idx,
+                    track=track,
+                    forecastCone=[],
+                    windRadius=wind_radius,
+                    dataCompleteness=completeness,
+                    sourceAttribution='NOAA IBTrACS v04r01 (Real Observations)',
+                    isHistorical=True,
+                )
+            )
 
         self._cached_cyclones = cyclones
         return cyclones
 
     def get_cyclone_by_id(self, sid: str) -> Optional[Cyclone]:
-        cyclones = self.load_cyclones()
-        for c in cyclones:
+        """Resolve a cyclone by id or name.
+
+        Returns None when nothing matches so callers can surface a 404. It must
+        never fall back to an arbitrary cyclone — that silently answers a
+        question about storm A with data about storm B.
+        """
+        for c in self.load_cyclones():
             if c.id == sid or c.name.lower() == sid.lower():
                 return c
-        return cyclones[0] if cyclones else None
+        return None
 
     def inspect_cyclone(
         self,
@@ -230,11 +315,16 @@ class IBTrACSProvider:
             "longitude": best_pt.longitude,
             "maxWindKts": best_pt.maxWindKts,
             "centralPressureMb": best_pt.centralPressureMb,
+            "windSource": best_pt.windSource,
+            "pressureSource": best_pt.pressureSource,
             "category": best_pt.category,
             "distanceToCoastKm": best_pt.distanceToCoastKm,
             "stormSpeedKts": best_pt.stormSpeedKts,
             "stormDirDeg": best_pt.stormDirDeg,
-            "source": "NOAA IBTrACS v04r01"
+            "dataCompleteness": (
+                cyclone.dataCompleteness.model_dump() if cyclone.dataCompleteness else None
+            ),
+            "source": "NOAA IBTrACS v04r01",
         }
 
 ibtracs_provider = IBTrACSProvider()

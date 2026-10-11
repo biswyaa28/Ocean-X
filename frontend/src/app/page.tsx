@@ -205,14 +205,20 @@ export default function Home() {
 
     if (!cyclone || !currentPoint) return null;
 
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint);
+    // The demo heuristic needs real TCHP/SST to score. The client has no model
+    // dataset of its own, so we pass null and let it report UNAVAILABLE rather
+    // than scoring on invented constants. The authoritative score comes from
+    // the backend /risk/{id} endpoint.
+    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint, null, null);
+    const wind = currentPoint.maxWindKts;
 
     return {
       activeCyclones: oceanMode === 'HISTORICAL' ? 0 : 1,
-      maxWindKts: currentPoint.maxWindKts,
-      maxWaveHeightM: Number((currentPoint.maxWindKts * 0.075 + 2.1).toFixed(1)),
-      avgSSTC: 30.5,
+      maxWindKts: wind,
+      maxWaveHeightM: wind === null ? null : Number((wind * 0.075 + 2.1).toFixed(1)),
+      avgSSTC: null,
       coastalRiskLevel: riskAssessment.category,
+      coastalRiskUnavailableReason: riskAssessment.unavailableReason,
       dataConfidencePct: oceanMode === 'SCENARIO' ? 75 : 92,
       forecastConfidencePct: currentPoint.forecastConfidencePct || 92,
     };
@@ -274,7 +280,7 @@ export default function Home() {
 
   const hazard = useMemo<Hazard | null>(() => {
     if (oceanMode === 'LIVE' || !cyclone || !currentPoint) return null;
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint);
+    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint, null, null);
     return {
       id: `hazard-${cyclone.id}`,
       title: `Cyclonic Warning: ${cyclone.name}`,
@@ -674,11 +680,21 @@ export default function Home() {
           latitude: inspectedCoords.lat,
           longitude: inspectedCoords.lon,
           timestamp: ts || new Date().toISOString(),
-          customLabel: 'COASTAL RISK EVALUATION',
-          customValue: hazard?.severity || 'HIGH',
-          customUnit: `· RISK SCORE ${hazard?.riskAssessment?.score || 78}/100`,
+          customLabel: 'COASTAL RISK (UNVALIDATED DEMO HEURISTIC)',
+          // Never substitute a band or a score when the heuristic declined to
+          // produce one — show the real state instead.
+          customValue:
+            hazard?.riskAssessment?.status === 'OK'
+              ? hazard.riskAssessment.category ?? 'UNAVAILABLE'
+              : 'UNAVAILABLE',
+          customUnit:
+            hazard?.riskAssessment?.status === 'OK' &&
+            hazard.riskAssessment.heuristicDemoScore !== null &&
+            hazard.riskAssessment.heuristicDemoScore !== undefined
+              ? `· DEMO SCORE ${hazard.riskAssessment.heuristicDemoScore}/100 · NOT VALIDATED`
+              : `· ${hazard?.riskAssessment?.unavailableReason ?? 'No score computed'}`,
           dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'DERIVED ANALYTICS',
-          source: 'OceanLens Hazard Risk Engine',
+          source: 'OceanLens Hazard Risk Engine (unvalidated demo heuristic — not for operational use)',
         });
       } else if (['wind', 'wave_height', 'stations', 'buoys'].includes(layerId)) {
         setInspectionData({

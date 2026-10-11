@@ -17,6 +17,7 @@ import {
   generateDepthSliceImageSourceCached,
 } from '../utils/rasterGen';
 import { perfMonitor } from '../utils/perfMonitor';
+import { observedRadii, cycloneEyeLabel } from '../utils/cycloneObservation';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
@@ -249,8 +250,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     title: string;
     cycloneName?: string;
     category?: string;
-    maxWindKts?: number;
-    centralPressureMb?: number;
+    maxWindKts?: number | null;
+    centralPressureMb?: number | null;
     lat?: number;
     lon?: number;
     timestamp?: string;
@@ -472,7 +473,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               y: endPosition.y,
               title: `TRACK NODE #${nodeIdx}`,
               cycloneName: cName,
-              category: node.category || 'Cyclonic Storm',
+              category: node.category ?? undefined,
               maxWindKts: node.maxWindKts,
               centralPressureMb: node.centralPressureMb,
               lat: node.latitude,
@@ -920,52 +921,61 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         eyeEntity.show = true;
         activeKeys.add('cyclone-eye-core');
 
-        // Inner Core Wind Radius Ring (50kt Concentric Ring)
-        const ring50 = acquireEntity(
-          viewer,
-          'cyclone-ring-50kt',
-          `r50|${cyclone.id}|${cyclone.windRadius.r50ktsKm}`,
-          () => ({
-            name: 'Inner Core Intensity Ring (50kt)',
-            position: eyePos,
-            ellipse: {
-              semiMajorAxis: cyclone.windRadius.r50ktsKm * 1000,
-              semiMinorAxis: cyclone.windRadius.r50ktsKm * 1000,
-              material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
-              outline: true,
-              outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
-              outlineWidth: 1.5,
-            },
-          })
-        );
-        (ring50.position as Cesium.ConstantPositionProperty).setValue(eyePos);
-        ring50.show = true;
-        activeKeys.add('cyclone-ring-50kt');
+        // Wind-radius rings are drawn ONLY from observed quadrant radii. IBTrACS
+        // reports them for a minority of track points, so a null radius means
+        // "not observed" and we draw nothing rather than inventing a ring size.
+        const r50 = observedRadii(cyclone.windRadius).r50ktsKm;
+        if (r50 !== null) {
+          const ring50 = acquireEntity(
+            viewer,
+            'cyclone-ring-50kt',
+            `r50|${cyclone.id}|${r50}`,
+            () => ({
+              name: 'Inner Core Intensity Ring (50kt, observed)',
+              position: eyePos,
+              ellipse: {
+                semiMajorAxis: r50 * 1000,
+                semiMinorAxis: r50 * 1000,
+                material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
+                outline: true,
+                outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
+                outlineWidth: 1.5,
+              },
+            })
+          );
+          (ring50.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+          ring50.show = true;
+          activeKeys.add('cyclone-ring-50kt');
+        }
 
-        // Outer Wind Radius Ring (34kt Concentric Ring)
-        const ring34 = acquireEntity(
-          viewer,
-          'cyclone-ring-34kt',
-          `r34|${cyclone.id}|${cyclone.windRadius.r34ktsKm}`,
-          () => ({
-            name: 'Outer Wind Intensity Ring (34kt)',
-            position: eyePos,
-            ellipse: {
-              semiMajorAxis: cyclone.windRadius.r34ktsKm * 1000,
-              semiMinorAxis: cyclone.windRadius.r34ktsKm * 1000,
-              material: Cesium.Color.TEAL.withAlpha(0.06),
-              outline: true,
-              outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
-              outlineWidth: 1.0,
-            },
-          })
-        );
-        (ring34.position as Cesium.ConstantPositionProperty).setValue(eyePos);
-        ring34.show = true;
-        activeKeys.add('cyclone-ring-34kt');
+        const r34 = observedRadii(cyclone.windRadius).r34ktsKm;
+        if (r34 !== null) {
+          const ring34 = acquireEntity(
+            viewer,
+            'cyclone-ring-34kt',
+            `r34|${cyclone.id}|${r34}`,
+            () => ({
+              name: 'Outer Wind Intensity Ring (34kt, observed)',
+              position: eyePos,
+              ellipse: {
+                semiMajorAxis: r34 * 1000,
+                semiMinorAxis: r34 * 1000,
+                material: Cesium.Color.TEAL.withAlpha(0.06),
+                outline: true,
+                outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
+                outlineWidth: 1.0,
+              },
+            })
+          );
+          (ring34.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+          ring34.show = true;
+          activeKeys.add('cyclone-ring-34kt');
+        }
 
-        // Directional Movement Vector Indicator Tag Pin
-        const eyeLabelText = `EYE OF STORM: ${cyclone.name}\n${activePt.category.toUpperCase()} · ${activePt.maxWindKts} KT`;
+        // Directional Movement Vector Indicator Tag Pin.
+        // Category and wind are nullable: a missing observation must read as
+        // "not observed" rather than "null KT" or a crash on .toUpperCase().
+        const eyeLabelText = cycloneEyeLabel(cyclone.name, activePt);
         const pinEntity = acquireEntity(
           viewer,
           'cyclone-eye-pin',
@@ -1450,16 +1460,30 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
                   <span className="text-rose-400 font-bold">{hoverTooltip.category}</span>
                 </div>
               )}
-              {hoverTooltip.maxWindKts !== undefined && (
+              {hoverTooltip.maxWindKts !== undefined && hoverTooltip.maxWindKts !== null ? (
                 <div className="text-right">
                   <span className="text-[8px] text-slate-400 block uppercase">MAX WIND</span>
                   <span className="text-cyan-300 font-bold">{hoverTooltip.maxWindKts} KTS</span>
                 </div>
+              ) : (
+                <div className="text-right">
+                  <span className="text-[8px] text-slate-400 block uppercase">MAX WIND</span>
+                  <span className="text-slate-500 font-bold" title="WMO_WIND and NEWDELHI_WIND both blank for this point">
+                    NOT OBSERVED
+                  </span>
+                </div>
               )}
-              {hoverTooltip.centralPressureMb !== undefined && (
+              {hoverTooltip.centralPressureMb !== undefined && hoverTooltip.centralPressureMb !== null ? (
                 <div>
                   <span className="text-[8px] text-slate-400 block uppercase">PRESSURE</span>
                   <span className="text-slate-200 font-bold">{hoverTooltip.centralPressureMb} MB</span>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-[8px] text-slate-400 block uppercase">PRESSURE</span>
+                  <span className="text-slate-500 font-bold" title="WMO_PRES and NEWDELHI_PRES both blank for this point">
+                    NOT OBSERVED
+                  </span>
                 </div>
               )}
               {hoverTooltip.lat !== undefined && hoverTooltip.lon !== undefined && (
@@ -1495,7 +1519,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         currentFieldStatus={currentFieldStatus}
         cycloneLat={activePt?.latitude || 18.2}
         cycloneLon={activePt?.longitude || 88.4}
-        maxWindKts={activePt?.maxWindKts || 125}
+        maxWindKts={activePt?.maxWindKts ?? undefined}
         timestamp={activePt?.timestamp || '2026-09-08T12:00:00Z'}
       />
 

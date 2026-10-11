@@ -181,5 +181,13 @@ def test_2020_amphan_cyclone_inspect():
     assert data["observationType"] == "HISTORICAL OBSERVATION"
     assert "AMPHAN" in data["cycloneName"].upper()
     assert data["source"] == "NOAA IBTrACS v04r01"
-    assert data["maxWindKts"] > 0
-    assert data["centralPressureMb"] > 0
+    # Wind/pressure are now Optional. When both WMO and IMD columns are blank
+    # for the served point we must report absence, not a substituted constant.
+    # AMPHAN track point 5 is exactly that case (both agencies blank).
+    assert data["maxWindKts"] is None
+    assert data["centralPressureMb"] is None
+    assert data["windSource"] is None
+    assert data["pressureSource"] is None
+    # Completeness is reported so a reader can judge how much is real.
+    assert 0.0 <= data["dataCompleteness"]["withWind"] <= 1.0
+    assert 0.0 <= data["dataCompleteness"]["withPressure"] <= 1.0

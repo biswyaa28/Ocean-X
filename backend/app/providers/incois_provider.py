@@ -526,8 +526,14 @@ class IncoisProvider:
         if ds is None or not timestamps:
             return {
                 "status": "NO_REAL_MODEL_DATA",
-                "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
-                "message": "No real INCOIS HYCOM dataset loaded.",
+                # No dataset was read at all, so this is NOT a "real dataset
+                # with a bad timestamp" situation — say what actually happened.
+                "dataStatus": (
+                    "SIMULATED" if settings.DATA_MODE == 'FIXTURE'
+                    else "NOT CURRENTLY INTEGRATED"
+                ),
+                "dataMode": settings.DATA_MODE,
+                "message": "No INCOIS HYCOM dataset is installed at the configured path.",
                 "requestedTimestamp": timestamp or "",
                 "availableStart": "",
                 "availableEnd": "",
@@ -550,7 +556,11 @@ class IncoisProvider:
                 if target_dt < start_dt or target_dt > end_dt:
                     return {
                         "status": "NO_REAL_MODEL_DATA",
-                        "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                        "dataStatus": (
+                            "SIMULATED — TIMESTAMP UNAVAILABLE"
+                            if settings.DATA_MODE == 'FIXTURE'
+                            else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                        ),
                         "message": f"No real INCOIS HYCOM model data is available for timestamp {timestamp}.",
                         "requestedTimestamp": timestamp,
                         "availableStart": str(available_start),
@@ -561,7 +571,11 @@ class IncoisProvider:
             except Exception:
                 return {
                     "status": "NO_REAL_MODEL_DATA",
-                    "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                    "dataStatus": (
+                        "SIMULATED — TIMESTAMP UNAVAILABLE"
+                        if settings.DATA_MODE == 'FIXTURE'
+                        else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                    ),
                     "message": f"Invalid or unparseable timestamp: {timestamp}.",
                     "requestedTimestamp": timestamp,
                     "availableStart": str(available_start),
@@ -609,8 +623,16 @@ class IncoisProvider:
 
             return {
                 "status": "OK",
-                "dataStatus": "REAL",
-                "source": "INCOIS RSMC HYCOM",
+                # Derived from the dataset actually opened, never hardcoded:
+                # FIXTURE files carry synthetic='true' so this resolves to
+                # SIMULATED even if DATA_MODE were somehow misconfigured.
+                "dataStatus": _hycom_data_status(ds_sel),
+                "dataMode": settings.DATA_MODE,
+                "source": (
+                    "INCOIS RSMC HYCOM (synthetic fixture)"
+                    if _hycom_data_status(ds_sel) == 'SIMULATED'
+                    else "INCOIS RSMC HYCOM"
+                ),
                 "timestamp": matched_time,
                 "latitude": matched_lat,
                 "longitude": matched_lon,
@@ -640,7 +662,11 @@ class IncoisProvider:
             print(f"Error inspecting point ({lat}, {lon}): {e}")
             return {
                 "status": "NO_REAL_MODEL_DATA",
-                "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                "dataStatus": (
+                    "SIMULATED — TIMESTAMP UNAVAILABLE"
+                    if settings.DATA_MODE == 'FIXTURE'
+                    else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                ),
                 "message": f"Error indexing point at lat={lat}, lon={lon}: {e}",
                 "requestedTimestamp": timestamp or "",
                 "availableStart": str(available_start),

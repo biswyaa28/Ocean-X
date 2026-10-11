@@ -11,7 +11,7 @@ This runbook explains how to reproduce, run, and demonstrate the OCEAN-X prototy
 | Requirement | Version | Notes |
 |---|---|---|
 | Python | ≥ 3.10 | For backend |
-| Node.js | ≥ 18.0 | For frontend |
+| Node.js | ≥ 20.9 | For frontend (Next.js 16 requires `>=20.9.0`) |
 | npm | ≥ 9.0 | |
 | Git | Any | Clone repo |
 | Ports | 8000, 3000 | Backend and frontend |

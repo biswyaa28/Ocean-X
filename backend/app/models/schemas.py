@@ -9,6 +9,7 @@ DataStatus = Literal[
     'SIMULATED',
     'NOT CURRENTLY INTEGRATED',
     'DEMO',
+    'UNAVAILABLE',
     'OBSERVATION',
     'FORECAST'
 ]
@@ -61,24 +62,53 @@ class StatusResponse(BaseModel):
 
 
 
+# Provenance of a best-track value: which agency's column it was actually read
+# from. ``None`` means the value is genuinely absent from the source — it is
+# never back-filled with a plausible-looking constant.
+ObservationSource = Literal['WMO', 'IMD']
+
+
 class CycloneTrackPoint(BaseModel):
     id: str
     timestamp: str
     latitude: float
     longitude: float
-    maxWindKts: float
-    centralPressureMb: float
-    category: str
+    # Observational fields are Optional on purpose: when the IBTrACS columns are
+    # blank for a point we report ``None`` rather than substituting a default.
+    # Downstream consumers must handle absence explicitly.
+    maxWindKts: Optional[float] = None
+    centralPressureMb: Optional[float] = None
+    category: Optional[str] = None
+    windSource: Optional[ObservationSource] = None
+    pressureSource: Optional[ObservationSource] = None
     status: Literal['OBSERVATION', 'FORECAST']
-    distanceToCoastKm: float
-    stormSpeedKts: float
-    stormDirDeg: float
+    distanceToCoastKm: Optional[float] = None
+    stormSpeedKts: Optional[float] = None
+    stormDirDeg: Optional[float] = None
     forecastConfidencePct: Optional[float] = None
 
+
+class DataCompleteness(BaseModel):
+    """Per-cyclone fraction of track points that actually carry an observation.
+
+    Exposed so a reader can tell at a glance how much of a storm's intensity
+    record is real data versus missing, before trusting any derived number.
+    """
+
+    trackPoints: int
+    withWind: float
+    withPressure: float
+
 class WindRadius(BaseModel):
-    r34ktsKm: float
-    r50ktsKm: float
-    r64ktsKm: float
+    """34/50/64 kt wind radii. Each field is Optional: IBTrACS only carries
+    quadrant radii (USA_R34_NE ...) for a subset of track points, and we report
+    the real observed radii where present and ``None`` where they are absent.
+    """
+
+    r34ktsKm: Optional[float] = None
+    r50ktsKm: Optional[float] = None
+    r64ktsKm: Optional[float] = None
+    source: Optional[str] = None
 
 class ForecastConePoint(BaseModel):
     latitude: float
@@ -93,16 +123,22 @@ class Cyclone(BaseModel):
     dataStatus: DataStatus
     currentTrackIndex: int
     track: List[CycloneTrackPoint]
-    forecastCone: List[ForecastConePoint]
-    windRadius: WindRadius
+    # Always empty. IBTrACS holds *historical best-track* points, not forecasts,
+    # so there is no real uncertainty cone to draw; a synthetic ramp over past
+    # observations would misrepresent them as forecasts.
+    forecastCone: List[ForecastConePoint] = []
+    windRadius: WindRadius = WindRadius()
+    dataCompleteness: Optional[DataCompleteness] = None
     sourceAttribution: str
     isHistorical: bool = True
 
 class Evidence(BaseModel):
     variable: str
-    value: str
+    # ``None`` when the underlying observation is genuinely absent. We never
+    # render a substituted constant as if it were measured.
+    value: Optional[str] = None
     unit: str
-    trend: Literal['increasing', 'decreasing', 'neutral']
+    trend: Literal['increasing', 'decreasing', 'neutral', 'unknown']
     relevance: str
     status: DataStatus
 
@@ -112,19 +148,52 @@ class Explanation(BaseModel):
     limitations: str
     generatedAt: str
 
+# Scoring constants used by the demo heuristic. They are exposed in the API
+# response so no consumer can mistake them for a published scale.
+RISK_HEURISTIC_WEIGHTS: Dict[str, float] = {
+    'windMaxPoints': 45.0,
+    'windSaturatesAtKts': 140.0,
+    'distanceMaxPoints': 30.0,
+    'distanceFloorPoints': 5.0,
+    'distanceScaleKm': 800.0,
+    'tchpMaxPoints': 15.0,
+    'tchpSaturatesAtKJPerCm2': 100.0,
+    'sstMaxPoints': 10.0,
+    'sstThresholdC': 26.0,
+    'sstSpanC': 5.0,
+    'scoreClampMin': 10.0,
+    'scoreClampMax': 98.0,
+}
+
+RISK_DISCLAIMER = (
+    'NOT VALIDATED, NOT FOR OPERATIONAL USE. These weights are hand-tuned '
+    'demo constants with no published basis, no calibration and no '
+    'verification against historical landfall damage. They are exposed above '
+    'so they cannot be mistaken for a scientific scale.'
+)
+
+
 class RiskAssessment(BaseModel):
-    score: int
-    category: Literal['LOW', 'ELEVATED', 'MODERATE', 'HIGH', 'CRITICAL']
+    # ``status`` is the authoritative field. ``heuristicDemoScore`` is only
+    # populated when status == 'OK'.
+    status: Literal['OK', 'UNAVAILABLE'] = 'OK'
+    unavailableReason: Optional[str] = None
+    heuristicDemoScore: Optional[int] = None
+    category: Optional[Literal['LOW', 'ELEVATED', 'MODERATE', 'HIGH', 'CRITICAL']] = None
     modelType: str = 'prototype_rule_based'
-    evidence: List[Evidence]
-    explanation: Explanation
-    affectedRegions: List[str]
+    validated: bool = False
+    operationalUse: str = 'NOT FOR OPERATIONAL USE'
+    disclaimer: str = RISK_DISCLAIMER
+    weights: Dict[str, float] = RISK_HEURISTIC_WEIGHTS
+    evidence: List[Evidence] = []
+    explanation: Optional[Explanation] = None
+    affectedRegions: List[str] = []
 
 class Hazard(BaseModel):
     id: str
     title: str
     type: Literal['cyclone', 'high_wave', 'strong_wind', 'storm_surge', 'coastal_erosion']
-    severity: Literal['LOW', 'ELEVATED', 'MODERATE', 'HIGH', 'CRITICAL']
+    severity: Optional[Literal['LOW', 'ELEVATED', 'MODERATE', 'HIGH', 'CRITICAL']] = None
     location: str
     dataStatus: DataStatus
     riskAssessment: RiskAssessment

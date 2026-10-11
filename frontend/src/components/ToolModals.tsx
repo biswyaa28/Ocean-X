@@ -296,10 +296,19 @@ export const ToolModals: React.FC<ToolModalsProps> = ({
               </div>
 
               <div className="flex items-center justify-between">
-                <span className="text-[9px] text-rose-400 font-bold uppercase tracking-widest">RISK SCORE</span>
+                <span className="text-[9px] text-rose-400 font-bold uppercase tracking-widest">DEMO HEURISTIC SCORE</span>
                 <div className="flex items-baseline gap-1">
-                  <span className="font-black text-rose-400 text-lg">{risk?.score || 92}</span>
-                  <span className="text-slate-500 text-[10px]">/ 100</span>
+                  <span className="font-black text-rose-400 text-lg">
+                    {risk?.status === 'OK' ? risk.heuristicDemoScore : 'UNAVAILABLE'}
+                  </span>
+                  {risk?.status === 'OK' && (
+                    <span className="text-slate-500 text-[10px]">/ 100</span>
+                  )}
+                </div>
+                {/* Unvalidated heuristic — must never read as an official warning. */}
+                <div className="text-[9px] text-amber-500/90 text-right leading-tight">
+                  NOT VALIDATED · NOT FOR OPERATIONAL USE
+                  {risk?.status !== 'OK' && risk?.unavailableReason ? `: ${risk.unavailableReason}` : ''}
                 </div>
               </div>
             </div>

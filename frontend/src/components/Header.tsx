@@ -210,24 +210,49 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">MAX WIND:</span>
-              <span className="text-cyan-300 font-bold">{displayMetrics.maxWindKts} KT</span>
+              {displayMetrics.maxWindKts === null ? (
+                <span className="text-slate-500 font-bold" title="No observed wind for this track point (WMO and IMD columns both blank)">
+                  NOT OBSERVED
+                </span>
+              ) : (
+                <span className="text-cyan-300 font-bold">{displayMetrics.maxWindKts} KT</span>
+              )}
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">SST:</span>
-              <span className="text-rose-300 font-bold">{displayMetrics.avgSSTC} °C</span>
+              {displayMetrics.avgSSTC === null ? (
+                <span className="text-slate-500 font-bold" title="No model SST read for this point">
+                  N/A
+                </span>
+              ) : (
+                <span className="text-rose-300 font-bold">{displayMetrics.avgSSTC} °C</span>
+              )}
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">RISK:</span>
-              <span className={`font-bold tracking-wider ${
-                displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
-                displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
-                displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
-                'text-emerald-400'
-              }`}>{displayMetrics.coastalRiskLevel}</span>
+              <span
+                className={`font-bold tracking-wider ${
+                  displayMetrics.coastalRiskLevel === null ? 'text-slate-500' :
+                  displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
+                  displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
+                  displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
+                  'text-emerald-400'
+                }`}
+                title={displayMetrics.coastalRiskUnavailableReason ?? undefined}
+              >
+                {displayMetrics.coastalRiskLevel ?? 'UNAVAILABLE'}
+              </span>
+              {/* The score is an unvalidated demo heuristic, never a forecast. */}
+              <span
+                className="text-[9px] text-amber-500/80 tracking-wide"
+                title="Unvalidated demo heuristic. Not validated, not for operational use."
+              >
+                (DEMO · NOT VALIDATED)
+              </span>
             </div>
           </>
         )}

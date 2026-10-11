@@ -1,4 +1,5 @@
 import { DataProvider } from './DataProvider';
+import { RISK_DISCLAIMER, RISK_HEURISTIC_WEIGHTS } from '../utils/risk';
 import {
   Cyclone,
   CycloneTrackPoint,
@@ -372,14 +373,21 @@ export class DemoProvider implements DataProvider {
         location: 'North-West Bay of Bengal / Sundarbans Coast',
         dataStatus: 'SIMULATED',
         riskAssessment: {
-          score: 92,
+          // Unvalidated demo heuristic. Same shape and same caveats as the
+          // backend so the fallback path cannot imply more authority than the
+          // live one.
+          status: 'OK',
+          unavailableReason: null,
+          heuristicDemoScore: 92,
           category: 'CRITICAL',
           modelType: 'prototype_rule_based',
-          affectedRegions: [
-            'West Bengal Coast (South 24 Parganas, East Midnapore)',
-            'Bangladesh Sundarbans Coast (Khulna, Barisal)',
-            'North Odisha Coast (Bhadrak, Balasore)',
-          ],
+          validated: false,
+          operationalUse: 'NOT FOR OPERATIONAL USE',
+          disclaimer: RISK_DISCLAIMER,
+          weights: RISK_HEURISTIC_WEIGHTS,
+          // Landfall-region prediction is not implemented; the demo scenario
+          // previously asserted specific coasts, which the heuristic cannot know.
+          affectedRegions: [],
           evidence: [
             {
               variable: 'Maximum Sustained Wind',
@@ -423,7 +431,7 @@ export class DemoProvider implements DataProvider {
               'Forward movement speed accelerating toward coastal impact within 18–24 hours',
             ],
             limitations:
-              'This is a prototype decision-support simulation based on demo rule sets. It does not replace official IMD or INCOIS warning bulletins.',
+              `${RISK_DISCLAIMER} Simulated input data. It does not replace official IMD or INCOIS warning bulletins. Affected-region prediction is not implemented, so no landfall geography is claimed.`,
             generatedAt: new Date().toISOString(),
           },
         },
@@ -433,7 +441,8 @@ export class DemoProvider implements DataProvider {
 
   async getHazardById(id: string): Promise<Hazard | null> {
     const hazards = await this.getHazards();
-    return hazards.find((h) => h.id === id) || hazards[0];
+    // Unknown ids return null rather than silently resolving to a different hazard.
+    return hazards.find((h) => h.id === id) ?? null;
   }
 
   async getStations(): Promise<Station[]> {
@@ -446,13 +455,15 @@ export class DemoProvider implements DataProvider {
 
   async getKPIMetrics(timestepIndex = 5): Promise<KPIMetrics> {
     const pt = DEMO_CYCLONE_TRACK[Math.min(timestepIndex, DEMO_CYCLONE_TRACK.length - 1)];
-    const isCritical = pt.maxWindKts > 115 || pt.distanceToCoastKm < 150;
-    const isHigh = pt.maxWindKts > 80;
+    const wind = pt.maxWindKts;
+    const dist = pt.distanceToCoastKm;
+    const isCritical = (wind !== null && wind > 115) || (dist !== null && dist < 150);
+    const isHigh = wind !== null && wind > 80;
 
     return {
       activeCyclones: 1,
-      maxWindKts: pt.maxWindKts,
-      maxWaveHeightM: Number((pt.maxWindKts * 0.075 + 2.1).toFixed(1)),
+      maxWindKts: wind,
+      maxWaveHeightM: wind === null ? null : Number((wind * 0.075 + 2.1).toFixed(1)),
       avgSSTC: 30.5,
       coastalRiskLevel: isCritical ? 'CRITICAL' : isHigh ? 'HIGH' : 'MODERATE',
       dataConfidencePct: 88,

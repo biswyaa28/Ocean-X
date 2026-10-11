@@ -78,10 +78,16 @@ function metric(value: number | null | undefined, digits = 3): string {
  * than a guarantee of the code. Labelling this one "profiles" would silently
  * claim a per-profile guarantee it does not have.
  */
-export function depthTooltipLabel(label: string | number, row?: BiasRow): string {
+/**
+ * Recharts types the Tooltip `label` prop as `ReactNode` (the XAxis value can
+ * be any rendered node), so this must accept ReactNode too — narrowing it to
+ * `string | number` fails typecheck under `next build`.
+ */
+export function depthTooltipLabel(label: React.ReactNode, row?: BiasRow): string {
+  const text = typeof label === 'string' || typeof label === 'number' ? String(label) : '';
   return typeof row?.n === 'number'
-    ? `DEPTH ${label} M · n = ${row.n} matched pairs`
-    : `DEPTH ${label} M`;
+    ? `DEPTH ${text} M · n = ${row.n} matched pairs`
+    : `DEPTH ${text} M`;
 }
 
 function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {

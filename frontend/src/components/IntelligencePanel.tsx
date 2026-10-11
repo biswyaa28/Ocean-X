@@ -137,10 +137,15 @@ export const IntelligencePanel: React.FC<IntelligencePanelProps> = ({
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-[9px] text-rose-400 font-bold uppercase tracking-widest">RISK SCORE</span>
+            <span className="text-[9px] text-rose-400 font-bold uppercase tracking-widest">DEMO HEURISTIC SCORE</span>
             <div className="flex items-baseline gap-1">
-              <span className="font-black text-rose-400 text-lg">{risk.score}</span>
-              <span className="text-slate-500 text-[10px]">/ 100</span>
+              <span className="font-black text-rose-400 text-lg">
+                {risk.status === 'OK' ? risk.heuristicDemoScore : 'UNAVAILABLE'}
+              </span>
+              {risk.status === 'OK' && <span className="text-slate-500 text-[10px]">/ 100</span>}
+            </div>
+            <div className="text-[9px] text-amber-500/90 text-right leading-tight">
+              NOT VALIDATED · NOT FOR OPERATIONAL USE
             </div>
           </div>
         </div>
@@ -153,7 +158,7 @@ export const IntelligencePanel: React.FC<IntelligencePanelProps> = ({
             RISK DRIVERS
           </div>
           <div className="space-y-1.5 font-mono text-[10.5px]">
-            {risk.explanation.keyFactors.map((factor, idx) => (
+            {(risk.explanation?.keyFactors ?? []).map((factor, idx) => (
               <div key={idx} className="flex items-center gap-2.5 text-slate-300">
                 <span className="text-[9px] font-bold text-rose-400/80 shrink-0">
                   {String(idx + 1).padStart(2, '0')}
