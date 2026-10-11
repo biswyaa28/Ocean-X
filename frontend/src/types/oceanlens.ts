@@ -208,7 +208,11 @@ export interface KPIMetrics {
   avgSSTC: number | null;
   /** Null when the unvalidated demo heuristic declined to score. */
   coastalRiskLevel: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
+  /** The backend's heuristicDemoScore, or null when unavailable. */
+  coastalRiskScore?: number | null;
   coastalRiskUnavailableReason?: string | null;
+  /** Hand-tuned weights returned by the backend, for display in a tooltip. */
+  coastalRiskWeights?: Record<string, number> | null;
   dataConfidencePct: number;
   forecastConfidencePct: number;
 }

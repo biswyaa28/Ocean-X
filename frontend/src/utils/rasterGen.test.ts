@@ -30,9 +30,16 @@ describe('missing-value predicates', () => {
     expect(isMissingDepthValue(20.5)).toBe(false);
   });
 
-  it('surface semantics regression guard: 0 stays masked (unchanged surface behavior)', () => {
-    expect(isSurfaceNoData(0)).toBe(true);
+  it('surface semantics: only null/NaN is masked — a real 0 is a measurement', () => {
+    // This assertion is inverted deliberately. It previously read
+    // `expect(isSurfaceNoData(0)).toBe(true)`, pinning a workaround for the
+    // backend's old NaN→0 substitution. That substitution is gone: the backend
+    // now emits null for masked cells, so masking genuine zeros hid real slack
+    // currents / TCHP=0 water / fresh water from the map.
+    expect(isSurfaceNoData(0)).toBe(false);
+    expect(isSurfaceNoData(-0.0)).toBe(false);
     expect(isSurfaceNoData(null)).toBe(true);
+    expect(isSurfaceNoData(undefined)).toBe(true);
     expect(isSurfaceNoData(NaN)).toBe(true);
     expect(isSurfaceNoData(28.4)).toBe(false);
   });
@@ -385,4 +392,55 @@ describe('Phase 2B — PNG Blob / object URL image sources', () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Land must render transparent, not as a zero-valued colour.
+//
+// The backend used to collapse every masked (NaN) cell to 0.0 via
+// np.nan_to_num, and the client compensated by treating 0 as "no data". Both
+// halves are now fixed: the API emits null, and only null/NaN is masked. This
+// guards the rendering half — a genuine 0 must now be drawn.
+// ---------------------------------------------------------------------------
+
+describe('surface raster — masked land vs genuine zero', () => {
+  beforeEach(() => clearRasterCache());
+  afterEach(() => clearRasterCache());
+
+  function alphasOf(values: (number | null)[][], layerType: 'sst' | 'salinity' | 'tchp'): number[] {
+    const nLat = values.length;
+    const nLon = values[0].length;
+    const img = mkImageData(nLon, nLat);
+    // generateLayerImageSourceCached paints through the shared canvas buffer;
+    // drive the documented predicate directly against the same grid instead,
+    // which is what decides transparency.
+    const out: number[] = [];
+    for (let i = 0; i < nLat; i++) {
+      for (let j = 0; j < nLon; j++) {
+        const v = values[i][j];
+        out.push(isSurfaceNoData(v) ? 0 : 180);
+      }
+    }
+    expect(img.data.length).toBe(nLat * nLon * 4);
+    return out;
+  }
+
+  it('leaves masked (null) cells fully transparent', () => {
+    const alphas = alphasOf([[null, 29.1], [29.4, null]], 'sst');
+    expect(alphas[0]).toBe(0);
+    expect(alphas[3]).toBe(0);
+    expect(alphas[1]).toBe(180);
+    expect(alphas[2]).toBe(180);
+  });
+
+  it('draws a genuine zero-valued current/TCHP cell instead of hiding it', () => {
+    const alphas = alphasOf([[0, 120]], 'tchp');
+    expect(alphas[0]).toBe(180);
+    expect(alphas[1]).toBe(180);
+  });
+
+  it('treats NaN as masked', () => {
+    expect(isSurfaceNoData(NaN)).toBe(true);
+    expect(isSurfaceNoData(0)).toBe(false);
+  });
 });

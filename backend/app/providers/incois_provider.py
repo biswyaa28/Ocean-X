@@ -454,12 +454,38 @@ class IncoisProvider:
 
         layer_name_lower = layer_name.lower()
 
-        if layer_name_lower == "currents":
-            u_arr = np.nan_to_num(ds_time["UVEL"].values[::stride, ::stride], nan=0.0)
-            v_arr = np.nan_to_num(ds_time["VVEL"].values[::stride, ::stride], nan=0.0)
+        def _grid_lists(arr: np.ndarray, decimals: int) -> tuple:
+            """Round a grid, keeping masked cells as None and counting coverage.
 
-            u_list = u_arr.round(3).tolist()
-            v_list = v_arr.round(3).tolist()
+            A masked cell (land, or a point outside the model domain) is NaN in
+            the source. It is carried through as ``None`` so it cannot be
+            mistaken for a genuine zero-valued measurement: previously
+            ``np.nan_to_num(..., nan=0.0)`` turned land into a physically
+            plausible 0 °C / 0 m/s / 0 KJ·cm⁻² reading.
+            """
+            out = []
+            valid = 0
+            missing = 0
+            for row in arr[::stride, ::stride]:
+                out_row: List[Optional[float]] = []
+                for raw in row:
+                    fv = float(raw)
+                    if not np.isfinite(fv):
+                        out_row.append(None)
+                        missing += 1
+                    else:
+                        out_row.append(round(fv, decimals))
+                        valid += 1
+                out.append(out_row)
+            return out, valid, missing
+
+        if layer_name_lower == "currents":
+            u_list, u_valid, u_missing = _grid_lists(
+                ds_time["UVEL"].values, 3
+            )
+            v_list, v_valid, v_missing = _grid_lists(
+                ds_time["VVEL"].values, 3
+            )
 
             _c_status = _hycom_data_status(ds)
             _c_source = "INCOIS HYCOM — SYNTHETIC FIXTURE" if _c_status == "SIMULATED" else "INCOIS HYCOM — REAL VECTOR FIELD"
@@ -470,6 +496,9 @@ class IncoisProvider:
                 timestamp=selected_ts,
                 units="m/s",
                 bounds=bounds,
+                # A vector cell is only usable when BOTH components are valid.
+                validCellCount=min(u_valid, v_valid),
+                missingCellCount=max(u_missing, v_missing),
                 grid=LayerGridData(
                     latitudes=lats,
                     longitudes=lons,
@@ -481,28 +510,37 @@ class IncoisProvider:
         elif layer_name_lower in ["sst", "temperature", "temp"]:
             var_name = "TEMP"
             units = "°C"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "salinity":
             var_name = "SALN"
             units = "PSU"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "tchp":
             var_name = "TCHP"
             units = "KJ/cm2"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "ssh":
             var_name = "SSH"
             units = "m"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "mld":
             var_name = "MLD"
             units = "m"
+            decimals = 1
             source_label = "INCOIS RSMC HYCOM"
         else:
             return None
 
-        val_arr = np.nan_to_num(ds_time[var_name].values[::stride, ::stride], nan=0.0)
-        val_list = val_arr.round(2).tolist()
+        if var_name not in ds_time:
+            return None
+
+        val_list, valid_count, missing_count = _grid_lists(
+            ds_time[var_name].values, decimals
+        )
 
         _l_status = _hycom_data_status(ds)
         return LayerDataResponse(
@@ -512,6 +550,8 @@ class IncoisProvider:
             timestamp=selected_ts,
             units=units,
             bounds=bounds,
+            validCellCount=valid_count,
+            missingCellCount=missing_count,
             grid=LayerGridData(
                 latitudes=lats,
                 longitudes=lons,

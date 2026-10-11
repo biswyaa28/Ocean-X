@@ -478,3 +478,96 @@ describe('ApiProvider Phase 2B — cancellation semantics & health-probe sharing
 });
 
 
+
+// ---------------------------------------------------------------------------
+// getRiskAssessment — the backend is the sole scorer.
+//
+// The header used to recompute the heuristic client-side with no model data,
+// so it always rendered UNAVAILABLE (or, before that, a score invented from
+// 65.0/30.2 defaults). It now reads GET /risk/{cycloneId} and shows whatever
+// the backend says, including its UNAVAILABLE reason.
+// ---------------------------------------------------------------------------
+
+describe('ApiProvider.getRiskAssessment', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('fetches the backend score for the requested cyclone', async () => {
+    const provider = new ApiProvider();
+    const body = {
+      status: 'OK',
+      heuristicDemoScore: 48,
+      category: 'ELEVATED',
+      weights: { windMaxPoints: 45 },
+    };
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ backendConnected: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => body });
+
+    const result = await provider.getRiskAssessment('2020153N13072');
+    expect(result).toEqual(body);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('/api/risk/2020153N13072'),
+      expect.anything()
+    );
+  });
+
+  it('passes the scrubbed track index through to the backend', async () => {
+    const provider = new ApiProvider();
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ backendConnected: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ status: 'UNAVAILABLE' }) });
+
+    await provider.getRiskAssessment('2020153N13072', 12);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('index=12'),
+      expect.anything()
+    );
+  });
+
+  it('surfaces an UNAVAILABLE assessment rather than substituting a score', async () => {
+    const provider = new ApiProvider();
+    const body = {
+      status: 'UNAVAILABLE',
+      unavailableReason: 'No real INCOIS HYCOM model data loaded.',
+      heuristicDemoScore: null,
+      category: null,
+    };
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ backendConnected: true }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => body });
+
+    const result = await provider.getRiskAssessment('X');
+    expect(result?.status).toBe('UNAVAILABLE');
+    expect(result?.heuristicDemoScore).toBeNull();
+    expect(result?.unavailableReason).toBeTruthy();
+  });
+
+  it('returns null for a 404 instead of falling back to a different storm', async () => {
+    const provider = new ApiProvider();
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ backendConnected: true }) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ detail: 'not found' }) });
+
+    const result = await provider.getRiskAssessment('NOT-A-STORM');
+    expect(result).toBeNull();
+  });
+});
+
+describe('DemoProvider.getRiskAssessment', () => {
+  it('never invents a score when the backend is unavailable', async () => {
+    const result = await demoProvider.getRiskAssessment('ANY', 0);
+    expect(result.status).toBe('UNAVAILABLE');
+    expect(result.heuristicDemoScore).toBeNull();
+    expect(result.validated).toBe(false);
+    expect(result.operationalUse).toBe('NOT FOR OPERATIONAL USE');
+    expect(result.unavailableReason).toBeTruthy();
+  });
+});

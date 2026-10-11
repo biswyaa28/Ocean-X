@@ -129,6 +129,10 @@ class Cyclone(BaseModel):
     forecastCone: List[ForecastConePoint] = []
     windRadius: WindRadius = WindRadius()
     dataCompleteness: Optional[DataCompleteness] = None
+    # Why `currentTrackIndex` points where it does. The client may scrub to any
+    # other index; this only explains the default.
+    defaultPointReason: Optional[str] = None
+    defaultPointWindKts: Optional[float] = None
     sourceAttribution: str
     isHistorical: bool = True
 
@@ -228,11 +232,19 @@ class KPIMetrics(BaseModel):
     forecastConfidencePct: float
 
 class LayerGridData(BaseModel):
+    """Grid payload of a raster layer.
+
+    Missing/masked cells (land, or points outside the model domain) are
+    represented as ``null`` — never as ``0.0``. A masked cell and a genuine
+    zero-valued measurement are different things, and collapsing them makes
+    land render as a real colour and biases any mean computed over the grid.
+    """
+
     latitudes: List[float]
     longitudes: List[float]
     values: Optional[List[List[Optional[float]]]] = None
-    u: Optional[List[List[float]]] = None
-    v: Optional[List[List[float]]] = None
+    u: Optional[List[List[Optional[float]]]] = None
+    v: Optional[List[List[Optional[float]]]] = None
 
 class LayerDataResponse(BaseModel):
     status: DataStatus
@@ -242,6 +254,10 @@ class LayerDataResponse(BaseModel):
     units: str
     bounds: Dict[str, float]
     grid: LayerGridData
+    # Coverage accounting so a consumer can tell how much of the returned
+    # rectangle is real ocean versus masked land.
+    validCellCount: Optional[int] = None
+    missingCellCount: Optional[int] = None
     provenance: Optional[ScientificProvenance] = None
 
 class DepthSliceGridData(BaseModel):

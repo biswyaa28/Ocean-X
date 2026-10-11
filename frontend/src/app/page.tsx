@@ -16,6 +16,7 @@ import {
   ArgoProfile,
   CycloneTrackPoint,
   AstronomicalData,
+  RiskAssessment,
 } from '../types/oceanlens';
 
 import { Header } from '../components/Header';
@@ -29,7 +30,6 @@ import { CesiumGlobe } from '../components/CesiumGlobe';
 import { ArgoMatchupDrawer } from '../components/ArgoMatchupDrawer';
 import { DataInspector, InspectionData } from '../components/DataInspector';
 
-import { calculateRiskForPoint } from '../utils/risk';
 import {
   DEFAULT_DEPTH_SLICE_DISPLAY,
   DepthSliceDisplaySettings,
@@ -67,6 +67,10 @@ export default function Home() {
   const [layers, setLayers] = useState<GISLayer[]>([]);
   const [argoProfiles, setArgoProfiles] = useState<ArgoProfile[]>([]);
   const [selectedArgoProfile, setSelectedArgoProfile] = useState<ArgoProfile | null>(null);
+  // Authoritative heuristic score, fetched from GET /risk/{cycloneId}?index=N.
+  // null until the first response arrives; never recomputed on the client.
+  const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
+  const [riskLoading, setRiskLoading] = useState(false);
 
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(5);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
@@ -200,29 +204,43 @@ export default function Home() {
   const effectiveTimestamp =
     oceanMode === 'LIVE' ? liveTimestamp : currentPoint?.timestamp;
 
+  // The header SST chip shows the basin-mean SST the backend actually used for
+  // the heuristic, rather than a client-invented constant.
+  const avgSSTFromRisk = useMemo<number | null>(() => {
+    if (riskAssessment?.status !== 'OK') return null;
+    const item = riskAssessment.evidence.find((e) => e.variable.includes('Sea Surface Temp'));
+    const v = item?.value;
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }, [riskAssessment]);
+
   const metrics = useMemo<KPIMetrics | null>(() => {
     if (oceanMode === 'LIVE') return null;
 
     if (!cyclone || !currentPoint) return null;
 
-    // The demo heuristic needs real TCHP/SST to score. The client has no model
-    // dataset of its own, so we pass null and let it report UNAVAILABLE rather
-    // than scoring on invented constants. The authoritative score comes from
-    // the backend /risk/{id} endpoint.
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint, null, null);
+    // The heuristic is scored by the BACKEND (/risk/{id}), which has the real
+    // TCHP/SST. The client never recomputes it — doing so is what produced a
+    // score from invented constants when model data was absent.
     const wind = currentPoint.maxWindKts;
+    const riskAvailable = riskAssessment?.status === 'OK';
 
     return {
       activeCyclones: oceanMode === 'HISTORICAL' ? 0 : 1,
       maxWindKts: wind,
       maxWaveHeightM: wind === null ? null : Number((wind * 0.075 + 2.1).toFixed(1)),
-      avgSSTC: null,
-      coastalRiskLevel: riskAssessment.category,
-      coastalRiskUnavailableReason: riskAssessment.unavailableReason,
+      avgSSTC: avgSSTFromRisk,
+      coastalRiskLevel: riskAvailable ? riskAssessment!.category : null,
+      coastalRiskScore: riskAvailable ? riskAssessment!.heuristicDemoScore : null,
+      coastalRiskUnavailableReason: riskAvailable
+        ? null
+        : riskAssessment?.unavailableReason ?? 'No risk assessment received from the backend.',
+      coastalRiskWeights: riskAvailable ? riskAssessment!.weights : null,
       dataConfidencePct: oceanMode === 'SCENARIO' ? 75 : 92,
       forecastConfidencePct: currentPoint.forecastConfidencePct || 92,
     };
-  }, [cyclone, currentPoint, oceanMode, liveAuthoritative]);
+  }, [cyclone, currentPoint, oceanMode, liveAuthoritative, riskAssessment, avgSSTFromRisk]);
 
   // Memoized callbacks: stable references prevent cascading re-renders of the
   // memoized CesiumGlobe subtree on unrelated top-level state changes.
@@ -279,8 +297,7 @@ export default function Home() {
   const activeLayer = layers.find((l) => l.active) || null;
 
   const hazard = useMemo<Hazard | null>(() => {
-    if (oceanMode === 'LIVE' || !cyclone || !currentPoint) return null;
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint, null, null);
+    if (oceanMode === 'LIVE' || !cyclone || !currentPoint || !riskAssessment) return null;
     return {
       id: `hazard-${cyclone.id}`,
       title: `Cyclonic Warning: ${cyclone.name}`,
@@ -291,6 +308,35 @@ export default function Home() {
       riskAssessment,
     };
   }, [cyclone, currentPoint, oceanMode]);
+
+  // Fetch the unvalidated heuristic score from the backend for the cyclone
+  // point currently on screen. Aborted on rapid scrubbing so a slow response
+  // cannot overwrite a newer one.
+  useEffect(() => {
+    if (oceanMode === 'LIVE' || !cyclone || !activeTrack.length) {
+      setRiskAssessment(null);
+      return;
+    }
+    const idx = Math.min(currentTrackIndex, activeTrack.length - 1);
+    const controller = new AbortController();
+    let cancelled = false;
+    setRiskLoading(true);
+    apiProvider
+      .getRiskAssessment(cyclone.id, idx, controller.signal)
+      .then((r) => {
+        if (!cancelled) setRiskAssessment(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRiskAssessment(null);
+      })
+      .finally(() => {
+        if (!cancelled) setRiskLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [cyclone, currentTrackIndex, activeTrack, oceanMode]);
 
   // Fetch Dynamic Legend Bounds from API (Requirement #16)
   // Aborts in-flight layer queries on rapid layer/timeline toggling.
@@ -319,8 +365,10 @@ export default function Home() {
             for (const row of data.grid.values) {
               if (!row) continue;
               for (const v of row) {
-                // Surface semantics: 0 == masked, so it never contributes bounds.
-                if (v === null || v === undefined || isNaN(v) || v === 0) continue;
+                // Only masked (null/NaN) cells are excluded. A genuine 0 is a
+                // real reading and must set the bounds — skipping it would
+                // both hide real slack water / cool water and shift the scale.
+                if (v === null || v === undefined || isNaN(v)) continue;
                 if (v < min) min = v;
                 if (v > max) max = v;
               }

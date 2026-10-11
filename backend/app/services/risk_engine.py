@@ -15,7 +15,7 @@ Two rules this module must never break:
    ``affectedRegions`` is empty and the omission is stated explicitly.
 """
 
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from app.models.schemas import (
     RISK_DISCLAIMER,
@@ -57,18 +57,40 @@ def _unavailable(reason: str, cyclone: Optional[Cyclone] = None) -> RiskAssessme
     )
 
 
-def _layer_mean(layer) -> Optional[float]:
-    """Mean of the positive cells in a layer, or None when there is no data.
+def _layer_mean(layer) -> Tuple[Optional[float], Optional[int], Optional[int]]:
+    """nanmean over the VALID cells of a layer, with coverage counts.
 
-    A layer that is missing, empty, or entirely masked yields None so the
+    Returns ``(mean, valid_count, total_count)``. Only finite cells contribute
+    to the mean; masked land cells do not. A zero-valued cell IS a real
+    measurement and is included — excluding it would bias the mean upward
+    (e.g. TCHP = 0 over cool water is a genuine reading, not missing data).
+
+    Returns ``(None, valid, total)`` when there is no usable data, so the
     caller can report unavailability instead of scoring on a default.
     """
-    if layer is None or not getattr(layer, 'grid', None) or not layer.grid.values:
-        return None
-    vals = [v for row in layer.grid.values for v in row if v is not None and v > 0]
-    if not vals:
-        return None
-    return float(sum(vals) / len(vals))
+    if layer is None:
+        return None, 0, 0
+    grid = getattr(layer, 'grid', None)
+    values = getattr(grid, 'values', None) if grid is not None else None
+    if not values:
+        return None, 0, 0
+
+    total = 0
+    valid_vals: List[float] = []
+    for row in values:
+        if not row:
+            continue
+        for v in row:
+            total += 1
+            if v is None:
+                continue
+            fv = float(v)
+            if fv == fv and fv not in (float('inf'), float('-inf')):  # NaN-safe
+                valid_vals.append(fv)
+
+    if not valid_vals:
+        return None, 0, total
+    return float(sum(valid_vals) / len(valid_vals)), len(valid_vals), total
 
 
 def calculate_prototype_risk(
@@ -121,8 +143,8 @@ def calculate_prototype_risk(
     except Exception as exc:
         return _unavailable(f"SST layer unavailable: {exc}", cyclone)
 
-    avg_tchp = _layer_mean(tchp_layer)
-    avg_sst = _layer_mean(sst_layer)
+    avg_tchp, tchp_valid, tchp_total = _layer_mean(tchp_layer)
+    avg_sst, sst_valid, sst_total = _layer_mean(sst_layer)
 
     missing = []
     if avg_tchp is None:
@@ -217,8 +239,10 @@ def calculate_prototype_risk(
         f"({track_pt.windSource or 'unknown source'})"
         + (f" / {(track_pt.category or '').upper()}" if track_pt.category else ""),
         f"COASTAL DISTANCE: {round(track_pt.distanceToCoastKm)} KM TO NEAREST SHORE",
-        f"INCOIS TCHP: {round(avg_tchp, 1)} KJ/CM² (basin mean, not cyclone-centred)",
-        f"INCOIS SST: {round(avg_sst, 1)} °C (basin mean, not cyclone-centred)",
+        f"INCOIS TCHP: {round(avg_tchp, 1)} KJ/CM² "
+        f"(mean over {tchp_valid} of {tchp_total} valid cells, not cyclone-centred)",
+        f"INCOIS SST: {round(avg_sst, 1)} °C "
+        f"(mean over {sst_valid} of {sst_total} valid cells, not cyclone-centred)",
     ]
 
     explanation = Explanation(

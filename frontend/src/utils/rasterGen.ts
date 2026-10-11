@@ -251,9 +251,17 @@ function getReusableImageData(ctx: CanvasRenderingContext2D, width: number, heig
   return rc.imgData;
 }
 
-/** A cell the surface ramp treats as no-data (surface semantics: 0 == masked). Exported for regression tests. */
+/**
+ * A cell with no measurement — masked land or outside the model domain.
+ *
+ * Only `null` / `undefined` / NaN count. A genuine `0` is a real reading
+ * (slack currents, TCHP = 0 over cool water, fresh water at 0 PSU) and must
+ * be coloured, not masked. Treating 0 as no-data was a workaround for the
+ * backend's old NaN→0 substitution; the backend now emits `null`, so that
+ * workaround is removed — otherwise real zeros vanish from the map.
+ */
 export function isSurfaceNoData(val: number | null | undefined): val is null | undefined {
-  return val === null || val === undefined || isNaN(val as number) || val === 0;
+  return val === null || val === undefined || isNaN(val as number);
 }
 
 /** A cell with no actual measurement (depth-slice semantics: only null/NaN is missing). */
@@ -263,8 +271,9 @@ export function isMissingDepthValue(val: number | null | undefined): val is null
 
 /**
  * Scientific colormap identical in output to the previous per-call generator.
- * Values -> RGBA with the INCOIS-style ramps. Invalid (null/NaN/0) cells are
- * fully transparent so provenance semantics ("no data" masking) are preserved.
+ * Values -> RGBA with the INCOIS-style ramps. Masked (null/NaN) cells are
+ * fully transparent so land renders as land, not as a zero-valued colour.
+ * A genuine 0 is coloured normally.
  */
 function paintGrid(
   imgData: ImageData,

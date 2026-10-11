@@ -41,6 +41,33 @@ export const Header: React.FC<HeaderProps> = ({
   const hasAuthoritativeLiveData = hasAuthoritativeRealData && liveKpiAuthoritative;
   const displayMetrics = oceanMode === 'LIVE' && !hasAuthoritativeLiveData ? null : metrics;
 
+  // Tooltip text for the risk chip. When the backend scored the cyclone we
+  // list the actual weights it used so the number is never opaque; when it
+  // declined we surface its reason verbatim.
+  const riskTooltip = (() => {
+    if (!displayMetrics) return undefined;
+    const { coastalRiskLevel, coastalRiskUnavailableReason, coastalRiskWeights } = displayMetrics;
+    if (coastalRiskLevel === null) {
+      return (
+        'UNAVAILABLE — no score was computed.\n' +
+        (coastalRiskUnavailableReason ?? 'No reason supplied by the backend.')
+      );
+    }
+    const lines = [
+      'Unvalidated heuristic demo score — NOT validated, NOT for operational use.',
+      'Backend /risk used these hand-tuned weights:',
+    ];
+    if (coastalRiskWeights && Object.keys(coastalRiskWeights).length > 0) {
+      for (const [k, v] of Object.entries(coastalRiskWeights)) {
+        lines.push(`  ${k} = ${v}`);
+      }
+    } else {
+      lines.push('  (weights not supplied)');
+    }
+    lines.push('TCHP/SST are unweighted basin means, not values at the cyclone position.');
+    return lines.join('\n');
+  })();
+
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
@@ -242,16 +269,20 @@ export const Header: React.FC<HeaderProps> = ({
                   displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
                   'text-emerald-400'
                 }`}
-                title={displayMetrics.coastalRiskUnavailableReason ?? undefined}
+                title={riskTooltip}
               >
                 {displayMetrics.coastalRiskLevel ?? 'UNAVAILABLE'}
+                {displayMetrics.coastalRiskScore !== null &&
+                displayMetrics.coastalRiskScore !== undefined
+                  ? ` ${displayMetrics.coastalRiskScore}/100`
+                  : ''}
               </span>
               {/* The score is an unvalidated demo heuristic, never a forecast. */}
               <span
                 className="text-[9px] text-amber-500/80 tracking-wide"
-                title="Unvalidated demo heuristic. Not validated, not for operational use."
+                title={riskTooltip}
               >
-                (DEMO · NOT VALIDATED)
+                (HEURISTIC DEMO, NOT VALIDATED)
               </span>
             </div>
           </>

@@ -93,18 +93,37 @@ def test_blank_wmo_columns_are_never_substituted_with_a_constant(provider):
 
 
 def test_amphan_served_point_reports_absence_not_a_fabricated_storm(provider):
-    """AMPHAN track point 5 is blank in both WMO and IMD — it must be None.
+    """AMPHAN must never show the old fabricated 45.0 kt / 990.0 mb pair.
 
-    Previously this exact point reported 45.0 kt / 990.0 mb as ``status='REAL'``
-    while AMPHAN was in fact a Category-5 Super Cyclonic Storm (~155 kt).
+    The default point is now the PEAK OBSERVED wind, so for AMPHAN it carries a
+    real observation. This test originally asserted the served point had
+    ``None`` wind — that was true only because the old default was
+    ``min(5, len-1)``, which happened to land on a blank row. The fabrication
+    guard that matters is "no unsubstituted constant", checked below.
     """
     amphan = next(c for c in provider.load_cyclones() if c.name == "AMPHAN")
     pt = amphan.track[amphan.currentTrackIndex]
-    assert pt.maxWindKts is None
-    assert pt.centralPressureMb is None
-    assert pt.windSource is None
-    assert pt.pressureSource is None
-    assert pt.category is None
+
+    if pt.maxWindKts is not None:
+        # Real observation: it must carry a genuine agency source.
+        assert pt.windSource in ("WMO", "IMD")
+        assert pt.maxWindKts > 0
+        assert pt.maxWindKts != 45.0 or pt.windSource is not None
+    else:
+        # No observation at this point: absence must be explicit.
+        assert pt.windSource is None
+        assert pt.centralPressureMb is None
+        assert pt.pressureSource is None
+        assert pt.category is None
+
+    # Unconditional: the fabricated pair must not appear with a blank source.
+    for point in amphan.track:
+        if point.maxWindKts == 45.0 and point.centralPressureMb == 990.0:
+            assert point.windSource in ("WMO", "IMD")
+            assert point.pressureSource in ("WMO", "IMD")
+
+    # Completeness is reported so a reader can judge how much is real.
+    assert 0.0 <= amphan.dataCompleteness.withWind <= 1.0
 
 
 def test_wind_source_is_either_wmo_or_imd_and_never_null_with_a_value(provider):

@@ -200,3 +200,42 @@ describe('resolveDepthSliceRender', () => {
     expect(JSON.stringify(p.grid.values)).toBe(before);
   });
 });
+
+describe('computeSliceDataRange — ignores masked cells only', () => {
+  // The colour scale must be derived from valid cells. Masked land (null) is
+  // excluded; a genuine 0 is included, so a cool/fresh-water reading still
+  // sets the lower bound.
+  it('excludes nulls and keeps real zeros', () => {
+    const payload = {
+      grid: {
+        latitudes: [10, 11, 12],
+        longitudes: [80, 81, 82],
+        values: [
+          [null, 0, 5],
+          [10, 20, null],
+          [30, 40, 50],
+        ],
+      },
+    } as any;
+
+    const bounds = computeSliceDataRange(payload);
+    expect(bounds).not.toBeNull();
+    expect(bounds!.min).toBe(0);
+    expect(bounds!.max).toBe(50);
+  });
+
+  it('returns null when every cell is masked', () => {
+    const payload = {
+      grid: {
+        latitudes: [10, 11],
+        longitudes: [80, 81],
+        values: [
+          [null, null],
+          [null, null],
+        ],
+      },
+    } as any;
+
+    expect(computeSliceDataRange(payload)).toBeNull();
+  });
+});

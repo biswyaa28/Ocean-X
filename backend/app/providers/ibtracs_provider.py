@@ -68,6 +68,44 @@ def _quadrant_mean(
     return round(sum(values) / len(values), 1)
 
 
+def select_default_track_index(track: List[CycloneTrackPoint]) -> Tuple[int, str]:
+    """Choose which track point the API serves by default, and say why.
+
+    The default is the point of PEAK OBSERVED intensity — the largest
+    ``maxWindKts`` among points that actually carry a wind observation. The
+    previous default was ``min(5, len-1)``, an arbitrary early point which
+    frequently landed on a point with no wind observation at all, so the first
+    view a user saw rendered nulls and the risk engine refused to score.
+
+    Returns ``(index, reason)`` where reason is one of:
+      * ``peak_observed_wind``    — a real peak wind was found (normal case)
+      * ``peak_observed_wind_tie``— several points share the peak; earliest wins
+      * ``last_point_no_wind``    — the storm has no wind observation anywhere
+    """
+    if not track:
+        return 0, 'empty_track'
+
+    best_idx = -1
+    best_wind = None
+    for idx, pt in enumerate(track):
+        wind = pt.maxWindKts
+        if wind is None:
+            continue
+        if best_wind is None or wind > best_wind:
+            best_wind = wind
+            best_idx = idx
+
+    if best_idx < 0:
+        # No observed wind anywhere — fall back to the last point, which is the
+        # storm's most recent state.
+        return len(track) - 1, 'last_point_no_wind'
+
+    # Report a tie explicitly so the choice is never silently ambiguous.
+    tied = sum(1 for pt in track if pt.maxWindKts == best_wind)
+    reason = 'peak_observed_wind_tie' if tied > 1 else 'peak_observed_wind'
+    return best_idx, reason
+
+
 class IBTrACSProvider:
     def __init__(self, csv_path: Path = settings.RAW_IBTRACS_CSV):
         self.csv_path = csv_path
@@ -201,7 +239,7 @@ class IBTrACSProvider:
             if len(track) < 3:
                 continue
 
-            current_idx = min(5, len(track) - 1)
+            current_idx, default_reason = select_default_track_index(track)
 
             n = len(track)
             with_wind = sum(1 for pt in track if pt.maxWindKts is not None)
@@ -238,6 +276,12 @@ class IBTrACSProvider:
                     forecastCone=[],
                     windRadius=wind_radius,
                     dataCompleteness=completeness,
+                    defaultPointReason=default_reason,
+                    defaultPointWindKts=(
+                        track[current_idx].maxWindKts
+                        if 0 <= current_idx < len(track)
+                        else None
+                    ),
                     sourceAttribution='NOAA IBTrACS v04r01 (Real Observations)',
                     isHistorical=True,
                 )
@@ -281,8 +325,9 @@ class IBTrACSProvider:
         if not track:
             return None
 
-        # Find best matching track point by timestamp or geographic distance
-        best_pt = track[0]
+        # Default to the served (peak-intensity) point rather than track[0];
+        # an explicit timestamp or lat/lon still wins.
+        best_pt = track[min(cyclone.currentTrackIndex, len(track) - 1)]
 
         if timestamp:
             import pandas as pd
@@ -324,6 +369,8 @@ class IBTrACSProvider:
             "dataCompleteness": (
                 cyclone.dataCompleteness.model_dump() if cyclone.dataCompleteness else None
             ),
+            "defaultPointReason": cyclone.defaultPointReason,
+            "defaultPointWindKts": best_pt.maxWindKts,
             "source": "NOAA IBTrACS v04r01",
         }
 

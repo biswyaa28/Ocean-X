@@ -3,6 +3,7 @@ import { demoProvider } from './DemoProvider';
 import {
   Cyclone,
   Hazard,
+  RiskAssessment,
   Station,
   GISLayer,
   KPIMetrics,
@@ -405,6 +406,27 @@ export class ApiProvider implements DataProvider {
       return await res.json();
     } catch {
       return demoProvider.getHazardById(id);
+    }
+  }
+
+  async getRiskAssessment(
+    cycloneId: string,
+    index?: number,
+    signal?: AbortSignal
+  ): Promise<RiskAssessment | null> {
+    if (!(await this.checkBackend())) return demoProvider.getRiskAssessment(cycloneId, index);
+    try {
+      const qs = new URLSearchParams();
+      if (typeof index === 'number') qs.set('index', String(index));
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      const res = await fetch(`${API_BASE}/risk/${encodeURIComponent(cycloneId)}${suffix}`, { signal });
+      // 404 means the cyclone id is unknown — that is a real answer, not an
+      // error to be papered over with demo data.
+      if (res.status === 404) return null;
+      if (!res.ok) return demoProvider.getRiskAssessment(cycloneId, index);
+      return await res.json();
+    } catch {
+      return demoProvider.getRiskAssessment(cycloneId, index);
     }
   }
 

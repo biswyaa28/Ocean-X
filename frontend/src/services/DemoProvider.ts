@@ -2,6 +2,7 @@ import { DataProvider } from './DataProvider';
 import { RISK_DISCLAIMER, RISK_HEURISTIC_WEIGHTS } from '../utils/risk';
 import {
   Cyclone,
+  RiskAssessment,
   CycloneTrackPoint,
   Hazard,
   Station,
@@ -437,6 +438,30 @@ export class DemoProvider implements DataProvider {
         },
       },
     ];
+  }
+
+  async getRiskAssessment(
+    _cycloneId: string,
+    _index?: number
+  ): Promise<RiskAssessment> {
+    // The demo provider cannot score: it has no real TCHP/SST. Returning the
+    // same honest "unavailable" shape as the backend keeps the fallback path
+    // from implying an authority the demo data does not have.
+    return {
+      status: 'UNAVAILABLE',
+      unavailableReason:
+        'Backend unavailable and demo data carries no real model TCHP/SST, so no score was computed.',
+      heuristicDemoScore: null,
+      category: null,
+      modelType: 'prototype_rule_based',
+      validated: false,
+      operationalUse: 'NOT FOR OPERATIONAL USE',
+      disclaimer: RISK_DISCLAIMER,
+      weights: RISK_HEURISTIC_WEIGHTS,
+      evidence: [],
+      explanation: null,
+      affectedRegions: [],
+    };
   }
 
   async getHazardById(id: string): Promise<Hazard | null> {

@@ -9,12 +9,30 @@ import type { KPIMetrics, AppMode, OceanMode, DataStatus } from '../types/oceanl
  * never display a substituted band or number.
  */
 
+const weights = {
+  windMaxPoints: 45,
+  windSaturatesAtKts: 140,
+  distanceMaxPoints: 30,
+  distanceFloorPoints: 5,
+  distanceScaleKm: 800,
+  tchpMaxPoints: 15,
+  tchpSaturatesAtKJPerCm2: 100,
+  sstMaxPoints: 10,
+  sstThresholdC: 26,
+  sstSpanC: 5,
+  scoreClampMin: 10,
+  scoreClampMax: 98,
+};
+
 const metrics: KPIMetrics = {
   activeCyclones: 1,
   maxWindKts: 61.3,
   maxWaveHeightM: 6.7,
   avgSSTC: 29.4,
   coastalRiskLevel: 'ELEVATED',
+  coastalRiskScore: 48,
+  coastalRiskWeights: weights,
+  coastalRiskUnavailableReason: null,
   dataConfidencePct: 92,
   forecastConfidencePct: 92,
 };
@@ -31,7 +49,7 @@ const baseProps = {
 describe('Header — unvalidated risk labelling', () => {
   it('labels the risk figure as an unvalidated demo heuristic', () => {
     render(<Header {...baseProps} metrics={metrics} />);
-    expect(screen.getByText(/DEMO · NOT VALIDATED/i)).toBeInTheDocument();
+    expect(screen.getByText(/HEURISTIC DEMO, NOT VALIDATED/i)).toBeInTheDocument();
   });
 
   it('shows the observed wind rather than a default', () => {
@@ -57,6 +75,8 @@ describe('Header — unvalidated risk labelling', () => {
         metrics={{
           ...metrics,
           coastalRiskLevel: null,
+          coastalRiskScore: null,
+          coastalRiskWeights: null,
           coastalRiskUnavailableReason: 'No real INCOIS HYCOM model data loaded.',
         }}
       />
@@ -74,12 +94,29 @@ describe('Header — unvalidated risk labelling', () => {
         metrics={{
           ...metrics,
           coastalRiskLevel: null,
+          coastalRiskScore: null,
+          coastalRiskWeights: null,
           coastalRiskUnavailableReason: 'No real INCOIS HYCOM model data loaded.',
         }}
       />
     );
-    expect(
-      screen.getByTitle('No real INCOIS HYCOM model data loaded.')
-    ).toBeInTheDocument();
+    // The reason reaches the UI verbatim via the tooltip.
+    const withReason = screen.getAllByTitle(/No real INCOIS HYCOM model data loaded\./);
+    expect(withReason.length).toBeGreaterThan(0);
+  });
+
+  it('lists the backend weights in the tooltip when a score exists', () => {
+    render(<Header {...baseProps} metrics={metrics} />);
+    const tooltips = screen.getAllByTitle(/Unvalidated heuristic demo score/);
+    expect(tooltips.length).toBeGreaterThan(0);
+    const text = tooltips[0].getAttribute('title') ?? '';
+    expect(text).toMatch(/windMaxPoints = 45/);
+    expect(text).toMatch(/windSaturatesAtKts = 140/);
+    expect(text).toMatch(/distanceScaleKm = 800/);
+  });
+
+  it('shows the backend score alongside the band', () => {
+    render(<Header {...baseProps} metrics={metrics} />);
+    expect(screen.getByText(/ELEVATED 48\/100/)).toBeInTheDocument();
   });
 });
