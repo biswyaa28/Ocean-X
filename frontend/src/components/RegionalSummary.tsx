@@ -67,6 +67,23 @@ function metric(value: number | null | undefined, digits = 3): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
 }
 
+/**
+ * Tooltip heading for a per-depth bar. Extracted so its wording is testable.
+ *
+ * The per-depth n is NOT the overall n. The backend reduces each profile to a
+ * single bias before the overall figures (so those count PROFILES), but the
+ * per-depth figure is the length of a flat residual list fed one entry per
+ * comparison row — so it counts MATCHED PAIRS. The two coincide only while
+ * model depths stay unique per profile, which is a property of the data rather
+ * than a guarantee of the code. Labelling this one "profiles" would silently
+ * claim a per-profile guarantee it does not have.
+ */
+export function depthTooltipLabel(label: string | number, row?: BiasRow): string {
+  return typeof row?.n === 'number'
+    ? `DEPTH ${label} M · n = ${row.n} matched pairs`
+    : `DEPTH ${label} M`;
+}
+
 function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
   if (rows.length === 0) {
     return (
@@ -133,12 +150,9 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
               fontFamily: 'inherit',
               padding: '4px 8px',
             }}
-            labelFormatter={(label, payload) => {
-              const row = payload?.[0]?.payload as BiasRow | undefined;
-              return typeof row?.n === 'number'
-                ? `DEPTH ${label} M · n = ${row.n} profiles`
-                : `DEPTH ${label} M`;
-            }}
+            labelFormatter={(label, payload) =>
+              depthTooltipLabel(label, payload?.[0]?.payload as BiasRow | undefined)
+            }
             formatter={(value, name) => [
               typeof value === 'number' ? `${value.toFixed(3)} ${unit}` : '—',
               String(name),

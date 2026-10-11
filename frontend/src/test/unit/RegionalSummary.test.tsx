@@ -10,7 +10,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { RegionalSummary } from '../../components/RegionalSummary';
+import { RegionalSummary, depthTooltipLabel } from '../../components/RegionalSummary';
 import { apiProvider } from '../../services/ApiProvider';
 import type { ArgoMatchupSummary } from '../../types/oceanlens';
 
@@ -291,6 +291,45 @@ describe('RegionalSummary — TCHP scatter', () => {
     expect(screen.getByText('T OVERALL RMSE (n = 2 profiles)')).toBeTruthy();
     expect(screen.getByText('S OVERALL MAE (n = 2 profiles)')).toBeTruthy();
     expect(screen.getByText('S OVERALL RMSE (n = 2 profiles)')).toBeTruthy();
+  });
+});
+
+/**
+ * Two different quantities are both called "n" by the backend, and they are not
+ * the same number.
+ *
+ * `overall.temperature.n` / `overall.salinity.n` count PROFILES: the backend
+ * reduces each profile to one bias first, so a profile that sampled ten levels
+ * still contributes exactly one row (and the value happens to equal
+ * includedProfileCount). Calling those "profiles" is correct.
+ *
+ * `byModelDepth[i].n` counts MATCHED PAIRS: it is `len()` of a flat list of
+ * residuals, one appended per comparison row at that depth. It equals the
+ * distinct-profile count only because model depths are unique per profile, an
+ * invariant of the data rather than of the code. The two diverge as soon as a
+ * profile contributes two rows at one depth, or a profile is dropped for one
+ * variable at that depth and not the other.
+ *
+ * The per-depth tooltip must therefore never call this number "profiles".
+ */
+describe('RegionalSummary — n means different things at each depth', () => {
+  const row = (n: number) => ({ modelDepthM: 50, bias: 0.1, n, spread: null });
+
+  it('calls the per-depth count matched pairs, never profiles', () => {
+    expect(depthTooltipLabel(50, row(19))).toBe('DEPTH 50 M · n = 19 matched pairs');
+    expect(depthTooltipLabel(50, row(19))).not.toContain('profiles');
+  });
+
+  it('still calls the OVERALL count profiles, because that is what it is', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByText('T OVERALL BIAS')).toBeTruthy());
+    expect(screen.getByText(/T OVERALL MAE \(n = 2 profiles\)/)).toBeTruthy();
+  });
+
+  it('omits the count entirely when the depth produced no pair', () => {
+    expect(depthTooltipLabel(500, undefined)).toBe('DEPTH 500 M');
   });
 });
 
