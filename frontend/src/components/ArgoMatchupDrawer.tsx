@@ -187,8 +187,8 @@ const MATCH_MODE_LABELS: Record<MatchupMode, string> = {
 
 const MATCH_MODE_TITLES: Record<MatchupMode, string> = {
   model_levels:
-    'Compare at the model\u2019s own 6 depth levels; the float is interpolated onto each. '
-    + 'Pairs are independent and the residual excludes model interpolation error.',
+    'Compare at the model\u2019s 6 native depth levels (layer definition pending INCOIS confirmation); '
+    + 'the float is interpolated onto each. Pairs are independent and the residual excludes model interpolation error.',
   float_levels:
     'Interpolate the model onto every float depth. Includes model interpolation '
     + 'error across the model\u2019s sparse depth levels.',
@@ -569,6 +569,22 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
             </>
           )}
         </div>
+
+        {Array.isArray(matchup.modelDepths) &&
+          Array.isArray(matchup.storedFileDepths) &&
+          matchup.modelDepths.length > 0 &&
+          matchup.storedFileDepths.length > 0 &&
+          JSON.stringify(matchup.modelDepths) !== JSON.stringify(matchup.storedFileDepths) && (
+            <div
+              data-testid="matchup-depth-axis-footnote"
+              className="font-mono text-[8px] text-slate-400 leading-relaxed"
+            >
+              Depths used: {matchup.modelDepths.join(', ')} m (reconstructed from the file&apos;s depth bounds;
+              they match INCOIS&apos;s raw OPeNDAP values, checked 8–10 Oct 2026). This subset file stores{' '}
+              {matchup.storedFileDepths.join(', ')} m (bound midpoints). Rule:{' '}
+              {matchup.modelDepthAxisRule ?? 'native'}.
+            </div>
+          )}
 
         {repeatedNativeDepths > 0 && matchMode === 'native' && (
           <div className="font-mono text-[8px] text-amber-300/90 leading-relaxed">

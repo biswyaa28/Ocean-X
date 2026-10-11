@@ -133,7 +133,12 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
               fontFamily: 'inherit',
               padding: '4px 8px',
             }}
-            labelFormatter={(label) => `DEPTH ${label} M`}
+            labelFormatter={(label, payload) => {
+              const row = payload?.[0]?.payload as BiasRow | undefined;
+              return typeof row?.n === 'number'
+                ? `DEPTH ${label} M · n = ${row.n} profiles`
+                : `DEPTH ${label} M`;
+            }}
             formatter={(value, name) => [
               typeof value === 'number' ? `${value.toFixed(3)} ${unit}` : '—',
               String(name),
@@ -478,7 +483,17 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">T OVERALL RMSE</span>
+              <span className="text-slate-500">
+                T OVERALL MAE (n = {summary.overall.temperature.n ?? summary.includedProfileCount} profiles)
+              </span>
+              <span className="text-slate-200 font-bold">
+                {metric(summary.overall.temperature.mae)} °C
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">
+                T OVERALL RMSE (n = {summary.overall.temperature.n ?? summary.includedProfileCount} profiles)
+              </span>
               <span className="text-slate-200 font-bold">
                 {metric(summary.overall.temperature.rmse)} °C
               </span>
@@ -490,7 +505,17 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">S OVERALL RMSE</span>
+              <span className="text-slate-500">
+                S OVERALL MAE (n = {summary.overall.salinity.n ?? summary.includedProfileCount} profiles)
+              </span>
+              <span className="text-slate-200 font-bold">
+                {metric(summary.overall.salinity.mae)} PSU
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">
+                S OVERALL RMSE (n = {summary.overall.salinity.n ?? summary.includedProfileCount} profiles)
+              </span>
               <span className="text-slate-200 font-bold">
                 {metric(summary.overall.salinity.rmse)} PSU
               </span>
@@ -502,6 +527,13 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
                 {summary.floatBracketMaxGapDeepM} m below
               </span>
             </div>
+          </div>
+
+          <div
+            data-testid="regional-depth-axis-note"
+            className="font-mono text-[8.5px] text-slate-400 leading-relaxed px-0.5"
+          >
+            Model levels use the producer&apos;s native depth axis{summary.modelDepths && summary.modelDepths.length > 0 ? ` (${summary.modelDepths.join(', ')} m)` : ''}. Layer definition pending confirmation from INCOIS.
           </div>
 
           <div className="bg-[#05070a] border border-white/10 rounded-lg p-2 font-mono text-[8.5px] space-y-1">

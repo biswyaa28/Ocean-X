@@ -320,6 +320,10 @@ export interface ArgoMatchupSummary {
   modelDataset: string;
   modelDataStatus?: ScientificDataStatus;
   modelRuns: string[];
+  modelDepthAxis?: string;
+  modelDepthAxisRule?: string;
+  modelDepths?: number[];
+  storedFileDepths?: number[];
   floatBracketMaxGapM: number;
   floatBracketMaxGapDeepM: number;
   floatBracketDeepBreakpointM: number;
@@ -439,6 +443,10 @@ export interface ArgoMatchupResponse {
   matchingToleranceM: number;
   matchMode?: MatchupMode;
   modelDepthSelection: string;
+  modelDepthAxis?: string;
+  modelDepthAxisRule?: string;
+  modelDepths?: number[];
+  storedFileDepths?: number[];
   depthSource?: MatchupDepthSource;
   /** Variable family actually read for the whole profile: "raw" | "adjusted". */
   variableBasis?: 'raw' | 'adjusted';

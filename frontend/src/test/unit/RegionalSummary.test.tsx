@@ -253,4 +253,44 @@ describe('RegionalSummary — TCHP scatter', () => {
       .closest('details');
     expect(details?.textContent).toMatch(/not published in the file/i);
   });
+
+  it('renders the model depth axis note with depths when modelDepths is present', async () => {
+    getArgoMatchupSummary.mockResolvedValue(
+      makeSummary({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+      })
+    );
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByTestId('regional-depth-axis-note')).toBeTruthy());
+    expect(screen.getByTestId('regional-depth-axis-note').textContent).toBe(
+      "Model levels use the producer's native depth axis (0, 10, 50, 100, 250, 500 m). Layer definition pending confirmation from INCOIS."
+    );
+  });
+
+  it('renders the model depth axis note without depths when modelDepths is absent', async () => {
+    getArgoMatchupSummary.mockResolvedValue(
+      makeSummary({
+        modelDepths: undefined,
+      })
+    );
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByTestId('regional-depth-axis-note')).toBeTruthy());
+    expect(screen.getByTestId('regional-depth-axis-note').textContent).toBe(
+      "Model levels use the producer's native depth axis. Layer definition pending confirmation from INCOIS."
+    );
+  });
+
+  it('renders n = <count> profiles beside overall temperature and salinity MAE and RMSE', async () => {
+    getArgoMatchupSummary.mockResolvedValue(makeSummary());
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByText('T OVERALL BIAS')).toBeTruthy());
+    expect(screen.getByText('T OVERALL MAE (n = 2 profiles)')).toBeTruthy();
+    expect(screen.getByText('T OVERALL RMSE (n = 2 profiles)')).toBeTruthy();
+    expect(screen.getByText('S OVERALL MAE (n = 2 profiles)')).toBeTruthy();
+    expect(screen.getByText('S OVERALL RMSE (n = 2 profiles)')).toBeTruthy();
+  });
 });
+

@@ -611,6 +611,58 @@ describe('ArgoMatchupDrawer — Phase 2C matchup diagnostics', () => {
     expect(screen.queryByText(/EXCELLENT|QUALITY GRADE|MATCHUP SCORE|POOR MATCHUP/i)).not.toBeInTheDocument();
   });
 
+  it('renders the depth-axis footnote when modelDepths and storedFileDepths differ', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 17.5, 52.5, 125, 275, 500],
+        modelDepthAxisRule: 'native',
+      })
+    );
+
+    const footnote = screen.getByTestId('matchup-depth-axis-footnote');
+    expect(footnote).toBeInTheDocument();
+    expect(footnote.textContent).toContain(
+      "Depths used: 0, 10, 50, 100, 250, 500 m (reconstructed from the file's depth bounds; they match INCOIS's raw OPeNDAP values, checked 8–10 Oct 2026)."
+    );
+    expect(footnote.textContent).toContain(
+      "This subset file stores 0, 17.5, 52.5, 125, 275, 500 m (bound midpoints). Rule: native."
+    );
+  });
+
+  it('does not render the depth-axis footnote when depth fields are absent', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: undefined,
+        storedFileDepths: undefined,
+      })
+    );
+    expect(screen.queryByTestId('matchup-depth-axis-footnote')).not.toBeInTheDocument();
+  });
+
+  it('does not render the depth-axis footnote when modelDepths and storedFileDepths are identical', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50],
+        storedFileDepths: [0, 10, 50],
+      })
+    );
+    expect(screen.queryByTestId('matchup-depth-axis-footnote')).not.toBeInTheDocument();
+  });
+
+  it('displays the softened model_levels title noting pending INCOIS confirmation', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        matchMode: 'model_levels',
+      })
+    );
+    const badge = screen.getByTestId('matchup-badge-vertical');
+    expect(badge).toHaveAttribute(
+      'title',
+      expect.stringContaining('layer definition pending INCOIS confirmation')
+    );
+  });
+
   it('shows variable valid-pair counts from Phase 2B statistics, not from chart points', async () => {
     await openMatchupTab(
       makeArgoMatchup({
