@@ -9,9 +9,8 @@ import { DepthSliceRenderConfig } from '../utils/depthSliceViz';
 import { Loader2 } from 'lucide-react';
 import { perfMonitor } from '../utils/perfMonitor';
 
-// [CKPT-TEMP]
 const CesiumViewerInner = dynamic(
-  () => import('./CesiumViewerInner').then((m) => { console.log('[CKPT-2] dynamic import RESOLVED'); return m; }).catch((e) => { console.log('[CKPT-2] dynamic import FAILED', e); throw e; }),
+  () => import('./CesiumViewerInner'),
   {
     ssr: false,
     loading: () => (
@@ -30,6 +29,7 @@ interface CesiumGlobeProps {
   currentTrackIndex: number;
   layers: GISLayer[];
   argoProfiles?: ArgoProfile[];
+  selectedArgoProfile?: ArgoProfile | null;
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
@@ -64,6 +64,7 @@ function cesiumGlobePropsAreEqual(
   if (prev.cyclone !== next.cyclone) return false;
   if (prev.currentTrackIndex !== next.currentTrackIndex) return false;
   if (prev.argoProfiles !== next.argoProfiles) return false;
+  if (prev.selectedArgoProfile !== next.selectedArgoProfile) return false;
   if (prev.onSelectArgoProfile !== next.onSelectArgoProfile) return false;
   if (prev.onInspectPoint !== next.onInspectPoint) return false;
   if (prev.onAstronomicalUpdate !== next.onAstronomicalUpdate) return false;
@@ -99,7 +100,6 @@ function cesiumGlobePropsAreEqual(
 
 export const CesiumGlobe: React.FC<CesiumGlobeProps> = React.memo(
   (props) => {
-    console.log('[CKPT-1] CesiumGlobe wrapper RENDERED');
     if (process.env.NODE_ENV !== 'production') {
       perfMonitor.recordCesiumGlobeRender();
     }

@@ -123,7 +123,10 @@ function fakeColor() {
  */
 export class FakeViewer {
   imageryLayers = new FakeImageryLayerCollection();
-  entities = { add: vi.fn(() => ({})), remove: vi.fn(() => true) };
+  entities = {
+    add: vi.fn((opts?: unknown) => (opts && typeof opts === 'object' ? { ...(opts as Record<string, unknown>) } : {})),
+    remove: vi.fn(() => true),
+  };
   postRenderListeners: Array<() => void> = [];
   scene = {
     canvas: {},

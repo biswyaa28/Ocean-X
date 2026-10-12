@@ -3,7 +3,13 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import React from 'react';
 
 import { cesiumMock, layerOps, resetLayerOps } from '../test/mocks/cesium';
-vi.mock('cesium', () => ({ __esModule: true, ...cesiumMock }));
+// The components read Cesium from the runtime handle, not from 'cesium' —
+// see src/lib/cesiumRuntime.ts.
+vi.mock('../lib/cesiumRuntime', () => ({
+  __esModule: true,
+  default: cesiumMock,
+  Cesium: cesiumMock,
+}));
 vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
 
 const getDepthSlice = vi.fn();

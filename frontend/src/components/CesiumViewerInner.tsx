@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import * as Cesium from 'cesium';
+import Cesium from '../lib/cesiumRuntime';
+// Type-only namespace import: fully erased at compile time, so Cesium is never bundled.
+import type * as CesiumTypes from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import { Cyclone, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
@@ -23,7 +25,7 @@ if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
 }
 
-export function safeJulianDate(timestampStr: string): Cesium.JulianDate {
+export function safeJulianDate(timestampStr: string): CesiumTypes.JulianDate {
   if (!timestampStr) return Cesium.JulianDate.now();
   try {
     let formatted = timestampStr.trim();
@@ -147,6 +149,7 @@ interface CesiumViewerInnerProps {
   currentTrackIndex: number;
   layers: GISLayer[];
   argoProfiles?: ArgoProfile[];
+  selectedArgoProfile?: ArgoProfile | null;
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
@@ -173,6 +176,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   currentTrackIndex,
   layers,
   argoProfiles = [],
+  selectedArgoProfile = null,
   onSelectArgoProfile,
   onInspectPoint,
   onAstronomicalUpdate,
@@ -189,15 +193,15 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<Cesium.Viewer | null>(null);
-  const [viewerInstance, setViewerInstance] = useState<Cesium.Viewer | null>(null);
+  const viewerRef = useRef<CesiumTypes.Viewer | null>(null);
+  const [viewerInstance, setViewerInstance] = useState<CesiumTypes.Viewer | null>(null);
   const onInspectPointRef = useRef(onInspectPoint);
   const onSelectArgoProfileRef = useRef(onSelectArgoProfile);
-  const rasterLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const rasterLayerRef = useRef<CesiumTypes.ImageryLayer | null>(null);
   // Dedicated imagery layer for the HYCOM model depth slice (Phase 1B).
   // Fully separate from the surface rasterLayerRef so surface behavior and
   // depth-slice behavior never remove each other's layers.
-  const depthSliceLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const depthSliceLayerRef = useRef<CesiumTypes.ImageryLayer | null>(null);
 
   // Phase 2B — on-demand rendering invalidation + raster resource lifecycle.
   //
@@ -221,7 +225,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   }, []);
 
   // Persistent keyed entity registry: avoids destructive removeAll() churn.
-  const entityRegistryRef = useRef<Map<string, Cesium.Entity>>(new Map());
+  const entityRegistryRef = useRef<Map<string, CesiumTypes.Entity>>(new Map());
   // Signatures used to detect when a keyed entity's *structure* changes
   // (e.g. a different cyclone) and must be rebuilt rather than updated in place.
   const entitySigRef = useRef<Map<string, string>>(new Map());
@@ -234,7 +238,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     onSelectArgoProfileRef.current = onSelectArgoProfile;
   }, [onSelectArgoProfile]);
 
-  // Dynamic Mouse Hover Tooltip State
+  // Dynamic Mouse Hover State (Tooltip + Float Label Focus)
+  const [hoveredProfileId, setHoveredProfileId] = useState<string | null>(null);
   const [hoverTooltip, setHoverTooltip] = useState<{
     visible: boolean;
     x: number;
@@ -258,11 +263,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
    * If the structure signature changes, the entity is rebuilt.
    */
   const acquireEntity = useCallback((
-    viewer: Cesium.Viewer,
+    viewer: CesiumTypes.Viewer,
     key: string,
     signature: string,
-    build: () => Cesium.Entity.ConstructorOptions
-  ): Cesium.Entity => {
+    build: () => CesiumTypes.Entity.ConstructorOptions
+  ): CesiumTypes.Entity => {
     const registry = entityRegistryRef.current;
     const sigs = entitySigRef.current;
     const existing = registry.get(key);
@@ -285,7 +290,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
 
-    console.log('[CKPT-3] viewer CONSTRUCTOR about to run; container=', !!containerRef.current);
     Cesium.Ion.defaultAccessToken = process.env.NEXT_PUBLIC_CESIUM_TOKEN || '';
 
     try {
@@ -401,7 +405,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
       viewer.scene.globe.depthTestAgainstTerrain = false;
       viewerRef.current = viewer;
-      console.log('[CKPT-4] viewer READY (setViewerInstance called)');
       setViewerInstance(viewer);
 
       // Phase 2B: the scene properties above (lighting, atmosphere, sun/moon,
@@ -414,7 +417,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
       // Click Handler
-      handler.setInputAction((click: { position: Cesium.Cartesian2 }) => {
+      handler.setInputAction((click: { position: CesiumTypes.Cartesian2 }) => {
         const pickedObject = viewer.scene.pick(click.position);
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
@@ -441,7 +444,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
       // Mouse Move Handler for Dynamic Interactive Map Tooltips with RAF Throttling (Phase 2A)
       let pendingPickRaf: number | null = null;
-      let latestEndPosition: Cesium.Cartesian2 | null = null;
+      let latestEndPosition: CesiumTypes.Cartesian2 | null = null;
 
       const processHoverPick = () => {
         pendingPickRaf = null;
@@ -476,6 +479,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             return;
           } else if (props.argoData) {
             const argo = props.argoData.getValue();
+            setHoveredProfileId(argo.profile_id ? String(argo.profile_id) : String(argo.float_id));
             setHoverTooltip({
               visible: true,
               x: endPosition.x,
@@ -491,16 +495,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           }
         }
 
+        setHoveredProfileId(null);
         setHoverTooltip(null);
       };
 
-      handler.setInputAction((movement: { endPosition: Cesium.Cartesian2 }) => {
+      handler.setInputAction((movement: { endPosition: CesiumTypes.Cartesian2 }) => {
         if (!movement.endPosition) {
           if (pendingPickRaf !== null) {
             cancelAnimationFrame(pendingPickRaf);
             pendingPickRaf = null;
           }
           latestEndPosition = null;
+          setHoveredProfileId(null);
           setHoverTooltip(null);
           return;
         }
@@ -666,7 +672,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     // 1. CYCLONE STORM VISUAL ANCHOR
     if (cyclone && showCycloneLayer) {
-      const positions: Cesium.Cartesian3[] = [];
+      const positions: CesiumTypes.Cartesian3[] = [];
       const trackPoints = cyclone.track;
 
       trackPoints.forEach((pt) => {
@@ -712,7 +718,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           })
         );
         // In-place update of positions on timeline scrub
-        (histEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue(historyPositions);
+        (histEntity.polyline?.positions as CesiumTypes.ConstantProperty | undefined)?.setValue(historyPositions);
         histEntity.show = true;
         activeKeys.add('cyclone-track-historical');
       }
@@ -744,14 +750,14 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
         // In-place style update for the "current" highlight
         if (nodeEntity.point) {
-          (nodeEntity.point.pixelSize as Cesium.ConstantProperty).setValue(isCurrent ? 12 : 7);
-          (nodeEntity.point.color as Cesium.ConstantProperty).setValue(
+          (nodeEntity.point.pixelSize as CesiumTypes.ConstantProperty).setValue(isCurrent ? 12 : 7);
+          (nodeEntity.point.color as CesiumTypes.ConstantProperty).setValue(
             isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85)
           );
-          (nodeEntity.point.outlineColor as Cesium.ConstantProperty).setValue(
+          (nodeEntity.point.outlineColor as CesiumTypes.ConstantProperty).setValue(
             isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK
           );
-          (nodeEntity.point.outlineWidth as Cesium.ConstantProperty).setValue(isCurrent ? 3 : 1.5);
+          (nodeEntity.point.outlineWidth as CesiumTypes.ConstantProperty).setValue(isCurrent ? 3 : 1.5);
         }
         nodeEntity.show = true;
         activeKeys.add(key);
@@ -800,7 +806,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (sunEntity.position as Cesium.ConstantPositionProperty).setValue(sunSpacePos);
+          (sunEntity.position as CesiumTypes.ConstantPositionProperty).setValue(sunSpacePos);
           sunEntity.show = true;
           activeKeys.add('celestial-sun');
 
@@ -822,7 +828,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (rayEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue([sunSpacePos, earthSurfacePoint]);
+          (rayEntity.polyline?.positions as CesiumTypes.ConstantProperty | undefined)?.setValue([sunSpacePos, earthSurfacePoint]);
           rayEntity.show = true;
           activeKeys.add('celestial-sun-rays');
         }
@@ -864,7 +870,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (moonEntity.position as Cesium.ConstantPositionProperty).setValue(moonSpacePos);
+          (moonEntity.position as CesiumTypes.ConstantPositionProperty).setValue(moonSpacePos);
           moonEntity.show = true;
           activeKeys.add('celestial-moon');
         }
@@ -895,7 +901,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
-        (eyeEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        (eyeEntity.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
         eyeEntity.show = true;
         activeKeys.add('cyclone-eye-core');
 
@@ -921,7 +927,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (ring50.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+          (ring50.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
           ring50.show = true;
           activeKeys.add('cyclone-ring-50kt');
         }
@@ -945,7 +951,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (ring34.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+          (ring34.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
           ring34.show = true;
           activeKeys.add('cyclone-ring-34kt');
         }
@@ -976,9 +982,9 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
-        (pinEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        (pinEntity.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
         if (pinEntity.label?.text) {
-          (pinEntity.label.text as Cesium.ConstantProperty).setValue(eyeLabelText);
+          (pinEntity.label.text as CesiumTypes.ConstantProperty).setValue(eyeLabelText);
         }
         pinEntity.show = true;
         activeKeys.add('cyclone-eye-pin');
@@ -1058,6 +1064,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         haloEntity.show = true;
         activeKeys.add(haloKey);
 
+        const isSelected = Boolean(
+          selectedArgoProfile &&
+            (selectedArgoProfile.profile_id === p.profile_id ||
+              selectedArgoProfile.float_id === p.float_id)
+        );
+        const isHovered = Boolean(
+          hoveredProfileId &&
+            (hoveredProfileId === p.profile_id ||
+              hoveredProfileId === String(p.float_id))
+        );
+        const showLabel = isSelected || isHovered;
+
         const pointKey = `argo-${p.profile_id}`;
         const pointEntity = acquireEntity(
           viewer,
@@ -1073,7 +1091,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               outlineWidth: 2,
             },
             label: {
-              text: `ARGO FLOAT ${p.float_id}\nREAL SOURCE • INGESTION PENDING`,
+              show: showLabel,
+              text: `ARGO FLOAT ${p.float_id}\nREAL · GDAC`,
               font: '9px IBM Plex Mono, monospace',
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               outlineWidth: 2,
@@ -1090,6 +1109,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
+        if (pointEntity.label) {
+          if (typeof (pointEntity.label.show as any)?.setValue === 'function') {
+            (pointEntity.label.show as any).setValue(showLabel);
+          } else {
+            pointEntity.label.show = showLabel as any;
+          }
+          if (pointEntity.label.text) {
+            const labelText = `ARGO FLOAT ${p.float_id}\nREAL · GDAC`;
+            if (typeof (pointEntity.label.text as any)?.setValue === 'function') {
+              (pointEntity.label.text as any).setValue(labelText);
+            } else {
+              pointEntity.label.text = labelText as any;
+            }
+          }
+        }
         pointEntity.show = true;
         activeKeys.add(pointKey);
       });
@@ -1114,6 +1148,51 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     // themselves and camera movement are auto-detected by Cesium.)
     requestRenderRef.current();
   }, [cyclone, currentTrackIndex, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
+
+  // Dynamically toggle Argo float text label visibility on hover / selection
+  // without rebuilding the entity or re-running the full scene pass.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const registry = entityRegistryRef.current;
+    let changed = false;
+
+    argoProfiles.forEach((p) => {
+      const pointKey = `argo-${p.profile_id}`;
+      const pointEntity = registry.get(pointKey);
+      if (pointEntity && pointEntity.label) {
+        const isSelected = Boolean(
+          selectedArgoProfile &&
+            (selectedArgoProfile.profile_id === p.profile_id ||
+              selectedArgoProfile.float_id === p.float_id)
+        );
+        const isHovered = Boolean(
+          hoveredProfileId &&
+            (hoveredProfileId === p.profile_id ||
+              hoveredProfileId === String(p.float_id))
+        );
+        const shouldShow = isSelected || isHovered;
+
+        const currentShow =
+          typeof (pointEntity.label.show as any)?.getValue === 'function'
+            ? (pointEntity.label.show as any).getValue()
+            : pointEntity.label.show;
+
+        if (currentShow !== shouldShow) {
+          if (typeof (pointEntity.label.show as any)?.setValue === 'function') {
+            (pointEntity.label.show as any).setValue(shouldShow);
+          } else {
+            pointEntity.label.show = shouldShow as any;
+          }
+          changed = true;
+        }
+      }
+    });
+
+    if (changed) {
+      requestRenderRef.current();
+    }
+  }, [hoveredProfileId, selectedArgoProfile, argoProfiles]);
 
   // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity / TCHP)
   // Phase 2B: raster encoding is now asynchronous (PNG Blob → object URL), so

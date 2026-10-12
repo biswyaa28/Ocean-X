@@ -34,7 +34,7 @@ describe('LayerControl live provenance labels', () => {
     ['REAL', 'REAL'],
     ['SIMULATED', 'SIMULATED'],
     ['NOT CURRENTLY INTEGRATED', 'NOT CURRENTLY INTEGRATED'],
-    ['REAL SOURCE — INGESTION PENDING', 'REAL SOURCE / PENDING'],
+    ['REAL SOURCE — INGESTION PENDING', 'REAL · GDAC'],
   ])('preserves backend %s status over the hardcoded default', (status, expectedBadge) => {
     render(
       <LayerControl
@@ -89,7 +89,7 @@ describe('LayerControl live provenance labels', () => {
     expect(within(currents).getByText('NOT CURRENTLY INTEGRATED')).toBeInTheDocument();
   });
 
-  it('preserves Argo real-source pending status when supplied by the backend', () => {
+  it('shows real Argo state (REAL · GDAC) when supplied by the backend', () => {
     renderLayerControl([{
       id: 'argo',
       name: 'Argo Observations',
@@ -101,6 +101,48 @@ describe('LayerControl live provenance labels', () => {
     }]);
 
     const argo = screen.getByRole('button', { name: /Argo Observations/i });
-    expect(within(argo).getByText('REAL SOURCE / PENDING')).toBeInTheDocument();
+    expect(within(argo).getByText('REAL · GDAC')).toBeInTheDocument();
+  });
+
+  it('derives REAL status for Cyclone Track when IBTrACS cyclone data is loaded', () => {
+    render(
+      <LayerControl
+        layers={[]}
+        onToggleLayer={vi.fn()}
+        cyclone={{
+          id: 'AMPHAN',
+          name: 'AMPHAN',
+          basin: 'NI',
+          dataStatus: 'REAL',
+          currentTrackIndex: 0,
+          track: [{
+            id: 'pt-1',
+            timestamp: '2020-05-18T00:00:00Z',
+            latitude: 15.0,
+            longitude: 88.0,
+            maxWindKts: 120,
+            centralPressureMb: 920,
+          } as any],
+          forecastCone: [],
+          windRadius: { r34ktsKm: null, r50ktsKm: null, r64ktsKm: null, source: null },
+          dataCompleteness: { trackPoints: 1, withWind: 1, withPressure: 1 },
+          sourceAttribution: 'NOAA IBTrACS',
+        }}
+      />
+    );
+
+    const cyclone = screen.getByRole('button', { name: /Cyclone Track/i });
+    expect(within(cyclone).getByText('REAL')).toBeInTheDocument();
+    expect(within(cyclone).queryByText('NOT CURRENTLY INTEGRATED')).not.toBeInTheDocument();
+  });
+
+  it('hides empty layer rows that are not currently integrated (Coastal Risk, Storm Surge, Chlorophyll, Rainfall)', () => {
+    renderLayerControl([]);
+
+    expect(screen.queryByRole('button', { name: /Coastal Risk/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Storm Surge/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Chlorophyll-a/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Rainfall/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('ATMOSPHERE')).not.toBeInTheDocument();
   });
 });

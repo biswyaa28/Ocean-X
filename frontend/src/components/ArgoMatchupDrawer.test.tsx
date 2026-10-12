@@ -57,8 +57,8 @@ function deferred<T>() {
 
 const CLOSE = { onClose: () => {} };
 
-function renderDrawer(profile: ArgoProfile | null) {
-  return render(<ArgoMatchupDrawer profile={profile} {...CLOSE} />);
+function renderDrawer(profile: ArgoProfile | null, isDemo?: boolean) {
+  return render(<ArgoMatchupDrawer profile={profile} isDemo={isDemo} {...CLOSE} />);
 }
 
 beforeEach(() => {
@@ -88,7 +88,7 @@ describe('ArgoMatchupDrawer — opening an Argo profile', () => {
     expect(screen.getByText(/2026-09-08 03:15:00 UTC/i)).toBeInTheDocument();
     expect(screen.getByText(/argo-2902746-p042/i)).toBeInTheDocument();
     expect(screen.getByText(/INCOIS \/ Argo GDAC/i)).toBeInTheDocument();
-    expect(screen.getByText(/REAL SOURCE — INGESTION PENDING/i)).toBeInTheDocument();
+    expect(screen.getByText(/REAL · GDAC/i)).toBeInTheDocument();
   });
 
   it('requests the observations endpoint once per profile within a drawer session', async () => {
@@ -207,20 +207,30 @@ describe('ArgoMatchupDrawer — Profile tab visualization', () => {
 });
 
 describe('ArgoMatchupDrawer — honest provenance labeling', () => {
-  it('labels the visualization as an ARGO OBSERVATION PROFILE with source-provided depth', async () => {
+  it('labels the visualization as REAL IN-SITU OBSERVATION when derived from real API data', async () => {
     getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
     renderDrawer(makeArgoProfile());
     await screen.findByText(/ARGO OBSERVATION PROFILE/i);
 
     expect(screen.getByText(/ARGO OBSERVATION PROFILE/i)).toBeInTheDocument();
     expect(screen.getByText(/SOURCE-PROVIDED DEPTH/i)).toBeInTheDocument();
-    // Real in-situ observation identity (banner badge + provenance footer).
-    expect(screen.getAllByText(/DEMO PROFILE SNAPSHOT/i).length).toBeGreaterThan(0);
+    // Real in-situ observation identity (banner badge + provenance card).
+    expect(screen.getAllByText(/REAL IN-SITU OBSERVATION/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('REAL')).toBeInTheDocument();
     // Never mislabeled as model output, validation or prediction.
     expect(screen.queryByText(/MODEL PROFILE/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/VALIDATION/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/PREDICTION/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/HYCOM/i)).not.toBeInTheDocument();
+  });
+
+  it('labels the visualization as DEMO PROFILE SNAPSHOT and STATUS: DEMO when DemoProvider fallback is used', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    renderDrawer(makeArgoProfile(), true);
+    await screen.findByText(/ARGO OBSERVATION PROFILE/i);
+
+    expect(screen.getAllByText(/DEMO PROFILE SNAPSHOT/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('DEMO')).toBeInTheDocument();
   });
 });
 

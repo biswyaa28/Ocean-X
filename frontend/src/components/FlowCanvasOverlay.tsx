@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import * as Cesium from "cesium";
+import Cesium from "../lib/cesiumRuntime";
+// Type-only namespace import: fully erased at compile time, so Cesium is never bundled.
+import type * as CesiumTypes from 'cesium';
 import { EnvironmentalFlowField, CurrentFieldDataStatus } from "../types/flow";
 import {
   generateBayOfBengalFlowField,
@@ -140,7 +142,7 @@ function initParticleState(
 }
 
 interface FlowCanvasOverlayProps {
-  viewer: Cesium.Viewer | null;
+  viewer: CesiumTypes.Viewer | null;
   showWind: boolean;
   showCurrents: boolean;
   /**
@@ -189,7 +191,7 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
   // Camera interaction & projection cache invalidation tracking
   const isCameraMovingRef = useRef(false);
   const cameraVersionRef = useRef(1);
-  const lastCameraPositionRef = useRef<Cesium.Cartesian3 | null>(null);
+  const lastCameraPositionRef = useRef<CesiumTypes.Cartesian3 | null>(null);
 
   // 1. Hook Cesium camera events for adaptive workload during interaction
   //
@@ -384,7 +386,7 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
       const projectToPixel = (
         lat: number,
         lon: number
-      ): Cesium.Cartesian2 | null => {
+      ): CesiumTypes.Cartesian2 | null => {
         try {
           Cesium.Cartesian3.fromDegrees(
             lon,

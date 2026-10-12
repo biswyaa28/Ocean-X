@@ -213,9 +213,9 @@ describe('RegionalSummary — TCHP scatter', () => {
     // disambiguated by the row they sit in.
     const row = (label: string) =>
       screen.getByText(label).parentElement?.textContent ?? '';
-    expect(row('HEAT POTENTIAL MEAN BIAS')).toContain('13.700');
-    expect(row('MEDIAN BIAS')).toContain('13.700');
-    expect(screen.getByText('25.000 kJ/cm2')).toBeTruthy();
+    expect(row('HEAT POTENTIAL MEAN BIAS')).toContain('13.7');
+    expect(row('MEDIAN BIAS')).toContain('13.7');
+    expect(screen.getByText('25.0 kJ/cm2')).toBeTruthy();
     expect(screen.getByText('82.4 / 96.1 kJ/cm2')).toBeTruthy();
   });
 

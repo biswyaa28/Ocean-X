@@ -224,7 +224,14 @@ const TchpScatter: React.FC<{
 
   const values = points.flatMap((p) => [p.tchpFloatKjCm2, p.tchpModelKjCm2]);
   const max = Math.max(...values, ruleOfThumb) * 1.08;
+  const cleanMax = Math.ceil(max);
   const below = points.filter((p) => p.residualKjCm2 !== null && p.residualKjCm2 < 0).length;
+
+  const cleanTickFormatter = (val: number | string) => {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return '';
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  };
 
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1">
@@ -239,13 +246,14 @@ const TchpScatter: React.FC<{
         height={190}
         initialDimension={{ width: 372, height: 190 }}
       >
-        <ScatterChart margin={{ top: 8, right: 14, bottom: 16, left: 4 }}>
+        <ScatterChart margin={{ top: 22, right: 16, bottom: 16, left: 4 }}>
           <CartesianGrid stroke="rgba(255,255,255,0.07)" strokeDasharray="2 4" />
           <XAxis
             type="number"
             dataKey="tchpFloatKjCm2"
             name="Float"
-            domain={[0, max]}
+            domain={[0, cleanMax]}
+            tickFormatter={cleanTickFormatter}
             stroke="rgba(255,255,255,0.15)"
             tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
             tickLine={false}
@@ -261,7 +269,8 @@ const TchpScatter: React.FC<{
             type="number"
             dataKey="tchpModelKjCm2"
             name="Model"
-            domain={[0, max]}
+            domain={[0, cleanMax]}
+            tickFormatter={cleanTickFormatter}
             width={44}
             stroke="rgba(255,255,255,0.15)"
             tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
@@ -313,6 +322,7 @@ const TchpScatter: React.FC<{
                   fill: '#f97316',
                   fontSize: 7.5,
                   fontFamily: 'inherit',
+                  offset: 4,
                 }}
               />
               <ReferenceLine
@@ -459,19 +469,19 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
               <div className="flex justify-between">
                 <span className="text-slate-500">HEAT POTENTIAL MEAN BIAS</span>
                 <span className="text-slate-200 font-bold">
-                  {metric(summary.tchp.bias)} kJ/cm2
+                  {metric(summary.tchp.bias, 1)} kJ/cm2
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">MEDIAN BIAS</span>
                 <span className="text-slate-200 font-bold">
-                  {metric(summary.tchp.medianBias)} kJ/cm2
+                  {metric(summary.tchp.medianBias, 1)} kJ/cm2
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">RMSE</span>
                 <span className="text-slate-200 font-bold">
-                  {metric(summary.tchp.rmse)} kJ/cm2
+                  {metric(summary.tchp.rmse, 1)} kJ/cm2
                 </span>
               </div>
               <div className="flex justify-between">

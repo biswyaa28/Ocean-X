@@ -4,8 +4,17 @@ import React from 'react';
 import type { GISLayer } from '../types/oceanlens';
 
 // Cesium mock must be in place BEFORE importing the component.
+//
+// The component reads Cesium from the runtime handle (src/lib/cesiumRuntime.ts),
+// not from 'cesium' directly — see that file for why. So the mock targets the
+// handle and publishes the same object onto window.Cesium, mirroring how the
+// real classic-script load behaves.
 import { cesiumMock, layerOps, resetLayerOps, resetViewerOptions, viewerOptions, requestRenderCalls, inputActions, createdViewers } from '../test/mocks/cesium';
-vi.mock('cesium', () => ({ __esModule: true, ...cesiumMock }));
+vi.mock('../lib/cesiumRuntime', () => ({
+  __esModule: true,
+  default: cesiumMock,
+  Cesium: cesiumMock,
+}));
 vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
 
 // Surface layer fetches go through apiProvider.getLayerData; resolve a
@@ -40,6 +49,7 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
 
 import { CesiumViewerInner } from './CesiumViewerInner';
 import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../test/fixtures/depthSliceFixtures';
+import { makeArgoProfile } from '../test/fixtures/argoFixtures';
 import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
 import { clearRasterCache } from '../utils/rasterGen';
 
@@ -890,3 +900,59 @@ describe('Phase 2B — hover picking and camera interaction remain functional', 
     expect(viewer.camera.flyTo.mock.calls.length).toBeGreaterThan(flyToCalls);
   });
 });
+
+describe('Argo float labels and dots', () => {
+  const argoLayers: GISLayer[] = [
+    ...layers,
+    { id: 'argo', name: 'Argo Observations', category: 'physical', active: true, status: 'REAL', description: '' },
+  ];
+
+  it('keeps dots visible but hides text label by default until hover or selected', async () => {
+    const p1 = makeArgoProfile({ profile_id: 'p1', float_id: '1001' });
+    const p2 = makeArgoProfile({ profile_id: 'p2', float_id: '1002' });
+
+    renderViewer({
+      layers: argoLayers,
+      argoProfiles: [p1, p2],
+    });
+    await tick();
+
+    const viewer = createdViewers[0];
+    expect(viewer).toBeDefined();
+
+    const addCalls = viewer.entities.add.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const p1Entity = addCalls.find((e) => e && e.name === 'Argo Float 1001');
+    const p2Entity = addCalls.find((e) => e && e.name === 'Argo Float 1002');
+
+    expect(p1Entity).toBeDefined();
+    expect(p1Entity?.point).toBeDefined(); // Dot is always rendered
+    expect((p1Entity?.label as Record<string, unknown>)?.show).toBe(false); // Label hidden by default
+    expect((p1Entity?.label as Record<string, unknown>)?.text).toContain('REAL · GDAC');
+    expect((p1Entity?.label as Record<string, unknown>)?.text).not.toContain('INGESTION PENDING');
+
+    expect(p2Entity).toBeDefined();
+    expect(p2Entity?.point).toBeDefined();
+    expect((p2Entity?.label as Record<string, unknown>)?.show).toBe(false);
+  });
+
+  it('shows the text label for the selected float', async () => {
+    const p1 = makeArgoProfile({ profile_id: 'p1', float_id: '1001' });
+    const p2 = makeArgoProfile({ profile_id: 'p2', float_id: '1002' });
+
+    renderViewer({
+      layers: argoLayers,
+      argoProfiles: [p1, p2],
+      selectedArgoProfile: p1,
+    });
+    await tick();
+
+    const viewer = createdViewers[0];
+    const addCalls = viewer.entities.add.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const p1Entity = addCalls.find((e) => e && e.name === 'Argo Float 1001');
+    const p2Entity = addCalls.find((e) => e && e.name === 'Argo Float 1002');
+
+    expect((p1Entity?.label as Record<string, unknown>)?.show).toBe(true);
+    expect((p2Entity?.label as Record<string, unknown>)?.show).toBe(false);
+  });
+});
+

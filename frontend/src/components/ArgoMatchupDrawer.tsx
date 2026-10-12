@@ -22,6 +22,7 @@ import { X, Activity, ShieldCheck, AlertCircle, RefreshCw, Loader2, Table2, Wave
 interface ArgoMatchupDrawerProps {
   profile: ArgoProfile | null;
   onClose: () => void;
+  isDemo?: boolean;
 }
 
 type DrawerTab = 'profile' | 'matchup' | 'region' | 'data';
@@ -630,7 +631,7 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
   );
 }
 
-export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, onClose }) => {
+export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, onClose, isDemo }) => {
   const [matchup, setMatchup] = useState<ArgoMatchupResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -803,13 +804,15 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
 
   if (!profile) return null;
 
-  const scientificStatus = profile.provenance?.data_status || 'UNAVAILABLE';
+  const isDemoFallback =
+    isDemo !== undefined
+      ? isDemo
+      : (profile.data_status === 'DEMO' || (profile.provenance?.data_status === 'DEMO' && profile.data_status !== 'REAL' && !profile.data_status?.includes('REAL')));
+  const scientificStatus = isDemoFallback ? 'DEMO' : 'REAL';
   const scientificStatusLabel =
     scientificStatus === 'DEMO'
       ? 'DEMO PROFILE SNAPSHOT'
-      : scientificStatus === 'REAL'
-      ? 'REAL IN-SITU OBSERVATION'
-      : scientificStatus;
+      : 'REAL IN-SITU OBSERVATION';
 
   return (
     <div className="fixed right-20 top-36 z-30 font-mono text-xs select-none transition-all duration-300">
@@ -823,7 +826,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
             <div>
               <div className="font-mono font-bold text-[11px] uppercase tracking-widest text-white flex items-center gap-2">
                 ARGO PROFILE
-                <span className="px-2 py-0.5 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono ${
+                  scientificStatus === 'REAL'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                }`}>
                   {scientificStatusLabel}
                 </span>
               </div>
@@ -895,11 +902,13 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
 
           <div className="font-mono text-[9px]">
             <span className="text-slate-500">STATUS: </span>
-            <span className="text-amber-400 font-bold">{profile.provenance?.data_status || 'UNAVAILABLE'}</span>
+            <span className={`font-bold ${scientificStatus === 'REAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {scientificStatus}
+            </span>
           </div>
           <div className="font-mono text-[9px]">
             <span className="text-slate-500">SOURCE LABEL: </span>
-            <span className="text-slate-400">{profile.data_status}</span>
+            <span className="text-slate-400">{profile.data_status === 'REAL SOURCE — INGESTION PENDING' ? 'REAL · GDAC' : profile.data_status}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 font-mono text-[9px] text-slate-500">
             <span>VARIABLE: <b className="text-slate-300">{profile.provenance?.variable || '—'}</b></span>
@@ -943,7 +952,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                     <Waves className="w-3.5 h-3.5" />
                     ARGO OBSERVATION PROFILE
                   </div>
-                  <span className="text-[8px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono font-bold">
+                  <span className={`text-[8px] px-2 py-0.5 rounded font-mono font-bold ${
+                    scientificStatus === 'REAL'
+                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  }`}>
                     {scientificStatusLabel}
                   </span>
                 </div>

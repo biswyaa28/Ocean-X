@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState } from 'react';
-import { GISLayer } from '../types/oceanlens';
+import { GISLayer, Cyclone } from '../types/oceanlens';
 import { Layers, ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
 
 interface LayerControlProps {
   layers: GISLayer[];
   onToggleLayer: (layerId: string) => void;
+  cyclone?: Cyclone | null;
 }
 
 interface LayerItemSpec {
@@ -17,10 +18,29 @@ interface LayerItemSpec {
   statusType: 'real' | 'derived' | 'simulated' | 'pending' | 'not_integrated';
 }
 
-export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLayer }) => {
+export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLayer, cyclone }) => {
   const [collapsed, setCollapsed] = useState(false);
 
   const getLiveStatus = (item: LayerItemSpec): Pick<LayerItemSpec, 'statusBadge' | 'statusType'> => {
+    if (item.id === 'cyclone') {
+      const cycloneLayer = layers.find((candidate) => candidate.id === 'cyclone');
+      if (cycloneLayer) {
+        if (cycloneLayer.status === 'REAL') {
+          return { statusBadge: 'REAL', statusType: 'real' };
+        }
+        if (cycloneLayer.status === 'SIMULATED') {
+          return { statusBadge: 'SIMULATED', statusType: 'simulated' };
+        }
+      }
+      if (cyclone && cyclone.track && cyclone.track.length > 0) {
+        const isReal = cyclone.dataStatus === 'REAL';
+        return {
+          statusBadge: isReal ? 'REAL' : 'SIMULATED',
+          statusType: isReal ? 'real' : 'simulated',
+        };
+      }
+    }
+
     const layer = layers.find((candidate) => candidate.id === item.id);
     if (!layer) {
       return { statusBadge: 'NOT CURRENTLY INTEGRATED', statusType: 'not_integrated' };
@@ -29,7 +49,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
       return { statusBadge: 'SIMULATED', statusType: 'simulated' };
     }
     if (layer.status === 'REAL SOURCE — INGESTION PENDING') {
-      return { statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' };
+      return { statusBadge: 'REAL · GDAC', statusType: 'real' };
     }
     if (layer.status === 'REAL') {
       return { statusBadge: 'REAL', statusType: 'real' };
@@ -44,7 +64,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
     {
       name: 'HAZARDS',
       items: [
-        { id: 'cyclone', name: 'Cyclone Track & Forecast', statusBadge: 'REAL / HISTORICAL', statusType: 'real' },
+        { id: 'cyclone', name: 'Cyclone Track & Forecast', statusBadge: 'REAL', statusType: 'real' },
         { id: 'risk_zones', name: 'Coastal Risk', statusBadge: 'DERIVED', statusType: 'derived' },
         { id: 'storm_surge', name: 'Storm Surge', unit: 'm', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
@@ -70,10 +90,25 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
     {
       name: 'OBSERVATIONS',
       items: [
-        { id: 'argo', name: 'Argo Observations', unit: 'IN-SITU', statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' },
+        { id: 'argo', name: 'Argo Observations', unit: 'IN-SITU', statusBadge: 'REAL · GDAC', statusType: 'real' },
       ],
     },
   ];
+
+  const EMPTY_LAYER_IDS = new Set(['risk_zones', 'storm_surge', 'chlorophyll', 'rainfall']);
+
+  const visibleCategories = categories
+    .map((cat) => ({
+      ...cat,
+      items: cat.items.filter((item) => {
+        const liveStatus = getLiveStatus(item);
+        if (EMPTY_LAYER_IDS.has(item.id) && liveStatus.statusType === 'not_integrated') {
+          return false;
+        }
+        return true;
+      }),
+    }))
+    .filter((cat) => cat.items.length > 0);
 
   const getIsActive = (id: string) => {
     const found = layers.find((l) => l.id === id);
@@ -127,7 +162,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
 
         {/* Categories List with Internal Scrollbar & Safe Max Height (Requirement #2 & #3) */}
         <div className="space-y-3 max-h-[calc(100vh-420px)] overflow-y-auto custom-scrollbar pr-1">
-          {categories.map((cat) => (
+          {visibleCategories.map((cat) => (
             <div key={cat.name} className="space-y-1">
               <div className="text-[8px] font-bold text-slate-500 tracking-widest uppercase px-1 mb-1">
                 {cat.name}

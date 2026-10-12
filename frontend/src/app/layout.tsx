@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Manrope, IBM_Plex_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const inter = Inter({
@@ -38,6 +39,25 @@ export default function RootLayout({
       className={`${inter.variable} ${manrope.variable} ${ibmPlexMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-[#070a0f] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+        {/*
+          CesiumJS is loaded as a CLASSIC SCRIPT rather than imported from
+          node_modules, on purpose.
+
+          Cesium inlines its Draco/Basis WASM decoders as template literals that
+          contain a raw NUL byte directly followed by the ASCII digits
+          `123456789`. Bundlers re-serialise string literals and rewrite that raw
+          NUL as the escape `\0`, producing `\01` — an octal escape sequence,
+          which is illegal inside a template literal. The bundled Cesium chunk
+          then fails to parse ("Octal escape sequences are not allowed in
+          template strings"), so it never evaluates, the dynamic import in
+          CesiumGlobe never resolves, and the globe hangs on its loading
+          fallback forever.
+
+          This reproduces on both the Turbopack and webpack builders. Loading the
+          prebuilt IIFE from public/ keeps Cesium out of the module graph
+          entirely. See src/lib/cesiumRuntime.ts for the full explanation.
+        */}
+        <Script src="/cesium/Cesium.js" strategy="beforeInteractive" />
         {children}
       </body>
     </html>

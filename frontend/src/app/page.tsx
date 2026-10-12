@@ -139,7 +139,19 @@ export default function Home() {
         setCyclone(cyclones[0]);
         setCurrentTrackIndex(cyclones[0].currentTrackIndex);
       }
-      setLayers(ly);
+      const cycloneLayer: GISLayer = {
+        id: 'cyclone',
+        name: 'Cyclone Track & Forecast',
+        category: 'hazard',
+        active: true,
+        status: cyclones.length > 0 ? (cyclones[0].dataStatus || 'REAL') : 'NOT CURRENTLY INTEGRATED',
+        description: 'NOAA IBTrACS best-track history and intensity markers',
+      };
+      const finalLayers = ly.some((l) => l.id === 'cyclone')
+        ? ly
+        : [...ly, cycloneLayer];
+
+      setLayers(finalLayers);
       setArgoProfiles(argos);
       setDataStatus(status.mode);
       setBackendConnected(status.backendConnected);
@@ -284,7 +296,10 @@ export default function Home() {
     setSelectedArgoProfile(profile);
   }, []);
 
-  const activeLayer = layers.find((l) => l.active) || null;
+  const activeLayer =
+    layers.find((l) => l.active && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) ||
+    layers.find((l) => l.active) ||
+    null;
 
   const hazard = useMemo<Hazard | null>(() => {
     if (oceanMode === 'LIVE' || !cyclone || !currentPoint || !riskAssessment) return null;
@@ -482,9 +497,22 @@ export default function Home() {
   // - following the depth-slice instrument: its depth + timestamp
   // - otherwise: surface (0 m) at the timeline timestamp
   const currentFlowDepthM = currentFlowFollowsSlice ? depthSliceSelection.depthM : 0;
-  const currentFlowTimestamp = currentFlowFollowsSlice
-    ? depthSliceSelection.timestamp
-    : effectiveTimestamp;
+  const currentFlowTimestamp = useMemo(() => {
+    if (currentFlowFollowsSlice) {
+      return depthSliceSelection.timestamp;
+    }
+    if (!effectiveTimestamp) {
+      return datasetTimestamps[0] || undefined;
+    }
+    if (datasetTimestamps.length > 0) {
+      const start = datasetTimestamps[0];
+      const end = datasetTimestamps[datasetTimestamps.length - 1];
+      if (effectiveTimestamp < start || effectiveTimestamp > end) {
+        return datasetTimestamps[0];
+      }
+    }
+    return effectiveTimestamp;
+  }, [currentFlowFollowsSlice, depthSliceSelection.timestamp, effectiveTimestamp, datasetTimestamps]);
 
   useEffect(() => {
     if (!currentsLayerActive) {
@@ -709,7 +737,7 @@ export default function Home() {
             customLabel: 'IN-SITU OBSERVATION PROFILE',
             customValue: `FLOAT ${p.float_id}`,
             customUnit: `· ${p.observations_count} OBS LEVELS`,
-            dataStatus: 'REAL SOURCE — INGESTION PENDING',
+            dataStatus: 'REAL',
             source: `Official Argo GDAC (${p.institution})`,
           });
         }
@@ -777,6 +805,7 @@ export default function Home() {
           currentTrackIndex={currentTrackIndex}
           layers={layers}
           argoProfiles={argoProfiles}
+          selectedArgoProfile={selectedArgoProfile}
           depthSliceVisible={depthSliceVisible}
           depthSlicePayload={depthSliceMetadata}
           depthSliceRender={depthSliceRender}
@@ -798,7 +827,7 @@ export default function Home() {
         </div>
 
         {/* 3. Left GIS Layer Instrument (Internal Scrollbar, Safe Height) */}
-        <LayerControl layers={layers} onToggleLayer={handleToggleLayer} />
+        <LayerControl layers={layers} onToggleLayer={handleToggleLayer} cyclone={cyclone} />
 
         {/* HYCOM Model Depth Slice instrument (Phase 1B/1C) */}
         <DepthSliceControl
@@ -831,6 +860,7 @@ export default function Home() {
         {/* 5. Argo Model vs Observation Matchup Drawer */}
         <ArgoMatchupDrawer
           profile={selectedArgoProfile}
+          isDemo={!backendConnected}
           onClose={() => handleSelectArgoProfile(null)}
         />
 
