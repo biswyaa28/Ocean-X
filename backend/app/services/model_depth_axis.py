@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Observed from INCOIS raw OPeNDAP on 2026-10-08..2026-10-10. Used only as a consistency warning, never to override data.
 NATIVE_HYCOM_DEPTHS_REFERENCE: List[float] = [0.0, 10.0, 50.0, 100.0, 250.0, 500.0]
 
+# Attribute carrying the file's own DEPTH values across apply_model_depth_axis.
+STORED_FILE_DEPTHS_ATTR = "oceanx_stored_file_depths"
+
 
 def derive_bounds_from_nodes(nodes: Sequence[float]) -> np.ndarray:
     """Derive cell bounds from node depths using interior midpoints and mirrored ends.
@@ -151,10 +154,31 @@ def resolve_model_depth_details(dataset: xr.Dataset, axis_mode: Optional[str] = 
 
 
 def apply_model_depth_axis(dataset: xr.Dataset) -> Tuple[xr.Dataset, str]:
-    """Return ``dataset`` with its DEPTH coordinate replaced by the resolved axis."""
+    """Return ``dataset`` with its DEPTH coordinate replaced by the resolved axis.
+
+    The replaced coordinate carries the file's own DEPTH values in
+    ``oceanx_stored_file_depths`` so a consumer holding the resolved dataset can
+    still tell what the file called each level. That matters because the two
+    disagree: the archived subset's DEPTH is the midpoint of its own bounds, so
+    the level the app samples at 100 m is the one the file labels 125 m.
+    """
     depths, rule = resolve_model_depths(dataset)
     if "DEPTH" not in dataset.coords:
         return dataset, rule
     attrs = dict(dataset["DEPTH"].attrs)
     attrs["oceanx_depth_axis"] = rule
+    attrs[STORED_FILE_DEPTHS_ATTR] = ",".join(
+        f"{float(d):g}"
+        for d in np.atleast_1d(dataset["DEPTH"].values).astype(float)
+    )
     return dataset.assign_coords(DEPTH=("DEPTH", depths, attrs)), rule
+
+
+def stored_file_depths_from_axis(dataset: xr.Dataset) -> List[float]:
+    """The file's own DEPTH labels, recovered from a dataset the axis replaced."""
+    raw = dataset["DEPTH"].attrs.get(STORED_FILE_DEPTHS_ATTR) if "DEPTH" in dataset.coords else None
+    if not raw:
+        if "DEPTH" not in dataset.coords:
+            return []
+        return [float(d) for d in np.atleast_1d(dataset["DEPTH"].values).astype(float)]
+    return [float(part) for part in str(raw).split(",") if part.strip()]

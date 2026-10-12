@@ -143,6 +143,12 @@ export interface DepthSlicePayload {
   requested_depth_m: number;
   matched_depth_m: number;
   available_depths_m: number[];
+  /**
+   * Depths the subset file's own DEPTH coordinate carries, in the same order as
+   * available_depths_m. They differ, because the file's DEPTH is the midpoint of
+   * its own bounds; the UI shows both so the two can be reconciled.
+   */
+  stored_file_depths_m?: number[];
   depth_selection: string;
   missing_values: number;
   bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number };

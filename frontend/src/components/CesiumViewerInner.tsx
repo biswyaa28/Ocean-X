@@ -21,6 +21,7 @@ import {
 import { perfMonitor } from '../utils/perfMonitor';
 import { observedRadii, cycloneEyeLabel } from '../utils/cycloneObservation';
 import { formatModelDate } from '../utils/modelTime';
+import { modelDepthLabel } from '../utils/modelDepthLabel';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
@@ -1608,8 +1609,15 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
                     currentFieldMetadata.matched_depth_m === 0 ? (
                       <span className="text-cyan-300 font-semibold">SURFACE (0 m)</span>
                     ) : (
-                      <span className="text-cyan-300 font-semibold" title={`Requested ${currentFieldMetadata.requested_depth_m} m — nearest native model level`}>
-                        {currentFieldMetadata.matched_depth_m} m MODEL LEVEL
+                      <span
+                        className="text-cyan-300 font-semibold"
+                        title={`Requested ${currentFieldMetadata.requested_depth_m} m — nearest native model level`}
+                      >
+                        {modelDepthLabel(currentFieldMetadata.matched_depth_m, {
+                          modelDepths: currentFieldMetadata.available_depths_m,
+                          storedFileDepths: currentFieldMetadata.stored_file_depths_m,
+                        })}{' '}
+                        MODEL LEVEL
                       </span>
                     )
                   ) : (
@@ -1642,7 +1650,16 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             <span className="text-slate-500">│</span>
             <span className="text-slate-200 font-semibold">{depthSlicePayload.variable.toUpperCase()}</span>
             <span className="text-slate-500">│</span>
-            <span className="text-indigo-300 font-bold">{depthSlicePayload.matched_depth_m} m MODEL LEVEL</span>
+            <span
+              className="text-indigo-300 font-bold"
+              title="Depth the slice was actually sampled at, and what this file calls the same level."
+            >
+              {modelDepthLabel(depthSlicePayload.matched_depth_m, {
+                modelDepths: depthSlicePayload.available_depths_m,
+                storedFileDepths: depthSlicePayload.stored_file_depths_m,
+              })}{' '}
+              MODEL LEVEL
+            </span>
             <span className="text-slate-500">│</span>
             {/* The model time this slice actually holds. */}
             <span className="text-slate-200 font-semibold" title={`HYCOM model time of this slice: ${depthSlicePayload.timestamp}`}>

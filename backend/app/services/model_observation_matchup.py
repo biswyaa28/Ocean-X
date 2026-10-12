@@ -54,6 +54,7 @@ from app.services.ocean_heat_metrics import (
     METRICS_MAX_GAP_M,
     TCHP_DEFINITION_STATUS,
     TCHP_ISOTHERM_C,
+    compute_model_profile_tchp,
     compute_ocean_heat_metrics,
 )
 
@@ -900,6 +901,16 @@ def match_argo_with_hycom(
     d26_float = heat["d26M"]
     mld_model = model_profile.get("mld")
 
+    # The SAME heat formula, run on the model's own temperature profile. This is
+    # not an extra residual and changes none of the ones above: it is the value
+    # needed to tell "the model is too warm" apart from "the two TCHP numbers
+    # were computed differently". The model profile is also carried through so
+    # the summary can fit the reference isotherm across all profiles at once.
+    model_profile_temperatures = np.atleast_1d(model_profile["temp"])
+    model_profile_heat = compute_model_profile_tchp(
+        model_profile["depths"], model_profile_temperatures
+    )
+
     # The time-gap guard applies to the heat residual exactly as it does to the
     # temperature residual: a residual across two different ocean states is not
     # model error. The measured values are still returned; only the residual and
@@ -989,6 +1000,13 @@ def match_argo_with_hycom(
         "metricsReason": metrics_reason,
         "metricsSurfaceDepthM": heat["surfaceDepthM"],
         "metricsSurfaceTemperatureC": heat["surfaceTemperatureC"],
+        "modelProfileTemperaturesC": [
+            float(t) if np.isfinite(t) else None
+            for t in model_profile_temperatures.tolist()
+        ],
+        "tchpModelProfileKjCm2": model_profile_heat.get("tchpKjCm2"),
+        "tchpModelProfileStatus": model_profile_heat.get("status"),
+        "tchpModelProfileReason": model_profile_heat.get("reason"),
         "tchpDefinitionStatus": TCHP_DEFINITION_STATUS,
         "tchpIsothermC": TCHP_ISOTHERM_C,
         "tchpMetricsMaxGapM": METRICS_MAX_GAP_M,

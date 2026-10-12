@@ -49,17 +49,20 @@ beforeEach(() => {
 });
 
 describe('Cyclone heat section', () => {
-  it('shows the float, model, residual and percentage for a warm profile', async () => {
+  it('shows the float-derived, INCOIS and difference values for a warm profile', async () => {
     renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     // Labels carry a CSS text-transform, so DOM casing is mixed-case. The
     // matchers are case-insensitive so they test content, not styling.
     await waitFor(() =>
-      expect(screen.getByText(/float heat potential/i)).toBeTruthy()
+      expect(screen.getByText(/float-derived tchp/i)).toBeTruthy()
     );
-    expect(screen.getByText(/^model heat potential$/i)).toBeTruthy();
-    expect(screen.getByText(/model residual/i)).toBeTruthy();
+    expect(screen.getByText(/incois tchp product/i)).toBeTruthy();
+    expect(screen.getByText(/difference \(incois . float\)/i)).toBeTruthy();
+    // The two numbers are NOT the same quantity, so the panel must say so rather
+    // than presenting the gap as a model error.
+    expect(screen.getByText(/definitions differ/i)).toBeTruthy();
     expect(screen.getByText('82.4 kJ/cm2')).toBeTruthy();
     expect(screen.getByText('96.1 kJ/cm2')).toBeTruthy();
     expect(screen.getByText('+13.7 kJ/cm2')).toBeTruthy();
@@ -163,21 +166,24 @@ describe('Cyclone heat section', () => {
     await openMatchupTab();
 
     await waitFor(() =>
-      expect(screen.getByText(/how comparable is the model value\?/i)).toBeTruthy()
+      expect(screen.getByText(/how comparable is the incois tchp value\?/i)).toBeTruthy()
     );
     const details = screen
-      .getByText(/how comparable is the model value\?/i)
+      .getByText(/how comparable is the incois tchp value\?/i)
       .closest('details');
     expect(details?.textContent).toMatch(/no standard_name/i);
   });
 
-  it('uses "heat potential" and "model residual" wording', async () => {
+  it('names both sides by their source instead of calling the gap a bias', async () => {
     renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() => expect(screen.getByText(/^cyclone heat$/i)).toBeTruthy());
     const text = (document.body.textContent ?? '').toLowerCase();
-    expect(text).toMatch(/heat potential/);
-    expect(text).toMatch(/model residual/);
+    expect(text).toMatch(/float-derived tchp/);
+    expect(text).toMatch(/incois tchp product/);
+    // "bias" would assert the two are comparable, which the diagnostic showed
+    // they are not.
+    expect(text).not.toMatch(/model residual/);
   });
 });

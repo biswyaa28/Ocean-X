@@ -79,4 +79,8 @@ yarn-debug.log*
 # Agent tooling scratch (worktrees, bare clones)
 .delta/
 .kilo/
-docs/diagnostics/
+
+# Diagnostic evidence CSVs live in backend/docs/diagnostics/ and are deliberately
+# TRACKED: they are the evidence behind the bias and TCHP figures quoted in the
+# UI, they are a few kilobytes each, and an untracked number nobody can check is
+# the thing this repository is trying to avoid.

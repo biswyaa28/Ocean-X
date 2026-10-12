@@ -645,6 +645,7 @@ def get_argo_matchup_summary():
             "modelDepthAxisRule": matchup.get("modelDepthAxisRule"),
             "modelDepths": matchup.get("modelDepths"),
             "storedFileDepths": matchup.get("storedFileDepths"),
+            "modelProfileTemperaturesC": matchup.get("modelProfileTemperaturesC"),
             "modelDepthSelection": matchup.get("modelDepthSelection"),
         })
 
@@ -698,6 +699,7 @@ def get_argo_matchup_summary():
         "tchp": summary["tchp"],
         "tchpScatter": summary["tchpScatter"],
         "tchpProfiles": summary["tchpProfiles"],
+        "tchpModelDefinition": summary.get("tchpModelDefinition"),
         "tchpIsothermC": 26.0,
         "tchpDefinitionStatus": TCHP_DEFINITION_STATUS,
         "tchpRuleOfThumbKJPerCm2": settings.TCHP_RULE_OF_THUMB_KJ_CM2,

@@ -1,9 +1,21 @@
 #!/usr/bin/env python
 """Diagnose the reported temperature bias at the model's disputed level (index 3).
 
-The regional summary from ``GET /api/argo/matchup/summary`` reports a large
-warm model bias at 125 m (bias +3.94 C, RMSE 4.62 C over 20 profiles). This
-script asks WHERE that bias comes from, without changing any matchup behaviour.
+The disputed level is addressed by INDEX (3 of 0-5) rather than by depth,
+because the depth it represents depends on the axis rule in force. Under the
+default ``native`` rule the level is sampled at **100 m**; the same level carries
+the file's own label of 125 m, which is the midpoint of its DEPTH_bounds cell.
+Every title below prints the depth actually used, resolved from the installed
+file by ``_configure_target``.
+
+Current result (native axis, 19 profiles with a pair at this level):
+**bias +1.22 C, RMSE 2.60 C, median +0.82 C, over 19 profiles**. The figure this
+script used to quote at the top (+3.94 C / RMSE 4.62 C over 20 profiles) was
+the H1 hypothesis - the file's 125 m label - not the shipped axis; the two
+differ because 100 m and 125 m sit on opposite sides of a steep thermocline.
+
+This script asks WHERE the bias comes from, without changing any matchup
+behaviour.
 
 Four candidate explanations are separated by the evidence printed here:
 
@@ -17,13 +29,14 @@ Four candidate explanations are separated by the evidence printed here:
    blend toward whichever ocean cell survives. Reported as distance to the
    nearest cell centre, which is small exactly in that regime.
 3. VERTICAL RESOLUTION - the model has six levels (0, 10, 50, 100, 250, 500 m
-   on the rebuilt axis; 0, 17.5, 52.5, 125, 275, 500 m on the file axis), so
+   on the resolved native axis; the same six levels are labelled
+   0, 17.5, 52.5, 125, 275, 500 m in the subset file's own DEPTH), so
    between the 3rd and 5th level it is a straight line in depth. A float
    thermocline crossing inside that interval cannot be represented at all. The
    full 0-300 m profiles of the worst cases are printed for direct inspection.
 4. FORECAST LEAD / DATA BASIS - a run lead time or a raw-vs-adjusted basis
-   difference would show up as clustering. Reported per profile, and the 125 m
-   bias is recomputed against the longest-lead covering run.
+   difference would show up as clustering. Reported per profile, and the bias
+   at the disputed level is recomputed against the longest-lead covering run.
 
 Nothing is invented: every number below comes from the installed model files
 and the ingested Argo profiles. Where an explanation is not supported by the
@@ -33,8 +46,8 @@ Usage
 -----
     cd backend && python scripts/diagnose_bias_125m.py
 
-Writes ``docs/diagnostics/bias_125m.csv`` (tracked in Git) and prints the
-evidence tables.
+Writes ``backend/docs/diagnostics/bias_125m.csv`` (tracked in Git) and prints
+the evidence tables.
 """
 
 from __future__ import annotations
@@ -74,8 +87,10 @@ from app.services.model_observation_matchup import (  # noqa: E402
 
 # The disputed model level is addressed by INDEX (3 of 0-5), because the depth
 # that index represents depends on the axis rule (see resolve_model_depths):
-# 125 m on the file's own DEPTH, 100 m on the rebuilt nodes. TARGET_DEPTH_M is
-# filled in from the installed file by ``_configure_target`` before use.
+# 100 m on the resolved native axis, 125 m on the file's own DEPTH label.
+# TARGET_DEPTH_M is filled in from the installed file by ``_configure_target``
+# before use, and every title below prints that value rather than a hardcoded
+# depth, so the output never labels a level with a depth it did not sample.
 TARGET_LEVEL_INDEX = 3
 TARGET_DEPTH_M = 125.0
 MODEL_LEVELS_M: List[float] = []
@@ -83,6 +98,8 @@ MODEL_LEVELS_M: List[float] = []
 # bilinear samples drawn from nearly the same place, so a disagreement between
 # them is a real spatial signal rather than a node-vs-midpoint difference.
 COASTAL_PROXIMITY_M = 0.02
+# Resolved against the BACKEND root, not the cwd, so the evidence always lands
+# beside the other diagnostics CSVs regardless of where the script is run from.
 CSV_RELATIVE_PATH = Path("docs/diagnostics/bias_125m.csv")
 
 
@@ -293,7 +310,7 @@ def _profile_diagnostic(
     lead_hours: Optional[float],
     spatial_mode: str = "bilinear",
 ) -> Optional[Dict[str, Any]]:
-    """Gather the 125 m evidence for one profile against one run."""
+    """Gather evidence at the disputed level for one profile against one run."""
     lat, lon = profile["latitude"], profile["longitude"]
     when = pd.to_datetime(profile["observation_time"], errors="raise").tz_localize(None)
 
@@ -333,7 +350,7 @@ def _profile_diagnostic(
         "nearestResidualC": (
             None if nearest_value is None else round(nearest_value - float_value, 4)
         ),
-        # Full precision on purpose: at 125 m the model's horizontal gradient is
+        # Full precision on purpose: at the disputed level the model's horizontal gradient is
         # tiny, so bilinear and nearest-cell agree to ~0.01 C and the difference
         # would be invisible at the 2 dp used for the residual column. This is
         # the number that tests the geometry explanation, so it must not be
@@ -721,7 +738,7 @@ def main() -> int:
 
     # The regional summary counts a profile as included on the strength of ANY
     # usable pair, so it can report more profiles than this table shows. The
-    # difference is a profile whose 125 m level was rejected while its other
+    # difference is a profile whose disputed level was rejected while its other
     # levels survived.
     without_target = []
     for profile in profiles:
@@ -748,7 +765,7 @@ def main() -> int:
             print(f"    - {float_id}: target level rejected ({rejected})")
 
     # --- CSV ---------------------------------------------------------------
-    csv_path = Path(__file__).resolve().parents[2] / CSV_RELATIVE_PATH
+    csv_path = Path(__file__).resolve().parents[1] / CSV_RELATIVE_PATH
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         fields = [
@@ -763,15 +780,15 @@ def main() -> int:
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key) for key in fields})
-    print(f"\n  wrote docs/diagnostics/bias_125m.csv ({len(rows)} rows)")
+    print(f"\n  wrote backend/docs/diagnostics/bias_125m.csv ({len(rows)} rows)")
 
     if not rows:
-        print("\n  no profile produced a 125 m pair; nothing further to conclude")
+        print(f"\n  no profile produced a {TARGET_DEPTH_M:g} m pair; nothing further to conclude")
         return 0
 
     # --- 2. distribution ---------------------------------------------------
     print("\n" + "=" * 96)
-    print("2. DISTRIBUTION OF THE 125 m RESIDUAL")
+    print(f"2. DISTRIBUTION OF THE {TARGET_DEPTH_M:g} m RESIDUAL")
     print("=" * 96)
     residuals = [row["residualC"] for row in rows]
     described = _describe(residuals, "all")
@@ -848,7 +865,7 @@ def main() -> int:
         print(f"    late  lead (>={_hi - 5}h) mean : {statistics.fmean(late):+.3f} C (n={len(late)})")
 
     # --- 3b. longest-lead rerun -------------------------------------------
-    print("\n  125 m bias recomputed against the LONGEST-lead covering run:")
+    print(f"\n  {TARGET_DEPTH_M:g} m bias recomputed against the LONGEST-lead covering run:")
     lead_rows: List[Dict[str, Any]] = []
     for profile in profiles:
         matchup = match_argo_with_hycom(profile["profile_id"])
@@ -904,7 +921,7 @@ def main() -> int:
         levels, _basis, _mode = _float_levels(profile)
         when = pd.to_datetime(profile["observation_time"], errors="raise").tz_localize(None)
         print(f"\n  --- {row['floatId']} ({row['profileId']})  "
-              f"residual {row['residualC']:+.2f} C at 125 m ---")
+              f"residual {row['residualC']:+.2f} C at {TARGET_DEPTH_M:g} m ---")
         dataset = xr.open_dataset(selected_path, engine="netcdf4", chunks={})
         try:
             d26_evidence.append(_print_profile(

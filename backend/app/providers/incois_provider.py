@@ -25,7 +25,10 @@ def _hycom_data_status(ds=None) -> str:
         except Exception:
             pass
     return 'REAL'
-from app.services.model_depth_axis import apply_model_depth_axis
+from app.services.model_depth_axis import (
+    apply_model_depth_axis,
+    stored_file_depths_from_axis,
+)
 from app.services.model_time_matching import (
     is_time_matched,
     resolve_model_timestamp,
@@ -412,6 +415,7 @@ class IncoisProvider:
             requested_depth_m=float(requested_depth_m),
             matched_depth_m=float(matched_depth),
             available_depths_m=depths,
+            stored_file_depths_m=stored_file_depths_from_axis(ds),
             missing_values=missing,
             bounds=bounds,
             grid=grid,

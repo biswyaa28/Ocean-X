@@ -11,6 +11,12 @@ import {
 } from '../types/oceanlens';
 import { apiProvider } from '../services/ApiProvider';
 import {
+  modelDepthAxisDisagreementM,
+  modelDepthAxisNote,
+  modelDepthLabel,
+  type ModelDepthAxis,
+} from '../utils/modelDepthLabel';
+import {
   normalizeArgoMatchupComparisons,
   normalizeArgoObservations,
   ARGO_DUPLICATE_DEPTH_STRATEGY,
@@ -93,19 +99,22 @@ const CycloneHeatPanel: React.FC<{ matchup: ArgoMatchupResponse }> = ({ matchup 
 
       <div className="grid grid-cols-2 gap-1.5 text-[9px]">
         <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
-          <div className="text-[7.5px] text-slate-500 uppercase">Float heat potential</div>
+          <div className="text-[7.5px] text-slate-500 uppercase">Float-derived TCHP</div>
           <div className="mt-0.5 text-[11px]">
             {floatTchp === null ? unavailable : value(`${floatTchp.toFixed(1)} kJ/cm2`)}
           </div>
         </div>
         <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
-          <div className="text-[7.5px] text-slate-500 uppercase">Model heat potential</div>
+          <div className="text-[7.5px] text-slate-500 uppercase">
+            INCOIS TCHP product
+            <span className="block normal-case text-amber-300/80">definitions differ</span>
+          </div>
           <div className="mt-0.5 text-[11px]">
             {modelTchp === null ? unavailable : value(`${modelTchp.toFixed(1)} kJ/cm2`)}
           </div>
         </div>
         <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
-          <div className="text-[7.5px] text-slate-500 uppercase">Model residual</div>
+          <div className="text-[7.5px] text-slate-500 uppercase">Difference (INCOIS &minus; float)</div>
           <div
             className={`mt-0.5 text-[11px] font-bold ${
               residual === null
@@ -168,7 +177,7 @@ const CycloneHeatPanel: React.FC<{ matchup: ArgoMatchupResponse }> = ({ matchup 
       {matchup.tchpDefinitionStatus && (
         <details className="text-[7.5px] text-slate-500 leading-relaxed">
           <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
-            HOW COMPARABLE IS THE MODEL VALUE?
+            HOW COMPARABLE IS THE INCOIS TCHP VALUE?
           </summary>
           <p className="mt-1">{matchup.tchpDefinitionStatus}</p>
         </details>
@@ -484,6 +493,18 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
   const argoDataModeLabel = matchup.argoDataMode ? matchup.argoDataMode.toUpperCase() : 'Unavailable';
   const verticalModeLabel = matchup.matchMode ? matchup.matchMode.toUpperCase() : 'Unavailable';
   const horizontalModeLabel = matchup.spatialMode ? matchup.spatialMode.toUpperCase() : 'Unavailable';
+  // Sampled axis vs the file's own DEPTH labels.
+  const depthAxis = useMemo<ModelDepthAxis | undefined>(
+    () => ({
+      modelDepths: matchup.modelDepths,
+      storedFileDepths: matchup.storedFileDepths,
+    }),
+    [matchup.modelDepths, matchup.storedFileDepths]
+  );
+  const depthAxisDisagreementM = useMemo(
+    () => modelDepthAxisDisagreementM(depthAxis),
+    [depthAxis]
+  );
 
   return (
     <>
@@ -580,12 +601,29 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
               data-testid="matchup-depth-axis-footnote"
               className="font-mono text-[8px] text-slate-400 leading-relaxed"
             >
-              Depths used: {matchup.modelDepths.join(', ')} m (reconstructed from the file&apos;s depth bounds;
-              they match INCOIS&apos;s raw OPeNDAP values, checked 8–10 Oct 2026). This subset file stores{' '}
-              {matchup.storedFileDepths.join(', ')} m (bound midpoints). Rule:{' '}
-              {matchup.modelDepthAxisRule ?? 'native'}.
+              {modelDepthAxisNote({
+                modelDepths: matchup.modelDepths,
+                storedFileDepths: matchup.storedFileDepths,
+              })}{' '}
+              Rule: {matchup.modelDepthAxisRule ?? 'native'}.
             </div>
           )}
+
+        {/* Where the depth of a model LEVEL is uncertain. The axis above is settled
+            (the file's DEPTH is the midpoint of its own bounds, and the bounds invert
+            back to the producer's native levels). What the file does NOT say is which
+            depth INSIDE a level the value represents - a level value, a slab average or
+            an interpolation - so the placement of a level within its own bounds is
+            unresolved, and in the thermocline that is worth real degrees. */}
+        {depthAxisDisagreementM > 0 && (
+          <div
+            data-testid="matchup-depth-uncertainty-note"
+            className="font-mono text-[8px] text-amber-200/90 leading-relaxed"
+          >
+            Model level depths are uncertain by up to {depthAxisDisagreementM} m; bias in the
+            thermocline changes by ~0.07 °C per metre.
+          </div>
+        )}
 
         {repeatedNativeDepths > 0 && matchMode === 'native' && (
           <div className="font-mono text-[8px] text-amber-300/90 leading-relaxed">
@@ -801,6 +839,16 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
   // and whether residual statistics may be presented at all.
   const timeGapStatus =
     matchup?.diagnostics?.timeGapStatus ?? matchup?.timeGapStatus ?? 'good';
+
+  // Sampled axis vs the file's own DEPTH labels, so every model depth this tab
+  // shows can carry the file's label when the two disagree.
+  const depthAxis = useMemo<ModelDepthAxis | undefined>(
+    () =>
+      matchup
+        ? { modelDepths: matchup.modelDepths, storedFileDepths: matchup.storedFileDepths }
+        : undefined,
+    [matchup]
+  );
 
   if (!profile) return null;
 
@@ -1275,8 +1323,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
 
                           return (
                             <tr key={idx} className="hover:bg-white/5 transition-colors">
-                              <td className="py-2 px-2 text-center font-bold text-cyan-300">
-                                {c.depthM} m
+                              <td
+                                className="py-2 px-2 text-center font-bold text-cyan-300 whitespace-nowrap"
+                                title="Depth the model value was actually sampled at, and what this file calls the same level."
+                              >
+                                {modelDepthLabel(c.depthM, depthAxis)}
                               </td>
                               <td className="py-2 px-1 text-center">
                                 {c.method ? (

@@ -302,7 +302,11 @@ class DepthSliceResponse(BaseModel):
     requested_timestamp: Optional[str] = None
     requested_depth_m: float
     matched_depth_m: float
+    # Depths actually sampled (the resolved native axis).
     available_depths_m: List[float]
+    # Depths the subset file's own DEPTH coordinate carries, in the same order.
+    # They differ: the file's DEPTH is the midpoint of its own bounds.
+    stored_file_depths_m: List[float] = Field(default_factory=list)
     depth_selection: str = "nearest native HYCOM model depth (no interpolation)"
     missing_values: int = 0
     bounds: Dict[str, float]
@@ -470,6 +474,10 @@ class ArgoMatchupResponse(BaseModel):
     modelDepthAxisRule: Optional[str] = None
     modelDepths: List[float] = Field(default_factory=list)
     storedFileDepths: List[float] = Field(default_factory=list)
+    # Whether INCOIS's 2D TCHP field is the same quantity as the float-derived
+    # TCHP: the ratio under the float's own definition and the reference
+    # isotherm that would reproduce the field. See ocean_heat_metrics.
+    tchpModelDefinition: Optional[Dict[str, Any]] = None
     # model_levels mode: model levels that produced no pair, with the reason.
     excludedModelLevels: List[Dict[str, Any]] = Field(default_factory=list)
     floatBracketMaxGapM: float = 50.0

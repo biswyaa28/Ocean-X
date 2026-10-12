@@ -191,12 +191,12 @@ describe('RegionalSummary', () => {
   });
 });
 describe('RegionalSummary — TCHP scatter', () => {
-  it('plots float against model heat potential with a 1:1 line', async () => {
+  it('plots float-derived TCHP against the INCOIS TCHP product with a 1:1 line', async () => {
     getArgoMatchupSummary.mockResolvedValue(makeSummary());
     const { container } = render(<RegionalSummary />);
 
     await waitFor(() =>
-      expect(screen.getByText(/FLOAT VS MODEL HEAT POTENTIAL/)).toBeTruthy()
+      expect(screen.getByText(/FLOAT-DERIVED TCHP vs INCOIS TCHP PRODUCT/)).toBeTruthy()
     );
     expect(container.querySelectorAll('.recharts-scatter-symbol').length).toBeGreaterThan(0);
     // The reference diagonal plus the two rule-of-thumb lines.
@@ -204,19 +204,78 @@ describe('RegionalSummary — TCHP scatter', () => {
     expect(lines.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reports mean, median and RMSE for the heat residual', async () => {
+  it('reports mean and median difference plus RMSE, never calling it a bias', async () => {
     getArgoMatchupSummary.mockResolvedValue(makeSummary());
     render(<RegionalSummary />);
 
-    await waitFor(() => expect(screen.getByText('HEAT POTENTIAL MEAN BIAS')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('MEAN DIFFERENCE (INCOIS − FLOAT)')).toBeTruthy());
     // bias and medianBias happen to be equal in this fixture, so they are
     // disambiguated by the row they sit in.
     const row = (label: string) =>
       screen.getByText(label).parentElement?.textContent ?? '';
-    expect(row('HEAT POTENTIAL MEAN BIAS')).toContain('13.7');
-    expect(row('MEDIAN BIAS')).toContain('13.7');
+    expect(row('MEAN DIFFERENCE (INCOIS − FLOAT)')).toContain('13.7');
+    expect(row('MEDIAN DIFFERENCE')).toContain('13.7');
     expect(screen.getByText('25.0 kJ/cm2')).toBeTruthy();
     expect(screen.getByText('82.4 / 96.1 kJ/cm2')).toBeTruthy();
+  });
+
+  it('quotes the computed 2D-vs-3D ratio rather than a hardcoded one', async () => {
+    getArgoMatchupSummary.mockResolvedValue(
+      makeSummary({
+        tchpModelDefinition: {
+          status: 'OK',
+          reason: null,
+          profileCount: 20,
+          floatIsothermC: 26,
+          fieldMeanKjCm2: 114.09,
+          modelProfileMeanKjCm2: 82.47,
+          ratioAtFloatIsothermMean: 1.3972,
+          ratioAtFloatIsothermMedian: 1.4161,
+          referenceIsothermC: 25,
+          referenceProfileMeanKjCm2: 115.31,
+          referenceRatio: 0.9894,
+          referenceCoverage: 20,
+          modelProfileMaxGapM: 300,
+        },
+      })
+    );
+    render(<RegionalSummary />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('regional-tchp-definition-note')).toBeTruthy()
+    );
+    const note = screen.getByTestId('regional-tchp-definition-note').textContent ?? '';
+    // The ratio comes from the payload, so a changed measurement changes the text.
+    expect(note).toContain('1.42x');
+    expect(note).toContain('25.0 °C');
+    expect(note).toContain('definition difference, not model error');
+  });
+
+  it('withholds the definition note when the backend cannot compute one', async () => {
+    getArgoMatchupSummary.mockResolvedValue(
+      makeSummary({
+        tchpModelDefinition: {
+          status: 'UNAVAILABLE',
+          reason: 'no profile supplied both a model TCHP field value and a model temperature profile',
+          profileCount: 0,
+          floatIsothermC: 26,
+          fieldMeanKjCm2: null,
+          modelProfileMeanKjCm2: null,
+          ratioAtFloatIsothermMean: null,
+          ratioAtFloatIsothermMedian: null,
+          referenceIsothermC: null,
+          referenceProfileMeanKjCm2: null,
+          referenceRatio: null,
+          referenceCoverage: 0,
+          modelProfileMaxGapM: 300,
+        },
+      })
+    );
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getAllByText(/FLOAT-DERIVED TCHP/).length).toBeGreaterThan(0));
+    // A missing measurement must produce no claim, not a remembered one.
+    expect(screen.queryByTestId('regional-tchp-definition-note')).toBeNull();
   });
 
   it('says the scatter is empty rather than plotting a single zero point', async () => {
@@ -224,7 +283,7 @@ describe('RegionalSummary — TCHP scatter', () => {
     render(<RegionalSummary />);
 
     await waitFor(() =>
-      expect(screen.getAllByText(/NO HEAT-POTENTIAL COMPARISON AVAILABLE/).length).toBe(1)
+      expect(screen.getAllByText(/NO TCHP COMPARISON AVAILABLE/).length).toBe(1)
     );
   });
 
@@ -232,7 +291,7 @@ describe('RegionalSummary — TCHP scatter', () => {
     getArgoMatchupSummary.mockResolvedValue(makeSummary());
     render(<RegionalSummary />);
 
-    await waitFor(() => expect(screen.getByText(/FLOAT VS MODEL HEAT POTENTIAL/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/FLOAT-DERIVED TCHP vs INCOIS TCHP PRODUCT/)).toBeTruthy());
     const text = (document.body.textContent ?? '').toLowerCase();
     // The caption legitimately negates these; strip it before scanning.
     const withoutCaption = text.split('this is a comparison, not a forecast').join(' ');
@@ -246,25 +305,45 @@ describe('RegionalSummary — TCHP scatter', () => {
     render(<RegionalSummary />);
 
     await waitFor(() =>
-      expect(screen.getByText(/HOW COMPARABLE IS THE MODEL HEAT POTENTIAL\?/i)).toBeTruthy()
+      expect(screen.getByText(/HOW COMPARABLE IS THE INCOIS TCHP PRODUCT\?/i)).toBeTruthy()
     );
     const details = screen
-      .getByText(/how comparable is the model heat potential\?/i)
+      .getByText(/how comparable is the incois tchp product\?/i)
       .closest('details');
     expect(details?.textContent).toMatch(/not published in the file/i);
   });
 
-  it('renders the model depth axis note with depths when modelDepths is present', async () => {
+  it('names both the sampled depths and the file\'s own labels when they differ', async () => {
     getArgoMatchupSummary.mockResolvedValue(
       makeSummary({
         modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 17.5, 52.5, 125, 275, 500],
+      })
+    );
+    render(<RegionalSummary />);
+
+    await waitFor(() => expect(screen.getByTestId('regional-depth-axis-note')).toBeTruthy());
+    const note = screen.getByTestId('regional-depth-axis-note').textContent ?? '';
+    // The sampled axis is the headline; the file's labels ride along so a reader
+    // holding the file can reconcile the two.
+    expect(note).toContain('0, 10, 50, 100, 250, 500 m');
+    expect(note).toContain('0, 17.5, 52.5, 125, 275, 500 m');
+    expect(note).toContain('25 m apart');
+    expect(note).toContain('midpoint of its own bounds');
+  });
+
+  it('says the file labels the levels identically when the two axes agree', async () => {
+    getArgoMatchupSummary.mockResolvedValue(
+      makeSummary({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 10, 50, 100, 250, 500],
       })
     );
     render(<RegionalSummary />);
 
     await waitFor(() => expect(screen.getByTestId('regional-depth-axis-note')).toBeTruthy());
     expect(screen.getByTestId('regional-depth-axis-note').textContent).toBe(
-      "Model levels use the producer's native depth axis (0, 10, 50, 100, 250, 500 m). Layer definition pending confirmation from INCOIS."
+      'Model depths are shown as sampled (0, 10, 50, 100, 250, 500 m); the file labels them identically.'
     );
   });
 

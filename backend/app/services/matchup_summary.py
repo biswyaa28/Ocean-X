@@ -30,6 +30,8 @@ import math
 import statistics
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.services.ocean_heat_metrics import summarize_model_tchp_definition
+
 # Excluded-profile reasons. Kept as constants so the API contract and the UI
 # cannot drift apart.
 REASON_TIME_GAP = "time_gap_too_large"
@@ -189,6 +191,21 @@ def summarize_matches(matches: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             "meanFloat": None, "meanModel": None,
         })
 
+    # Is INCOIS's 2D TCHP field the same quantity as the float's TCHP? Answered
+    # over the whole set so the reference isotherm is one number for the product
+    # rather than one per profile. The residual statistics above are untouched by
+    # this: it explains what they mean, it does not change them.
+    tchp_model_definition = summarize_model_tchp_definition(
+        [
+            {
+                "fieldKjCm2": match.get("tchpModelKjCm2"),
+                "depthsM": match.get("modelDepths"),
+                "temperaturesC": match.get("modelProfileTemperaturesC"),
+            }
+            for match in matches
+        ]
+    )
+
     all_depths = sorted(set(temperature_by_depth) | set(salinity_by_depth))
     per_depth: List[Dict[str, Any]] = []
     for depth in all_depths:
@@ -214,6 +231,7 @@ def summarize_matches(matches: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "tchp": tchp_reduced,
         "tchpScatter": tchp_scatter,
         "tchpProfiles": tchp_rows,
+        "tchpModelDefinition": tchp_model_definition,
         "profiles": profile_rows,
         "profileCount": len(profile_rows),
     }

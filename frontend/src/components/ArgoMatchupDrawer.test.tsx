@@ -632,12 +632,38 @@ describe('ArgoMatchupDrawer — Phase 2C matchup diagnostics', () => {
 
     const footnote = screen.getByTestId('matchup-depth-axis-footnote');
     expect(footnote).toBeInTheDocument();
-    expect(footnote.textContent).toContain(
-      "Depths used: 0, 10, 50, 100, 250, 500 m (reconstructed from the file's depth bounds; they match INCOIS's raw OPeNDAP values, checked 8–10 Oct 2026)."
+    // The sampled axis is the headline; the file's own labels ride along, because
+    // a reader with the file open would otherwise think the depths are wrong.
+    expect(footnote.textContent).toContain('shown as sampled (0, 10, 50, 100, 250, 500 m)');
+    expect(footnote.textContent).toContain('0, 17.5, 52.5, 125, 275, 500 m');
+    expect(footnote.textContent).toContain('25 m apart');
+    expect(footnote.textContent).toContain('midpoint of its own bounds');
+    expect(footnote.textContent).toContain('Rule: native.');
+  });
+
+  it('states the depth uncertainty in the thermocline when the labels disagree', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 17.5, 52.5, 125, 275, 500],
+      })
     );
-    expect(footnote.textContent).toContain(
-      "This subset file stores 0, 17.5, 52.5, 125, 275, 500 m (bound midpoints). Rule: native."
+
+    const note = screen.getByTestId('matchup-depth-uncertainty-note');
+    expect(note.textContent).toContain('uncertain by up to 25 m');
+    expect(note.textContent).toContain('~0.07 °C per metre');
+  });
+
+  it('withholds the depth-uncertainty line when the file agrees with the axis', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 10, 50, 100, 250, 500],
+      })
     );
+
+    // Nothing is uncertain when the two depths agree, so nothing is claimed.
+    expect(screen.queryByTestId('matchup-depth-uncertainty-note')).toBeNull();
   });
 
   it('does not render the depth-axis footnote when depth fields are absent', async () => {

@@ -37,6 +37,7 @@ claims, and conflating them is how a validation number becomes fiction.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # --- physical constants ----------------------------------------------------
@@ -93,6 +94,14 @@ TCHP_DEFINITION_STATUS = (
 # --- rejection reasons -----------------------------------------------------
 REASON_NO_SAMPLES = "no accepted temperature samples"
 REASON_NO_VALID_TEMPERATURE = "no finite temperature values"
+REASON_MODEL_PROFILE_TOO_SHALLOW = (
+    "model profile has fewer than two finite temperature levels"
+)
+REASON_MODEL_FIELD_ABSENT = "model 2D TCHP field is absent at this location"
+REASON_NO_MODEL_PROFILES = (
+    "no profile supplied both a model TCHP field value and a model "
+    "temperature profile"
+)
 REASON_SURFACE_TOO_DEEP = (
     f"shallowest accepted sample deeper than {METRICS_MAX_SURFACE_DEPTH_M:g} m, "
     "so the surface value cannot be established without extrapolation"
@@ -303,3 +312,185 @@ def compute_ocean_heat_metrics(
         surface_temperature_c=round(surface_temperature, 4),
         warm_layer_thickness_m=round(d26, 2),
     )
+
+
+# ---------------------------------------------------------------------------
+# The same formula, run on the MODEL's own temperature
+# ---------------------------------------------------------------------------
+# The float-side gap guard cannot be reused on a model profile: HYCOM carries six
+# levels and spaces them 150 m apart across the thermocline, so a 25 m guard
+# rejects every profile outright. 300 m is the model's own spacing there. Only
+# that guard changes - the integral, the constants and the unit conversion stay
+# in compute_ocean_heat_metrics, so the two sides cannot drift apart.
+MODEL_PROFILE_MAX_GAP_M = 300.0
+
+# Reference isotherms offered to the definition fit, 15.0-30.0 C in 0.5 C steps.
+# TCHP falls as the reference deepens, so a scan covers both the plausible
+# answer and the ones that would make the fit meaningless.
+REFERENCE_ISOTHERM_CANDIDATES_C: Tuple[float, ...] = tuple(
+    round(15.0 + 0.5 * index, 2) for index in range(31)
+)
+
+# A candidate isotherm is only scored if it yields a value for at least this
+# fraction of the profiles. Without it the fit would happily "explain" the field
+# with an isotherm that happens to work for one warm profile and nothing else.
+REFERENCE_FIT_MIN_COVERAGE = 0.8
+
+
+def compute_model_profile_tchp(
+    depths_m: Sequence[Any],
+    temperatures_c: Sequence[Any],
+    isotherm_c: float = TCHP_ISOTHERM_C,
+    max_gap_m: float = MODEL_PROFILE_MAX_GAP_M,
+) -> MetricResult:
+    """TCHP from the MODEL's own temperature profile, using the float formula.
+
+    This is deliberately not a second implementation of the integral. It adapts
+    the model's native levels into the shape ``compute_ocean_heat_metrics``
+    already takes and calls it unchanged, so "the float's TCHP" and "the model's
+    TCHP under the same definition" differ only in which water was sampled and
+    never in how the number was computed. That is the whole point of running it:
+    it is what turns the float-vs-field residual into a statement about
+    definitions rather than about the model.
+
+    No surface hold is applied and none is needed - the model's shallowest level
+    is 0 m, so there is nothing above the first sample to stand in for.
+    """
+    levels: List[Dict[str, Any]] = []
+    # ``or []`` cannot be used on numpy arrays, and the model side passes one.
+    depth_values = [] if depths_m is None else list(depths_m)
+    temperature_values = [] if temperatures_c is None else list(temperatures_c)
+    for depth, temperature in zip(depth_values, temperature_values):
+        resolved_depth = _finite(depth)
+        resolved_temperature = _finite(temperature)
+        if resolved_depth is None or resolved_temperature is None:
+            continue
+        levels.append(
+            {"depth_m": resolved_depth, "temperature_c": resolved_temperature}
+        )
+    if len(levels) < 2:
+        return _result(reason=REASON_MODEL_PROFILE_TOO_SHALLOW)
+    return compute_ocean_heat_metrics(
+        levels, max_gap_m=max_gap_m, isotherm_c=isotherm_c
+    )
+
+
+def summarize_model_tchp_definition(
+    profiles: Iterable[Dict[str, Any]],
+    isotherm_c: float = TCHP_ISOTHERM_C,
+) -> Dict[str, Any]:
+    """Is INCOIS's 2D TCHP field the same quantity as the float's TCHP?
+
+    ``profiles`` is a list of ``{"fieldKjCm2", "depthsM", "temperaturesC"}``.
+    Each entry pairs the model's published 2D TCHP at one float's place and time
+    with the model's own temperature profile at that same place and time.
+
+    Two questions are answered separately because they have different answers,
+    and reporting only one of them is how a definition difference gets presented
+    as model error:
+
+    1. Under the FLOAT definition (the 26 C isotherm), how much larger is
+       INCOIS's 2D field than the model's own profile recomputed with that same
+       definition? -> ``ratioAtFloatIsotherm``. A number well above 1 means the
+       two are not the same quantity.
+    2. Which reference isotherm WOULD reproduce INCOIS's field from the model's
+       own temperature? -> ``referenceIsothermC``, with the ratio there. A ratio
+       near 1.00 means the field is the same ocean under a shallower reference
+       isotherm, i.e. a different convention, not a wrong number.
+
+    The fit is global (one isotherm for the whole set, chosen to minimise the
+    error against the pooled field mean) rather than per-profile: the question
+    being asked is about the product's convention, and fitting a parameter per
+    profile would let each profile's own noise set its own reference.
+    """
+    usable: List[Dict[str, Any]] = []
+    for entry in profiles or []:
+        if not isinstance(entry, dict):
+            continue
+        field = _finite(entry.get("fieldKjCm2"))
+        recomputed = compute_model_profile_tchp(
+            entry.get("depthsM"), entry.get("temperaturesC"), isotherm_c=isotherm_c
+        ).get("tchpKjCm2")
+        if field is None or field <= 0 or recomputed is None or recomputed <= 0:
+            continue
+        usable.append(
+            {
+                "field": field,
+                "recomputed": recomputed,
+                "depthsM": entry.get("depthsM"),
+                "temperaturesC": entry.get("temperaturesC"),
+            }
+        )
+
+    if not usable:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": REASON_NO_MODEL_PROFILES,
+            "profileCount": 0,
+            "floatIsothermC": isotherm_c,
+            "fieldMeanKjCm2": None,
+            "modelProfileMeanKjCm2": None,
+            "ratioAtFloatIsothermMean": None,
+            "ratioAtFloatIsothermMedian": None,
+            "referenceIsothermC": None,
+            "referenceProfileMeanKjCm2": None,
+            "referenceRatio": None,
+            "referenceCoverage": 0,
+            "modelProfileMaxGapM": MODEL_PROFILE_MAX_GAP_M,
+        }
+
+    ratios = [entry["field"] / entry["recomputed"] for entry in usable]
+    field_mean = sum(entry["field"] for entry in usable) / len(usable)
+    recomputed_mean = sum(entry["recomputed"] for entry in usable) / len(usable)
+
+    # Ceiling, not floor: with one profile the threshold must still be 1, or a
+    # single-profile fit can never resolve at all. The fraction already keeps
+    # the fit from resting on a handful of outliers in a large set.
+    required = max(1, math.ceil(len(usable) * REFERENCE_FIT_MIN_COVERAGE))
+    best: Optional[Dict[str, Any]] = None
+    for candidate in REFERENCE_ISOTHERM_CANDIDATES_C:
+        values = [
+            _finite(compute_model_profile_tchp(
+                entry["depthsM"], entry["temperaturesC"], isotherm_c=candidate
+            ).get("tchpKjCm2"))
+            for entry in usable
+        ]
+        positive = [value for value in values if value is not None and value > 0]
+        if len(positive) < required:
+            continue
+        candidate_mean = sum(positive) / len(positive)
+        error = abs(candidate_mean - field_mean)
+        if best is None or error < best["error"]:
+            best = {
+                "isotherm": candidate,
+                "profileMean": candidate_mean,
+                "coverage": len(positive),
+                "error": error,
+            }
+
+    return {
+        "status": "OK" if best is not None else "UNRESOLVED",
+        "reason": None if best is not None else (
+            "no reference isotherm reproduced the model field for enough profiles"
+        ),
+        "profileCount": len(usable),
+        "floatIsothermC": isotherm_c,
+        "fieldMeanKjCm2": round(field_mean, 4),
+        "modelProfileMeanKjCm2": round(recomputed_mean, 4),
+        "ratioAtFloatIsothermMean": round(sum(ratios) / len(ratios), 4),
+        "ratioAtFloatIsothermMedian": round(_median(ratios), 4),
+        "referenceIsothermC": best["isotherm"] if best else None,
+        "referenceProfileMeanKjCm2": round(best["profileMean"], 4) if best else None,
+        "referenceRatio": round(field_mean / best["profileMean"], 4) if best and best["profileMean"] else None,
+        "referenceCoverage": best["coverage"] if best else 0,
+        "modelProfileMaxGapM": MODEL_PROFILE_MAX_GAP_M,
+    }
+
+
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    count = len(ordered)
+    middle = count // 2
+    if count % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])

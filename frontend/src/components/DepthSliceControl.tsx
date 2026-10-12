@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ChevronDown, Eye, EyeOff, Loader2, AlertCircle, Waves, RotateCcw } from 'lucide-react';
 import { DEPTH_SLICE_VARIABLES, DepthSlicePayload } from '../services/ApiProvider';
+import { modelDepthLabel, type ModelDepthAxis } from '../utils/modelDepthLabel';
 import {
   DepthSliceDisplaySettings,
   DepthSliceRenderConfig,
@@ -70,6 +71,15 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
   const depthOptions = nativeDepths.includes(selection.depthM)
     ? nativeDepths
     : [...nativeDepths, selection.depthM].sort((a, b) => a - b);
+  // The subset file's own DEPTH labels, so a level can be shown as sampled AND
+  // as the file names it. They differ on the thermocline levels.
+  const depthAxis = useMemo<ModelDepthAxis>(
+    () => ({
+      modelDepths: metadata?.available_depths_m ?? null,
+      storedFileDepths: metadata?.stored_file_depths_m ?? null,
+    }),
+    [metadata?.available_depths_m, metadata?.stored_file_depths_m]
+  );
 
   const palettes = palettesForVariable(selection.variable);
 
@@ -164,7 +174,8 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 >
                   {depthOptions.map((d) => (
                     <option key={d} value={d} className="bg-[#080c14]">
-                      {d} m{nativeDepths.includes(d) ? '' : ' · requested (nearest native match)'}
+                      {modelDepthLabel(d, depthAxis)}
+                      {nativeDepths.includes(d) ? '' : ' · requested (nearest native match)'}
                     </option>
                   ))}
                 </select>
@@ -357,7 +368,9 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">MATCHED MODEL DEPTH</span>
-                  <span className="text-indigo-300 font-bold">{metadata.matched_depth_m} m</span>
+                  <span className="text-indigo-300 font-bold">
+                    {modelDepthLabel(metadata.matched_depth_m, depthAxis)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">TIMESTAMP</span>
@@ -406,6 +419,7 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 variableLabel={variableLabel}
                 isAutoRange={render.isAutoRange}
                 matchedDepthM={metadata.matched_depth_m}
+                depthAxis={depthAxis}
                 timestamp={metadata.timestamp}
               />
             )}

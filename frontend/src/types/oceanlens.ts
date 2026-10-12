@@ -339,6 +339,32 @@ export interface MatchupDiagnostics {
   timeGapStatus?: MatchupTimeGapStatus | null;
 }
 
+/**
+ * Live evidence that the model's 2D TCHP field and the float-derived TCHP use
+ * different conventions. Every number here is computed at request time from the
+ * model's own temperature; nothing is a stored constant.
+ */
+export interface TCHPModelDefinition {
+  status: string;
+  reason: string | null;
+  profileCount: number;
+  /** The isotherm the FLOAT definition uses (26 C). */
+  floatIsothermC: number;
+  fieldMeanKjCm2: number | null;
+  /** The model's own temperature profile, recomputed with the float definition. */
+  modelProfileMeanKjCm2: number | null;
+  /** Field / recomputed under the float definition: > 1 means not the same quantity. */
+  ratioAtFloatIsothermMean: number | null;
+  ratioAtFloatIsothermMedian: number | null;
+  /** The isotherm that WOULD reproduce the field from the model's own profile. */
+  referenceIsothermC: number | null;
+  referenceProfileMeanKjCm2: number | null;
+  /** Field / recomputed at referenceIsothermC; near 1 confirms a convention difference. */
+  referenceRatio: number | null;
+  referenceCoverage: number;
+  modelProfileMaxGapM: number;
+}
+
 /** Per-model-depth row of the regional summary. */
 export interface MatchupSummaryDepthRow {
   modelDepthM: number;
@@ -390,6 +416,12 @@ export interface ArgoMatchupSummary {
   }[];
   tchpIsothermC: number;
   tchpDefinitionStatus?: string | null;
+  /**
+   * Whether INCOIS's 2D TCHP field is the same quantity as the float-derived
+   * TCHP. Computed live from the model's own temperature profile, so the UI can
+   * quote a measured ratio instead of an assumed one.
+   */
+  tchpModelDefinition?: TCHPModelDefinition | null;
   /** Widely quoted screening threshold, drawn as a reference line only. */
   tchpRuleOfThumbKJPerCm2: number;
   overall: {

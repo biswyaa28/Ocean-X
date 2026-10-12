@@ -43,6 +43,13 @@ import {
 } from 'recharts';
 import type { ArgoMatchupSummary, TchpScatterPoint } from '../types/oceanlens';
 import { apiProvider } from '../services/ApiProvider';
+import {
+  modelDepthAxisDisagreementM,
+  modelDepthAxisNote,
+  modelDepthLabel,
+  modelDepthLabelCompact,
+  type ModelDepthAxis,
+} from '../utils/modelDepthLabel';
 
 /** Human-readable exclusion reasons, mirroring the backend constants. */
 const EXCLUSION_LABELS: Record<string, string> = {
@@ -52,6 +59,44 @@ const EXCLUSION_LABELS: Record<string, string> = {
   float_sampling_too_coarse: 'Float sampling too coarse',
   model_data_unavailable: 'Model data unavailable',
 };
+
+/**
+ * The one-sentence explanation of WHY this chart shows a gap.
+ *
+ * Every number in it is computed at request time by the backend from the model's
+ * own temperature profile (`tchpModelDefinition`). Nothing here is a stored
+ * constant: if the ratio moved, this text moves with it, and if the backend
+ * cannot compute it the note is withheld rather than replaced by a guess.
+ */
+function tchpDefinitionNote(
+  definition: ArgoMatchupSummary['tchpModelDefinition'],
+): string | null {
+  if (!definition || definition.status !== 'OK') return null;
+  const ratio = definition.ratioAtFloatIsothermMedian ?? definition.ratioAtFloatIsothermMean;
+  if (ratio === null || ratio === undefined || !Number.isFinite(ratio)) return null;
+
+  const referenceIsotherm = definition.referenceIsothermC;
+  const referenceRatio = definition.referenceRatio;
+  const hasReference =
+    referenceIsotherm !== null &&
+    referenceIsotherm !== undefined &&
+    Number.isFinite(referenceIsotherm) &&
+    referenceRatio !== null &&
+    referenceRatio !== undefined &&
+    Number.isFinite(referenceRatio);
+
+  const referenceClause = hasReference
+    ? ` (consistent with a ~${referenceIsotherm!.toFixed(1)} °C reference isotherm, which reproduces the field to within ${Math.abs(
+        (referenceRatio! - 1) * 100,
+      ).toFixed(0)}%)`
+    : '';
+
+  return (
+    `INCOIS's 2D TCHP is about ${ratio.toFixed(2)}x the TCHP recomputed from the model's ` +
+    `own temperature using the same ${definition.floatIsothermC.toFixed(0)} °C definition as ` +
+    `the float${referenceClause}; this is a definition difference, not model error.`
+  );
+}
 
 const BIAS_COLOR = '#22d3ee';
 
@@ -83,14 +128,32 @@ function metric(value: number | null | undefined, digits = 3): string {
  * be any rendered node), so this must accept ReactNode too — narrowing it to
  * `string | number` fails typecheck under `next build`.
  */
-export function depthTooltipLabel(label: React.ReactNode, row?: BiasRow): string {
+export function depthTooltipLabel(
+  label: React.ReactNode,
+  row?: BiasRow,
+  axis?: ModelDepthAxis,
+): string {
   const text = typeof label === 'string' || typeof label === 'number' ? String(label) : '';
-  return typeof row?.n === 'number'
-    ? `DEPTH ${text} M · n = ${row.n} matched pairs`
+  const depth = Number(text);
+  // The tooltip says which depth is being sampled AND what the file calls that
+  // same level, because the two disagree on the thermocline levels.
+  const depthText = Number.isFinite(depth)
+    ? `DEPTH ${modelDepthLabel(depth, axis).toUpperCase()}`
     : `DEPTH ${text} M`;
+  return typeof row?.n === 'number'
+    ? `${depthText} · n = ${row.n} matched pairs`
+    : depthText;
 }
 
-function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
+function BiasVsDepthChart({
+  rows,
+  unit,
+  axis,
+}: {
+  rows: BiasRow[];
+  unit: string;
+  axis?: ModelDepthAxis;
+}) {
   if (rows.length === 0) {
     return (
       <div
@@ -110,7 +173,7 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
           BIAS VS DEPTH — {unit}
         </span>
         <span className="text-[8px] text-slate-500">
-          BAR = MEAN BIAS · LINE = ±1 RMSE · DEPTH DOWNWARD
+          BAR = MEAN BIAS · LINE = ±1 RMSE · DEPTH DOWNWARD · TICK = SAMPLED (FILE LABEL)
         </span>
       </div>
       <ResponsiveContainer
@@ -139,8 +202,9 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
             stroke="rgba(255,255,255,0.15)"
             tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
             tickLine={false}
+            tickFormatter={(value: number) => modelDepthLabelCompact(value, axis)}
             label={{
-              value: 'DEPTH (M)',
+              value: 'DEPTH (M) · SAMPLED (FILE LABEL)',
               angle: -90,
               position: 'insideLeft',
               fill: '#64748b',
@@ -157,7 +221,7 @@ function BiasVsDepthChart({ rows, unit }: { rows: BiasRow[]; unit: string }) {
               padding: '4px 8px',
             }}
             labelFormatter={(label, payload) =>
-              depthTooltipLabel(label, payload?.[0]?.payload as BiasRow | undefined)
+              depthTooltipLabel(label, payload?.[0]?.payload as BiasRow | undefined, axis)
             }
             formatter={(value, name) => [
               typeof value === 'number' ? `${value.toFixed(3)} ${unit}` : '—',
@@ -215,8 +279,8 @@ const TchpScatter: React.FC<{
       >
         <AlertCircle className="w-4 h-4 text-slate-500 shrink-0" />
         <span>
-          NO HEAT-POTENTIAL COMPARISON AVAILABLE — NO PROFILE PRODUCED BOTH A FLOAT AND A
-          MODEL VALUE.
+          NO TCHP COMPARISON AVAILABLE — NO PROFILE PRODUCED BOTH A FLOAT-DERIVED VALUE
+          AND AN INCOIS TCHP VALUE.
         </span>
       </div>
     );
@@ -237,7 +301,7 @@ const TchpScatter: React.FC<{
     <div className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1">
       <div className="flex items-center justify-between font-mono px-0.5">
         <span className="text-[9px] font-bold text-slate-300 tracking-wider">
-          FLOAT VS MODEL HEAT POTENTIAL — kJ/cm2
+          FLOAT-DERIVED TCHP vs INCOIS TCHP PRODUCT — kJ/cm2
         </span>
         <span className="text-[8px] text-slate-500">N = {points.length}</span>
       </div>
@@ -258,7 +322,7 @@ const TchpScatter: React.FC<{
             tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
             tickLine={false}
             label={{
-              value: 'FLOAT kJ/cm2',
+              value: 'FLOAT-DERIVED TCHP kJ/cm2',
               position: 'insideBottomRight',
               offset: -2,
               fill: '#64748b',
@@ -268,7 +332,7 @@ const TchpScatter: React.FC<{
           <YAxis
             type="number"
             dataKey="tchpModelKjCm2"
-            name="Model"
+            name="INCOIS TCHP"
             domain={[0, cleanMax]}
             tickFormatter={cleanTickFormatter}
             width={44}
@@ -276,7 +340,7 @@ const TchpScatter: React.FC<{
             tick={{ fill: '#94a3b8', fontSize: 9, fontFamily: 'inherit' }}
             tickLine={false}
             label={{
-              value: 'MODEL kJ/cm2',
+              value: 'INCOIS TCHP kJ/cm2',
               angle: -90,
               position: 'insideLeft',
               fill: '#64748b',
@@ -381,6 +445,26 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
     return () => controller.abort();
   }, [load]);
 
+  // Sampled axis vs the file's own DEPTH labels. Passed down so every depth this
+  // panel shows carries the file's label when the two disagree.
+  const depthAxis = useMemo<ModelDepthAxis | undefined>(
+    () =>
+      summary
+        ? { modelDepths: summary.modelDepths, storedFileDepths: summary.storedFileDepths }
+        : undefined,
+    [summary]
+  );
+  const depthAxisNote = useMemo(() => modelDepthAxisNote(depthAxis), [depthAxis]);
+  const depthAxisDisagreementM = useMemo(
+    () => modelDepthAxisDisagreementM(depthAxis),
+    [depthAxis]
+  );
+
+  const tchpDefinitionNoteText = useMemo(
+    () => tchpDefinitionNote(summary?.tchpModelDefinition),
+    [summary]
+  );
+
   const temperatureRows = useMemo<BiasRow[]>(
     () =>
       (summary?.byModelDepth ?? []).map((row) => ({
@@ -467,13 +551,13 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
           {summary.tchp.n > 0 && (
             <div className="bg-[#05070a] border border-white/10 rounded-lg p-2 font-mono text-[8.5px] space-y-1">
               <div className="flex justify-between">
-                <span className="text-slate-500">HEAT POTENTIAL MEAN BIAS</span>
+                <span className="text-slate-500">MEAN DIFFERENCE (INCOIS − FLOAT)</span>
                 <span className="text-slate-200 font-bold">
                   {metric(summary.tchp.bias, 1)} kJ/cm2
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">MEDIAN BIAS</span>
+                <span className="text-slate-500">MEDIAN DIFFERENCE</span>
                 <span className="text-slate-200 font-bold">
                   {metric(summary.tchp.medianBias, 1)} kJ/cm2
                 </span>
@@ -485,7 +569,7 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">MEAN FLOAT / MODEL</span>
+                <span className="text-slate-500">MEAN FLOAT / INCOIS TCHP</span>
                 <span className="text-slate-200 font-bold">
                   {metric(summary.tchp.meanFloat, 1)} / {metric(summary.tchp.meanModel, 1)} kJ/cm2
                 </span>
@@ -493,17 +577,26 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
             </div>
           )}
 
+          {tchpDefinitionNoteText && (
+            <div
+              data-testid="regional-tchp-definition-note"
+              className="font-mono text-[8.5px] text-slate-300 leading-relaxed px-0.5 border-l-2 border-amber-400/50 pl-2"
+            >
+              {tchpDefinitionNoteText}
+            </div>
+          )}
+
           {summary.tchpDefinitionStatus && (
             <details className="text-[7.5px] text-slate-500 leading-relaxed">
               <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
-                HOW COMPARABLE IS THE MODEL HEAT POTENTIAL?
+                HOW COMPARABLE IS THE INCOIS TCHP PRODUCT?
               </summary>
               <p className="mt-1">{summary.tchpDefinitionStatus}</p>
             </details>
           )}
 
-          <BiasVsDepthChart rows={temperatureRows} unit="°C" />
-          <BiasVsDepthChart rows={salinityRows} unit="PSU" />
+          <BiasVsDepthChart rows={temperatureRows} unit="°C" axis={depthAxis} />
+          <BiasVsDepthChart rows={salinityRows} unit="PSU" axis={depthAxis} />
 
           <div className="bg-[#05070a] border border-white/10 rounded-lg p-2 font-mono text-[8.5px] space-y-1">
             <div className="flex justify-between">
@@ -563,7 +656,7 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
             data-testid="regional-depth-axis-note"
             className="font-mono text-[8.5px] text-slate-400 leading-relaxed px-0.5"
           >
-            Model levels use the producer&apos;s native depth axis{summary.modelDepths && summary.modelDepths.length > 0 ? ` (${summary.modelDepths.join(', ')} m)` : ''}. Layer definition pending confirmation from INCOIS.
+            {depthAxisNote ?? 'Model levels use the producer\'s native depth axis. Layer definition pending confirmation from INCOIS.'}
           </div>
 
           <div className="bg-[#05070a] border border-white/10 rounded-lg p-2 font-mono text-[8.5px] space-y-1">
