@@ -2,7 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppMode, OceanMode, DataStatus, DataModeType, KPIMetrics, Cyclone } from '../types/oceanlens';
-import { formatModelDate } from '../utils/modelTime';
+import {
+  LIVE_FRESHNESS_LIMIT_HOURS,
+  ModelTimeRange,
+  describeModelDataAge,
+  describeModelRanges,
+  formatModelDate,
+} from '../utils/modelTime';
 import { Compass, SlidersHorizontal, Activity } from 'lucide-react';
 
 interface HeaderProps {
@@ -20,10 +26,14 @@ interface HeaderProps {
   datasetSynthetic?: boolean;
   datasetLoaded?: boolean;
   liveKpiAuthoritative?: boolean;
-  /** The real model time range the dataset covers (LIVE OCEAN timeline). */
-  modelDateRange?: { start: string; end: string; steps: number } | null;
+  /** The real model time range the surface dataset covers. */
+  modelDateRange?: ModelTimeRange | null;
+  /** The depth-resolved run's own window — usually a different HYCOM run. */
+  modelDepthDateRange?: ModelTimeRange | null;
   /** Argo profiles shown for the current time selection. */
   argoProfileCount?: number | null;
+  /** Injectable clock so the data-age label is testable. */
+  nowMs?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -40,25 +50,30 @@ export const Header: React.FC<HeaderProps> = ({
   datasetLoaded = false,
   liveKpiAuthoritative = false,
   modelDateRange = null,
+  modelDepthDateRange = null,
   argoProfileCount = null,
+  nowMs,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
+  // Read once per tick rather than during render: Date.now() in a render is an
+  // impure read, and the existing 1 s clock tick already gives the age a
+  // heartbeat.
+  const [clockNow, setClockNow] = useState<number>(() => Date.now());
   const isFixture = dataMode === 'FIXTURE' || datasetSynthetic;
   const hasAuthoritativeRealData = backendConnected && dataStatus === 'REAL' && !isFixture && datasetLoaded;
   const hasAuthoritativeLiveData = hasAuthoritativeRealData && liveKpiAuthoritative;
   const displayMetrics = oceanMode === 'LIVE' && !hasAuthoritativeLiveData ? null : metrics;
 
-  // LIVE OCEAN reports the dataset's own coverage — its real dates and the
-  // number of in-situ profiles at the selected model time. A cyclone is never
-  // shown in this mode, so there is nothing else to put there.
-  const modelRangeLabel = modelDateRange
-    ? (() => {
-        const start = formatModelDate(modelDateRange.start);
-        const end = formatModelDate(modelDateRange.end);
-        if (!start || !end) return null;
-        return start === end ? start : `${start} → ${end}`;
-      })()
-    : null;
+  // LIVE OCEAN reports the dataset's own coverage and HOW OLD IT IS. A run from
+  // four days ago is not live, and calling it live would be the one claim in
+  // this header nothing supports.
+  const modelRanges = describeModelRanges(modelDateRange, modelDepthDateRange);
+  const modelAge = describeModelDataAge(
+    [modelDateRange?.start, modelDateRange?.end, modelDepthDateRange?.start, modelDepthDateRange?.end],
+    nowMs ?? clockNow
+  );
+  const ageText = modelAge ? `LATEST MODEL RUN · ${modelAge.label}` : null;
+  const liveClaim = modelAge ? modelAge.isLive : modelRanges.length > 0;
 
   // Tooltip text for the risk chip. When the backend scored the cyclone we
   // list the actual weights it used so the number is never opaque; when it
@@ -100,6 +115,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   useEffect(() => {
     const updateTime = () => {
+      setClockNow(Date.now());
       const now = new Date();
       const hours = String(now.getUTCHours()).padStart(2, '0');
       const mins = String(now.getUTCMinutes()).padStart(2, '0');
@@ -248,9 +264,9 @@ export const Header: React.FC<HeaderProps> = ({
           }`} />
           <span>
             {oceanMode === 'LIVE'
-              ? (modelRangeLabel
-                  ? `LIVE OCEAN · INCOIS HYCOM · ${modelRangeLabel}`
-                  : 'LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE')
+              ? (modelRanges.length === 0
+                  ? 'LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE'
+                  : `${liveClaim ? 'LIVE OCEAN' : 'LATEST MODEL DATA · NOT LIVE'} · INCOIS HYCOM · ${ageText ?? 'AGE UNKNOWN'}`)
               : oceanMode === 'HISTORICAL'
                 ? (cyclone
                     ? `HISTORICAL REPLAY · ${cyclone.name} (${cyclone.track[0]?.timestamp?.slice(0, 4) ?? '—'}) · NOAA IBTrACS`
@@ -262,14 +278,19 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="text-white/15 shrink-0">│</span>
 
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-slate-400">{oceanMode === 'LIVE' ? 'MODEL TIME:' : 'STATUS:'}</span>
+          <span className="text-slate-400">{oceanMode === 'LIVE' ? 'STATUS:' : 'STATUS:'}</span>
           {oceanMode === 'LIVE' ? (
-            modelRangeLabel ? (
+            modelRanges.length > 0 ? (
               <span
                 className="text-cyan-300 font-bold"
-                title={`${modelDateRange?.steps} real model time step(s) available: ${formatModelDate(modelDateRange?.start)} → ${formatModelDate(modelDateRange?.end)}`}
+                title={
+                  modelAge
+                    ? `Newest model time: ${formatModelDate(modelAge.newest)} (${modelAge.label}). ` +
+                      `${liveClaim ? 'Within' : 'Outside'} the ${LIVE_FRESHNESS_LIMIT_HOURS} h freshness window.`
+                    : undefined
+                }
               >
-                {modelRangeLabel}
+                {ageText ?? 'MODEL TIME UNKNOWN'}
               </span>
             ) : (
               <span className="text-amber-300 font-bold">UNAVAILABLE</span>
@@ -280,6 +301,26 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-cyan-300 font-bold">SIMULATION</span>
           )}
         </div>
+
+        {/* Both windows when the surface and depth-resolved runs differ, so one
+            range never stands in for the other. */}
+        {oceanMode === 'LIVE' &&
+          modelRanges.map((range) => (
+            <div key={range.label} className="flex items-center gap-1 shrink-0">
+              <span className="text-white/15">│</span>
+              <span className="text-slate-400">{range.label}:</span>
+              <span
+                className="text-slate-200 font-bold"
+                title={
+                  range.label === 'DEPTH'
+                    ? 'Depth-resolved HYCOM run (currents, temperature, salinity, TCHP by depth)'
+                    : 'Surface HYCOM run (SST, salinity, currents, TCHP at the surface)'
+                }
+              >
+                {range.text}
+              </span>
+            </div>
+          ))}
 
         {oceanMode === 'LIVE' && (
           <>

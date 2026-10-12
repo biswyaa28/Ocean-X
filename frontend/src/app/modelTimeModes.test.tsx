@@ -153,7 +153,9 @@ describe('default mode', () => {
   it('opens on LIVE OCEAN, not HISTORICAL REPLAY', async () => {
     render(<Home />);
 
-    await screen.findByText(/LIVE OCEAN · INCOIS HYCOM · 2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC/i);
+    // The window is published in its own ribbon field, with its age.
+    await screen.findByText('2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC');
+    expect(screen.getAllByText(/LATEST MODEL RUN ·/).length).toBeGreaterThan(0);
     // No cyclone provenance anywhere in LIVE.
     expect(screen.queryByText(/HISTORICAL REPLAY ·/)).not.toBeInTheDocument();
     expect(screen.queryByText(/IBTrACS/)).not.toBeInTheDocument();
@@ -189,7 +191,8 @@ describe('HISTORICAL REPLAY model-time badge', () => {
   async function renderReplay() {
     getLayerData.mockResolvedValue(layerPayload(MODEL_TIMES[2]));
     render(<Home />);
-    await screen.findByText(/LIVE OCEAN · INCOIS HYCOM/i);
+    // Wait for the model window to have arrived.
+    await screen.findByText('2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC');
     fireEvent.click(screen.getByRole('button', { name: /HISTORICAL REPLAY/i }));
   }
 
@@ -222,7 +225,8 @@ describe('HISTORICAL REPLAY model-time badge', () => {
   it('no badge when no model layer is on screen', async () => {
     getLayers.mockResolvedValue([]);
     render(<Home />);
-    await screen.findByText(/LIVE OCEAN · INCOIS HYCOM/i);
+    // Wait for the model window to have arrived.
+    await screen.findByText('2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC');
     fireEvent.click(screen.getByRole('button', { name: /HISTORICAL REPLAY/i }));
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30));

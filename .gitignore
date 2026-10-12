@@ -53,6 +53,13 @@ backend/data/processed/**/*.json
 !backend/data/processed/ocean/argo/argo_bob_metadata.json
 !backend/data/processed/ocean/incois_hycom_bob_metadata.json
 
+# ...EXCEPT the demo subset, which IS committed
+# backend/data/demo holds a coarsened subset of the REAL INCOIS HYCOM runs
+# (~23 MB, float32+zlib) so a fresh clone has real ocean data to show. It is
+# never synthetic - it is thinned, never re-invented. Regenerate with
+# backend/scripts/make_demo_subset.py.
+!backend/data/demo/**/*.nc
+
 
 # IDE & OS
 .vscode/

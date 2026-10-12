@@ -6,17 +6,22 @@ Data handling policy
    generated Bay-of-Bengal surface NetCDF) are NOT required to run the unit
    test suite.
 
-2. When production data is ABSENT, this conftest points the application's
-   dataset paths at small SYNTHETIC schema-compatible fixtures committed under
-   backend/tests/fixtures/. This is announced with a clear banner - it is
-   never a silent substitution. The fixtures contain constant placeholder
-   values and are used ONLY to validate code paths, API contracts and schema
-   assumptions - never as scientific evidence.
+2. When production data is ABSENT but the committed REAL demo subset is
+   present (backend/data/demo), nothing is overridden: the application
+   resolves the subset itself, so a fresh clone exercises the same real data it
+   serves. The banner says so.
 
-3. When production data IS installed, no override happens and the tests
+3. When neither production data NOR the demo subset is present, this conftest
+   points the application's dataset paths at small SYNTHETIC schema-compatible
+   fixtures committed under backend/tests/fixtures/. This is announced with a
+   clear banner - it is never a silent substitution. The fixtures contain
+   constant placeholder values and are used ONLY to validate code paths, API
+   contracts and schema assumptions - never as scientific evidence.
+
+4. When production data IS installed, no override happens and the tests
    exercise the REAL production data path end-to-end.
 
-4. True integration tests that specifically require the real production
+5. True integration tests that specifically require the real production
    datasets live in test_integration_hycom.py, are marked
    @pytest.mark.requires_real_hycom, and are SKIPPED with an explicit message
    when the data is not installed.
@@ -40,6 +45,8 @@ return corrupt data.
 import os
 import sys
 from pathlib import Path
+
+from app.core.config import settings
 
 TESTS_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = TESTS_DIR.parent
@@ -99,6 +106,21 @@ REAL_BOB_SUBSET_HYCOM_FILE = next(
     None,
 )
 
+# The committed demo subset. It is REAL INCOIS output, coarsened, so a clone
+# with no production files still has real model data to serve and to test
+# against. Resolved through settings so an OCEANX_DATA_DIR override moves both
+# the application and this decision together.
+DEMO_DIR = settings.DEMO_DIR
+DEMO_SUBSET_SURFACE_FILE = DEMO_DIR / "processed" / "ocean" / "incois_hycom_bob_surface.nc"
+DEMO_RUNS_DIR = DEMO_DIR / "raw" / "ocean" / "currents"
+DEMO_SUBSET_FILES = (
+    sorted(DEMO_RUNS_DIR.glob("RSMC_hycom_*.nc"), key=lambda p: p.name, reverse=True)
+    if DEMO_RUNS_DIR.exists()
+    else []
+)
+DEMO_SUBSET_FILE = DEMO_SUBSET_FILES[0] if DEMO_SUBSET_FILES else None
+DEMO_SUBSET_AVAILABLE = DEMO_SUBSET_FILE is not None and DEMO_SUBSET_SURFACE_FILE.exists()
+
 
 # An explicit FIXTURE run must be honoured even when real data happens to be
 # installed on this machine: settings.RAW_HYCOM_FILE ignores the env override
@@ -113,10 +135,29 @@ def real_hycom_available() -> bool:
     A forced FIXTURE run makes the application serve the committed fixtures
     even though real files may be installed, so it is not "real" for testing.
     """
-    return REAL_HYCOM_FILE is not None and not FIXTURE_MODE_REQUESTED
+    return (REAL_HYCOM_FILE is not None or DEMO_SUBSET_FILE is not None) and not FIXTURE_MODE_REQUESTED
 
 
-if not real_hycom_available():
+def demo_subset_available() -> bool:
+    """True when the committed real subset is the data under test."""
+    return REAL_HYCOM_FILE is None and DEMO_SUBSET_AVAILABLE and not FIXTURE_MODE_REQUESTED
+
+
+if demo_subset_available():
+    # No production HYCOM file, but the committed demo subset is real INCOIS
+    # output (coarsened). Letting the application resolve it keeps the test
+    # suite honest AND lets a fresh clone exercise the same data it serves.
+    print("=" * 72)
+    print("TEST MODE: REAL HYCOM — committed demo subset (no production files)")
+    print("=" * 72)
+    print(f"  surface: {DEMO_SUBSET_SURFACE_FILE}")
+    print(f"  depth:   {DEMO_SUBSET_FILE}")
+    print("Real model output at lower resolution and fewer time steps. Values are")
+    print("unaltered (subsampled), so these are scientific evidence at reduced")
+    print("coverage. Integration tests requiring the FULL production dataset are")
+    print("SKIPPED (see summary).")
+    print("=" * 72)
+elif not real_hycom_available():
     # Production HYCOM data is absent from this machine. Fall back to the
     # committed synthetic fixtures so unit tests validate code paths without
     # requiring multi-gigabyte scientific datasets.

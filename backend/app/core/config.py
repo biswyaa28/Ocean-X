@@ -51,13 +51,36 @@ class Settings:
         env = os.environ.get("OCEANX_DATA_DIR")
         return Path(env).resolve() if env else self.BASE_DIR / "data"
 
+    # -----------------------------------------------------------------------
+    # Committed demo subset
+    #
+    # Production HYCOM runs are hundreds of megabytes each and are not in git,
+    # so a fresh clone would have no ocean data at all. backend/data/demo holds
+    # a small SUBSET of the real runs — same values, coarsened grid, fewer
+    # times — which IS committed. It is a fallback, never a preference:
+    # installed production files always win.
+    # -----------------------------------------------------------------------
+    @property
+    def DEMO_DIR(self) -> Path:
+        env = os.environ.get("OCEANX_DEMO_DIR")
+        return Path(env).resolve() if env else self.DATA_DIR / "demo"
+
+    @property
+    def DEMO_RUNS_DIR(self) -> Path:
+        return self.DEMO_DIR / HYCOM_CURRENTS_DIR
+
     @property
     def PROCESSED_OCEAN_FILE(self) -> Path:
         # In FIXTURE mode: always use the committed surface fixture.
         if self.DATA_MODE == "FIXTURE":
             return self.FIXTURES_DIR / "hycom_surface_fixture.nc"
         env = os.environ.get("OCEANX_PROCESSED_OCEAN_FILE")
-        return Path(env).resolve() if env else self.DATA_DIR / "processed" / "ocean" / "incois_hycom_bob_surface.nc"
+        if env:
+            return Path(env).resolve()
+        production = self.DATA_DIR / "processed" / "ocean" / "incois_hycom_bob_surface.nc"
+        if production.exists():
+            return production
+        return self.DEMO_DIR / "processed" / "ocean" / "incois_hycom_bob_surface.nc"
 
     @property
     def PROCESSED_OCEAN_META(self) -> Path:
@@ -87,7 +110,16 @@ class Settings:
         env = os.environ.get("OCEANX_RAW_HYCOM_FILE")
         if env:
             return [Path(env).resolve()]
-        directory = self.HYCOM_RUNS_DIR
+        # Production runs first; the committed demo subset only answers when no
+        # production run is installed.
+        installed = self._runs_in(self.HYCOM_RUNS_DIR)
+        if installed:
+            return installed
+        return self._runs_in(self.DEMO_RUNS_DIR)
+
+    @staticmethod
+    def _runs_in(directory: Path) -> List[Path]:
+        """Every run file in ``directory``, newest first (full files lead)."""
         if not directory.exists():
             return []
         # Newest first: a subset/run filename embeds YYYYMMDD.
@@ -101,6 +133,35 @@ class Settings:
             if p.is_file() and not p.name.endswith("_bob_subset.nc")
         ]
         return sorted(full, key=lambda p: p.name, reverse=True) + candidates
+
+    @property
+    def DATA_SCOPE(self) -> str:
+        """How much of the real dataset is actually installed.
+
+        Reported by /status, /layers and /datasets so a reader can tell a
+        coarsened demo subset from the full product. Both are REAL HYCOM
+        output; only the resolution and the number of times differ.
+        """
+        if self.DATA_MODE == "FIXTURE":
+            return "FIXTURE (synthetic — not scientific evidence)"
+        if self._production_files_installed():
+            return "FULL"
+        return "DEMO SUBSET (real HYCOM, coarsened)"
+
+    @property
+    def DATA_SCOPE_IS_FULL(self) -> bool:
+        return self.DATA_SCOPE == "FULL"
+
+    def _production_files_installed(self) -> bool:
+        """True when the resolved ocean datasets live outside the demo dir."""
+        if self.DATA_MODE == "FIXTURE":
+            return False
+        if os.environ.get("OCEANX_RAW_HYCOM_FILE") or os.environ.get(
+            "OCEANX_PROCESSED_OCEAN_FILE"
+        ):
+            return True
+        production_surface = self.DATA_DIR / "processed" / "ocean" / "incois_hycom_bob_surface.nc"
+        return production_surface.exists() or bool(self._runs_in(self.HYCOM_RUNS_DIR))
 
     @property
     def RAW_HYCOM_FILE(self) -> Path:

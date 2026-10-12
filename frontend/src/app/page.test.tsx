@@ -135,10 +135,9 @@ describe('Home — HYCOM model depth slice integration', () => {
 
     render(<Home />);
 
-    // The header reports the dataset's own coverage instead of a cyclone.
-    expect(
-      await screen.findByText(/LIVE OCEAN · INCOIS HYCOM · 2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC/i)
-    ).toBeInTheDocument();
+    // The header reports the dataset's own coverage and its age, not a cyclone.
+    expect(await screen.findByText('2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC')).toBeInTheDocument();
+    expect(screen.getAllByText(/LATEST MODEL RUN ·/).length).toBeGreaterThan(0);
     expect(screen.getByText('1 PROFILES ±5 d')).toBeInTheDocument();
     // No hardcoded LIVE KPI values, and no cyclone provenance in LIVE mode.
     expect(screen.queryByText('22 KT')).not.toBeInTheDocument();

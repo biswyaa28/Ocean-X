@@ -11,7 +11,10 @@ import { describe, it, expect } from 'vitest';
 import {
   ARGO_WINDOW_DAYS,
   DEFAULT_MATCH_TOLERANCE_HOURS,
+  LIVE_FRESHNESS_LIMIT_HOURS,
   buildModelTimeline,
+  describeModelDataAge,
+  describeModelRanges,
   filterProfilesToWindow,
   formatModelDate,
   hoursBetween,
@@ -232,5 +235,76 @@ describe('track shape compatibility', () => {
     expect(typeof point.latitude).toBe('number');
     expect(typeof point.longitude).toBe('number');
     expect(point.status).toBe('OBSERVATION');
+  });
+});
+// ============================================================
+// Data age: a model run that is days old is not "live", and the
+// ribbon must say how old it is instead of implying now.
+// ============================================================
+describe('describeModelDataAge', () => {
+  const NOW = Date.parse('2026-10-12T12:00:00Z');
+
+  it('reports the age of the NEWEST model time', () => {
+    const age = describeModelDataAge(['2026-10-08T06:00:00Z', '2026-10-08T18:00:00Z'], NOW)!;
+    expect(age.hours).toBeCloseTo(90, 5);
+    expect(age.isLive).toBe(false);
+  });
+
+  it('is live within 24 hours and not live beyond it', () => {
+    expect(describeModelDataAge(['2026-10-12T06:00:00Z'], NOW)!.isLive).toBe(true); // 6 h old
+    expect(describeModelDataAge(['2026-10-11T12:00:00Z'], NOW)!.isLive).toBe(true); // exactly 24 h
+    expect(describeModelDataAge(['2026-10-11T11:00:00Z'], NOW)!.isLive).toBe(false); // 25 h old
+  });
+
+  it('labels the age in hours under two days and in days beyond', () => {
+    expect(describeModelDataAge(['2026-10-12T09:00:00Z'], NOW)!.label).toBe('3 h old');
+    expect(describeModelDataAge(['2026-10-10T12:00:00Z'], NOW)!.label).toBe('2 days old');
+    expect(describeModelDataAge(['2026-10-09T12:00:00Z'], NOW)!.label).toBe('3 days old');
+  });
+
+  it('says "under 1 h" rather than rounding a fresh run to zero', () => {
+    expect(describeModelDataAge(['2026-10-12T11:30:00Z'], NOW)!.label).toBe('under 1 h old');
+  });
+
+  it('never calls a future timestamp live', () => {
+    expect(describeModelDataAge(['2026-10-13T12:00:00Z'], NOW)!.isLive).toBe(false);
+  });
+
+  it('has no age at all when there is no readable model time', () => {
+    expect(describeModelDataAge([], NOW)).toBeNull();
+    expect(describeModelDataAge([undefined, 'nope'], NOW)).toBeNull();
+  });
+
+  it('uses a 24 h live limit', () => {
+    expect(LIVE_FRESHNESS_LIMIT_HOURS).toBe(24);
+  });
+});
+
+describe('describeModelRanges', () => {
+  it('reports both windows when they differ', () => {
+    const ranges = describeModelRanges(
+      { start: '2026-10-07T06:00:00.000000000', end: '2026-10-08T18:00:00.000000000' },
+      { start: '2026-10-10T06:00:00.000000000', end: '2026-10-17T00:00:00.000000000' }
+    );
+    expect(ranges).toEqual([
+      { label: 'SURFACE', text: '2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC' },
+      { label: 'DEPTH', text: '2026-10-10 06:00 UTC → 2026-10-17 00:00 UTC' },
+    ]);
+  });
+
+  it('reports a single window when both datasets cover the same times', () => {
+    const ranges = describeModelRanges(
+      { start: '2026-10-07T06:00:00.000000000', end: '2026-10-08T18:00:00.000000000' },
+      { start: '2026-10-07T06:00:00.000000000', end: '2026-10-08T18:00:00.000000000' }
+    );
+    expect(ranges).toEqual([
+      { label: 'MODEL', text: '2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC' },
+    ]);
+  });
+
+  it('never invents a range it does not have', () => {
+    expect(describeModelRanges(null, null)).toEqual([]);
+    expect(describeModelRanges({ start: '2026-10-07T06:00:00.000000000', end: '2026-10-07T06:00:00.000000000' }, null))
+      .toEqual([{ label: 'MODEL', text: '2026-10-07 06:00 UTC' }]);
   });
 });

@@ -52,6 +52,10 @@ class StatusResponse(BaseModel):
         data, not real production ocean measurements.
     mode: backward-compatible field.  "REAL" only when DATA_MODE==REAL
         and the production file is present; "SIMULATED" otherwise.
+    dataScope: how much of the real dataset is installed — "FULL", or
+        "DEMO SUBSET (real HYCOM, coarsened)" when the app is running on the
+        committed coarsened subset. A subset is still REAL output, so this is
+        reported separately from dataMode rather than degrading it.
     """
     mode: str
     backendConnected: bool = True
@@ -59,6 +63,7 @@ class StatusResponse(BaseModel):
     provider: str
     dataMode: DataModeType
     datasetSynthetic: bool
+    dataScope: str = "FULL"
 
 
 
@@ -219,6 +224,8 @@ class GISLayer(BaseModel):
     status: DataStatus
     description: str
     unit: Optional[str] = None
+    #: Resolution/time coverage actually installed for this dataset.
+    dataScope: str = "FULL"
 
 class KPIMetrics(BaseModel):
     activeCyclones: int
@@ -311,6 +318,7 @@ class DatasetInfo(BaseModel):
     time_range: Dict[str, str]
     time_steps_count: int
     variables: Dict[str, Any]
+    dataScope: str = "FULL"
 
 class ArgoObservationPoint(BaseModel):
     depth_m: float

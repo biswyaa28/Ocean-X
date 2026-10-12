@@ -936,6 +936,8 @@ export default function Home() {
   const modelTimeBadge =
     oceanMode === 'LIVE' ? null : modelTimeBadgeText(modelDatesOnScreen, currentPoint?.timestamp);
 
+  // Both published windows. They belong to two different HYCOM runs and
+  // routinely differ, so neither is allowed to stand in for the other.
   const modelDateRange = useMemo(() => {
     if (datasetTimestamps.length === 0) return null;
     return {
@@ -944,6 +946,15 @@ export default function Home() {
       steps: datasetTimestamps.length,
     };
   }, [datasetTimestamps]);
+
+  const modelDepthDateRange = useMemo(() => {
+    if (datasetDepthTimestamps.length === 0) return null;
+    return {
+      start: datasetDepthTimestamps[0],
+      end: datasetDepthTimestamps[datasetDepthTimestamps.length - 1],
+      steps: datasetDepthTimestamps.length,
+    };
+  }, [datasetDepthTimestamps]);
 
   return (
     <div className="w-screen h-screen overflow-hidden bg-[#05070a] flex flex-col relative font-sans text-slate-100 select-none">
@@ -962,6 +973,7 @@ export default function Home() {
         datasetLoaded={datasetLoaded}
         liveKpiAuthoritative={false}
         modelDateRange={modelDateRange}
+        modelDepthDateRange={modelDepthDateRange}
         argoProfileCount={argoProfileCount}
       />
 

@@ -85,6 +85,9 @@ def get_status():
         provider="INCOIS & NOAA IBTrACS",
         dataMode=data_mode,
         datasetSynthetic=dataset_synthetic,
+        # A coarsened REAL subset stays REAL data; the scope says how much of
+        # it is installed so a reader is never misled about the resolution.
+        dataScope=settings.DATA_SCOPE,
     )
 
 @router.get("/datasets", response_model=List[DatasetInfo])
@@ -107,6 +110,7 @@ def get_datasets():
             "end": timestamps[-1] if timestamps else ""
         },
         time_steps_count=len(timestamps),
+        dataScope=settings.DATA_SCOPE,
         variables=meta.get("variables", {
             "UVEL": "Eastward ocean current",
             "VVEL": "Northward ocean current",
@@ -136,6 +140,7 @@ def get_datasets():
             "end": ibtracs_times[-1] if ibtracs_times else ""
         },
         time_steps_count=ibtracs_points,
+        dataScope="FULL",
         variables={
             "LAT": "Latitude",
             "LON": "Longitude",
@@ -295,6 +300,9 @@ def get_layers():
     layer, which is always "REAL".
     """
     data_mode = settings.DATA_MODE
+    # The path may already resolve into the committed demo subset, so presence
+    # is not evidence of a production install — the scope is.
+    data_scope = settings.DATA_SCOPE
     production_available = (
         settings.PROCESSED_OCEAN_FILE.exists()
         or settings.RAW_HYCOM_FILE.exists()
@@ -318,7 +326,8 @@ def get_layers():
             active=True,
             status=hycom_status,
             description='INCOIS HYCOM ocean velocity vector field (u, v components)' + hycom_desc_suffix,
-            unit='m/s'
+            unit='m/s',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='sst',
@@ -327,7 +336,8 @@ def get_layers():
             active=False,
             status=hycom_status,
             description='INCOIS HYCOM sea surface temperature field' + hycom_desc_suffix,
-            unit='°C'
+            unit='°C',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='salinity',
@@ -336,7 +346,8 @@ def get_layers():
             active=False,
             status=hycom_status,
             description='INCOIS HYCOM sea surface salinity field' + hycom_desc_suffix,
-            unit='PSU'
+            unit='PSU',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='tchp',
@@ -345,7 +356,8 @@ def get_layers():
             active=False,
             status=hycom_status,
             description='INCOIS HYCOM tropical cyclone heat potential' + hycom_desc_suffix,
-            unit='kJ/cm²'
+            unit='kJ/cm²',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='ssh',
@@ -354,7 +366,8 @@ def get_layers():
             active=False,
             status=hycom_status,
             description='INCOIS HYCOM sea surface height anomaly' + hycom_desc_suffix,
-            unit='m'
+            unit='m',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='mld',
@@ -363,7 +376,8 @@ def get_layers():
             active=False,
             status=hycom_status,
             description='INCOIS HYCOM mixed layer depth' + hycom_desc_suffix,
-            unit='m'
+            unit='m',
+            dataScope=data_scope,
         ),
         GISLayer(
             id='argo',

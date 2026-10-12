@@ -243,15 +243,77 @@ directory (it installs from `frontend/package.json`).
 
 ## 💾 Data
 
-A fresh clone is **~68 MB** and runs. The multi-gigabyte ocean model is **not** in Git.
+A fresh clone runs the **whole app on real ocean data**. The multi-gigabyte
+HYCOM runs are not in Git, but a coarsened **subset of those same real files**
+is, so a new clone has SST, salinity, currents, TCHP, SSH, MLD, depth slices and
+a working Argo–model matchup without downloading anything.
 
-### Committed to Git (small, real, ships with the clone)
+### Committed to Git — real data, ships with the clone
 
 | Dataset | Path | Size | Notes |
 | :--- | :--- | :--- | :--- |
+| **HYCOM demo subset (surface)** | `backend/data/demo/processed/ocean/incois_hycom_bob_surface.nc` | 12.9 MB | Real INCOIS HYCOM surface field, 7 time steps (2026-10-07 06:00 → 2026-10-08 18:00 UTC), full 347×334 Bay-of-Bengal grid, float32 + zlib. |
+| **HYCOM demo subset (depth-resolved)** | `backend/data/demo/raw/ocean/currents/RSMC_hycom_20261004_bob_subset.nc` | 10.1 MB | Real INCOIS HYCOM run, 6 native depth levels (0, 17.5, 52.5, 125, 275, 500 m), 8 of 28 time steps (2026-10-03 06:00 → 2026-10-10 00:00 UTC), every 2nd LAT/LON point → 175×167 grid, float32 + zlib. |
 | NOAA IBTrACS North Indian Ocean | `backend/data/raw/cyclones/ibtracs/ibtracs.NI.list.v04r01.csv` | ~27 MB | Force-tracked despite the `backend/data/raw/` ignore rule. Cyclone tracks, seasons ≥ 2020. |
 | Argo profiles (23 floats / 23 profiles / 6,560 levels) | `backend/data/processed/ocean/argo/argo_bob_processed.json` | ~2.4 MB | Real GDAC/INCOIS data, Oct 2026, Bay of Bengal. Provenance in `argo_bob_metadata.json`. |
 | Synthetic schema fixtures | `backend/tests/fixtures/hycom_*.nc` | ~90 KB | `synthetic='true'` in the NetCDF attrs. `FIXTURE` mode / CI only — **not scientific evidence**. |
+
+**Total demo subset: 23 MB.** With IBTrACS and Argo that is ~52 MB of data in
+the clone.
+
+#### The demo subset is real data, thinned — never invented
+
+Both demo files are a **subsample of published INCOIS output**. Every kept
+number is the number the publisher wrote, at the index it was written at:
+no interpolation, no averaging, no synthetic fill, no invented timestamps. Only
+whole grid points and whole time steps are dropped. Each file records this in
+its NetCDF global attributes:
+
+```
+subset_of          RSMC_hycom_20261004_bob_subset.nc
+subset_method      coarsened real HYCOM subset: every 2nd LAT and 2nd LON grid
+                   point, 8 of 28 time steps kept; values subsampled only,
+                   never interpolated, averaged or replaced
+data_status        REAL          # no `synthetic` flag is ever written
+time_steps_kept    8
+time_steps_source  28
+```
+
+The time steps were chosen so the Argo–model matchup stays meaningful: all 23
+committed profiles land within the 24 h matchup window (mean separation 6.4 h),
+versus the ~10 that were required.
+
+#### `dataScope`: the app tells you which one you are looking at
+
+`/status`, `/layers` and `/datasets` report a `dataScope`:
+
+| Value | Meaning |
+| :--- | :--- |
+| `FULL` | The production HYCOM files are installed at their normal paths. |
+| `DEMO SUBSET (real HYCOM, coarsened)` | Running on the committed 23 MB subset. Real HYCOM values at lower resolution and fewer time steps. |
+
+The data stays `REAL` in both cases — a coarsened real subset is not synthetic,
+and labelling it as such would make the app hide data it can honestly show. In
+the header ribbon, Live mode publishes **both** model windows when they differ
+(they come from two different HYCOM runs) and states how old the newest one is;
+data older than 24 h is never called "live".
+
+#### Regenerating the demo subset
+
+Only needed when the installed HYCOM runs change. The script thins the files
+that are already on disk — it never creates data of its own:
+
+```bash
+cd backend
+python scripts/make_demo_subset.py --dry-run                     # report the plan
+python scripts/make_demo_subset.py     --depth-run RSMC_hycom_20261004_bob_subset.nc     --lat-stride 2 --lon-stride 2 --time-step 4                  # the committed defaults
+python scripts/make_demo_subset.py --lat-stride 4 --lon-stride 4 # a smaller subset (~7 MB)
+```
+
+The script prints what it wrote and refuses to leave anything over the 60 MB
+hard limit (40 MB target). Useful flags: `--depth-run` (which run to thin),
+`--surface-lat-stride/--surface-lon-stride` (the surface file is kept at full
+resolution by default), `--time-step`, `--compression-level`, `--demo-dir`.
 
 ### NOT in Git — installed separately (~2.3 GB)
 
@@ -260,7 +322,9 @@ A fresh clone is **~68 MB** and runs. The multi-gigabyte ocean model is **not** 
 | HYCOM daily subsets (6 runs) | `backend/data/raw/ocean/currents/RSMC_hycom_*.nc` | ~379 MB each. Real INCOIS output (`PyFerret V7.63`, CF-1.6). |
 | Processed surface field | `backend/data/processed/ocean/incois_hycom_bob_surface.nc` | ~13.5 MB. Derived from the runs above. |
 
-Both are covered by `.gitignore`. Install with:
+Both are covered by `.gitignore`. **When they are installed they take priority**
+and `dataScope` becomes `FULL`; the demo subset is only a fallback for when
+nothing is installed.
 
 ```bash
 python scripts/setup-data.py --check      # what is present / missing
@@ -269,7 +333,11 @@ python scripts/setup-data.py --process    # regenerate the processed surface fie
 python scripts/check-data.py              # preflight: AVAILABLE / MISSING / INVALID
 ```
 
-**Without the model data the ocean layers, depth slices, currents and the Argo–model matchup are all unavailable** and the API says so explicitly rather than substituting values. Run the backend with `OCEANX_DATA_MODE=FIXTURE` to exercise the full pipeline on committed synthetic fixtures.
+**Without any HYCOM file at all** (no production data *and* no demo subset) the
+ocean layers, depth slices, currents and the Argo–model matchup are unavailable,
+and the API says so explicitly rather than substituting values. Run the backend
+with `OCEANX_DATA_MODE=FIXTURE` to exercise the full pipeline on committed
+synthetic fixtures.
 
 > Legacy filename note: `arco_bob` / `incois_hycom_bob` is a historical tag for **BoB** = **Bay of Bengal**, not a single float.
 

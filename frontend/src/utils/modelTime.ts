@@ -165,6 +165,84 @@ export function formatModelDate(value: string | null | undefined): string | null
   );
 }
 
+/** Beyond this age a model run is not described as live. */
+export const LIVE_FRESHNESS_LIMIT_HOURS = 24;
+
+/** A dataset time window, as the backend published it. */
+export interface ModelTimeRange {
+  start: string;
+  end: string;
+  /** Informational: how many time steps the window holds. */
+  steps?: number;
+}
+
+/**
+ * How old the newest model data on screen is, and whether "live" is a
+ * defensible word for it.
+ *
+ * A mode called LIVE OCEAN showing a run from four days ago is not live, and
+ * saying so is cheaper than quietly renaming the mode. Unknown dates have no
+ * age at all — never "0 h old".
+ */
+export function describeModelDataAge(
+  timestamps: readonly (string | null | undefined)[],
+  nowMs: number = Date.now()
+): { hours: number; label: string; isLive: boolean; newest: string } | null {
+  const newest = latestModelTimestamp(
+    timestamps.filter((value): value is string => typeof value === 'string')
+  );
+  const newestMs = parseTimestampMs(newest);
+  if (newestMs === null) return null;
+
+  const hours = (nowMs - newestMs) / MS_PER_HOUR;
+  const age = Math.abs(hours);
+  let label: string;
+  if (age < 1) label = 'under 1 h old';
+  else if (age < 48) label = `${Math.round(age)} h old`;
+  else label = `${Math.round(age / 24)} days old`;
+
+  return {
+    hours,
+    label,
+    // A timestamp in the future is a clock/zone disagreement, not freshness:
+    // it is not evidence that the data is current.
+    isLive: hours >= 0 && hours <= LIVE_FRESHNESS_LIMIT_HOURS,
+    newest: newest as string,
+  };
+}
+
+/**
+ * The model windows to publish. Two datasets (surface and depth-resolved) are
+ * different HYCOM runs and routinely cover different times; collapsing them into
+ * one range would misdate one of them.
+ */
+export function describeModelRanges(
+  surface: ModelTimeRange | null | undefined,
+  depth?: ModelTimeRange | null
+): { label: string; text: string }[] {
+  const render = (range: ModelTimeRange): string => {
+    const start = formatModelDate(range.start);
+    const end = formatModelDate(range.end);
+    if (!start) return '';
+    return start === end ? start : `${start} → ${end}`;
+  };
+
+  if (!surface) return depth ? [{ label: 'DEPTH', text: render(depth) }] : [];
+  const surfaceText = render(surface);
+  if (!surfaceText) return [];
+  if (!depth) return [{ label: 'MODEL', text: surfaceText }];
+
+  const depthText = render(depth);
+  // Same window on both: one label, because there is only one window to see.
+  if (!depthText || depthText === surfaceText) {
+    return [{ label: 'MODEL', text: surfaceText }];
+  }
+  return [
+    { label: 'SURFACE', text: surfaceText },
+    { label: 'DEPTH', text: depthText },
+  ];
+}
+
 /**
  * The HISTORICAL REPLAY model-time badge.
  *
