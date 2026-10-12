@@ -20,6 +20,7 @@ import {
 } from '../utils/rasterGen';
 import { perfMonitor } from '../utils/perfMonitor';
 import { observedRadii, cycloneEyeLabel } from '../utils/cycloneObservation';
+import { formatModelDate } from '../utils/modelTime';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
@@ -1221,6 +1222,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       };
     }
 
+    // A model layer is only drawn at a time it can be labelled with. Without
+    // one there is nothing to draw yet, and requesting without it would fetch
+    // the grid for the backend's default time instead.
+    if (!timestamp) {
+      if (rasterLayerRef.current) {
+        viewer.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
+        requestRenderRef.current();
+      }
+      releaseRasterSource();
+      return () => {
+        abortController.abort();
+      };
+    }
+
     const targetLayer: 'sst' | 'salinity' | 'tchp' = showSST ? 'sst' : showSaln ? 'salinity' : 'tchp';
 
     async function loadRasterOverlay() {
@@ -1530,7 +1546,9 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         cycloneLat={activePt?.latitude || 18.2}
         cycloneLon={activePt?.longitude || 88.4}
         maxWindKts={activePt?.maxWindKts ?? undefined}
-        timestamp={activePt?.timestamp || '2026-09-08T12:00:00Z'}
+        // The ocean-data time, not a cyclone fix: this field is generated for
+        // the model layer that is actually on screen.
+        timestamp={timestamp || undefined}
       />
 
       {/* Section 11 & Section 7 Compact Data Context Legends (Corrected Source Label) */}
@@ -1573,11 +1591,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               {currentFieldStatus !== 'UNAVAILABLE' && (
                 <>
                   <span className="text-slate-500">│</span>
-                  <span className="text-slate-300">
-                    {currentFieldStatus === 'REAL' && currentFieldMetadata
-                      ? `${(currentFieldMetadata.timestamp || '').replace('T', ' ').slice(0, 16)}`
-                      : (currentField?.timestamp || '').replace('T', ' ').slice(0, 16)}
-                  </span>
+                  {currentFieldStatus === 'REAL' && currentFieldMetadata ? (
+                    // Real field: the model time the vectors actually come from.
+                    <span className="text-slate-300">
+                      {formatModelDate(currentFieldMetadata.timestamp)?.replace(' UTC', '') ?? 'UNKNOWN DATE'}
+                    </span>
+                  ) : (
+                    // Analytical fallback: it has no real date of its own, so it
+                    // must not borrow the track point's.
+                    <span className="text-amber-300" title="This is an analytical fallback field. It is not model output, so it has no real model date.">
+                      NO REAL DATA DATE
+                    </span>
+                  )}
                   <span className="text-slate-500">│</span>
                   {currentFieldStatus === 'REAL' && currentFieldMetadata ? (
                     currentFieldMetadata.matched_depth_m === 0 ? (
@@ -1618,6 +1643,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             <span className="text-slate-200 font-semibold">{depthSlicePayload.variable.toUpperCase()}</span>
             <span className="text-slate-500">│</span>
             <span className="text-indigo-300 font-bold">{depthSlicePayload.matched_depth_m} m MODEL LEVEL</span>
+            <span className="text-slate-500">│</span>
+            {/* The model time this slice actually holds. */}
+            <span className="text-slate-200 font-semibold" title={`HYCOM model time of this slice: ${depthSlicePayload.timestamp}`}>
+              {formatModelDate(depthSlicePayload.timestamp)?.replace(' UTC', '') ?? 'UNKNOWN DATE'}
+            </span>
             <span className="text-slate-500">│</span>
             <span className="text-slate-300">{depthSlicePayload.units}</span>
             {depthSliceRender && (

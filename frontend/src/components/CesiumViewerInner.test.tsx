@@ -67,6 +67,9 @@ function renderViewer(props: Partial<ViewerProps> = {}) {
       cyclone={null}
       currentTrackIndex={0}
       layers={layers}
+      // A model layer is only ever drawn at a time it can be labelled with, and
+      // the app always supplies one; the default keeps that contract here.
+      timestamp="2026-09-07T06:00:00.000000000"
       {...props}
     />
   );
@@ -521,6 +524,7 @@ function rerenderViewer(
       cyclone={null}
       currentTrackIndex={0}
       layers={layers}
+      timestamp="2026-09-07T06:00:00.000000000"
       {...props}
     />
   );

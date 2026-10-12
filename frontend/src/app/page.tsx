@@ -32,29 +32,29 @@ import {
   DepthSliceDisplaySettings,
   resolveDepthSliceRender,
 } from '../utils/depthSliceViz';
+import {
+  buildModelTimeline,
+  filterProfilesToWindow,
+  latestModelTimestamp,
+  modelTimeBadgeText,
+} from '../utils/modelTime';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
 
-const DEMO_TRACK_TIMESTEPS: CycloneTrackPoint[] = [
-  { id: 'demo-ts-0', timestamp: '2026-09-07T06:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-1', timestamp: '2026-09-08T12:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-2', timestamp: '2026-09-09T18:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-3', timestamp: '2026-09-11T00:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-4', timestamp: '2026-09-12T06:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-5', timestamp: '2026-09-14T00:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-];
-
 export default function Home() {
   const [mode, setMode] = useState<AppMode>('OPERATIONS');
-  // Global Ocean Mode Single Source of Truth (Requirement #1)
-  const [oceanMode, setOceanMode] = useState<OceanMode>('HISTORICAL');
+  // Global Ocean Mode Single Source of Truth (Requirement #1).
+  //
+  // LIVE is the default because it is the only mode whose clock is the
+  // dataset's own: the timeline spans the real HYCOM model times and no
+  // cyclone is shown. HISTORICAL is opt-in.
+  const [oceanMode, setOceanMode] = useState<OceanMode>('LIVE');
   const [dataStatus, setDataStatus] = useState<DataStatus>('SIMULATED');
   const [backendConnected, setBackendConnected] = useState(false);
   // Phase 3: explicit data mode state
   const [dataMode, setDataMode] = useState<DataModeType>('REAL');
   const [datasetSynthetic, setDatasetSynthetic] = useState(false);
   const [datasetLoaded, setDatasetLoaded] = useState(false);
-  const [liveTimestamp, setLiveTimestamp] = useState(() => new Date().toISOString());
 
   // Single unified active tool state for all right-side tools
   const [activeRightTool, setActiveRightTool] = useState<ActiveRightTool>('storm');
@@ -68,13 +68,14 @@ export default function Home() {
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
   const [riskLoading, setRiskLoading] = useState(false);
 
-  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(5);
+  // -1 = not positioned yet; effectiveTrackIndex resolves the per-mode default.
+  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(-1);
   const [targetLocation, setTargetLocation] = useState<{ lat: number; lon: number; height?: number } | null>(null);
 
   // Inspection Data State & Dynamic Legend Bounds
   const [inspectedCoords, setInspectedCoords] = useState<{ lat: number; lon: number } | null>({ lat: 18.2247, lon: 88.4000 });
   const [inspectionData, setInspectionData] = useState<InspectionData | null>(null);
-  const [legendBounds, setLegendBounds] = useState<{ min: number; mid: number; max: number; unit: string; layerName: string } | null>(null);
+  const [legendBounds, setLegendBounds] = useState<{ min: number; mid: number; max: number; unit: string; layerName: string; timestamp?: string } | null>(null);
   const [astroData, setAstroData] = useState<AstronomicalData | null>(null);
 
   // HYCOM model depth slice (Phase 1B/1C) — separate from surface layers.
@@ -95,6 +96,10 @@ export default function Home() {
   const [depthSliceLoading, setDepthSliceLoading] = useState(false);
   const [depthSliceUnavailable, setDepthSliceUnavailable] = useState<string | null>(null);
   const [datasetTimestamps, setDatasetTimestamps] = useState<string[]>([]);
+  // The depth-resolved HYCOM file is a DIFFERENT run from the surface file and
+  // has its own window, so each layer is asked for a time its own dataset
+  // really has — and each is labelled with the date it came from.
+  const [datasetDepthTimestamps, setDatasetDepthTimestamps] = useState<string[]>([]);
 
   // ============================================================
   // Real HYCOM current field (Phase 1E) — UVEL/VVEL particles.
@@ -137,7 +142,6 @@ export default function Home() {
 
       if (cyclones.length > 0) {
         setCyclone(cyclones[0]);
-        setCurrentTrackIndex(cyclones[0].currentTrackIndex);
       }
       const cycloneLayer: GISLayer = {
         id: 'cyclone',
@@ -165,7 +169,7 @@ export default function Home() {
         apiBase: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api',
         cycloneSource: cyclones[0]?.sourceAttribution || 'Demo Track',
         currentSource: status.backendConnected ? 'INCOIS RSMC HYCOM (UVEL/VVEL, per-status in legend)' : 'Simulated Vector Field',
-        timelineSource: 'NOAA IBTrACS Track Timestamp',
+        timelineSource: 'HYCOM model times (LIVE) / NOAA IBTrACS track timestamps (HISTORICAL REPLAY)',
         riskSource: status.backendConnected ? 'Backend Risk Engine (0-39 LOW, 40-64 ELEVATED, 65-84 HIGH, 85-100 CRITICAL)' : 'Demo Risk Rules'
       });
     }
@@ -184,9 +188,12 @@ export default function Home() {
         if (!cancelled && Array.isArray(data.available_timestamps)) {
           setDatasetTimestamps(data.available_timestamps);
         }
+        if (!cancelled && Array.isArray(data.available_depth_timestamps)) {
+          setDatasetDepthTimestamps(data.available_depth_timestamps);
+        }
       } catch {
         // Backend unreachable: picker stays empty; slice requests still work
-        // (backend defaults to the first available model time).
+        // (backend defaults to its latest available model time).
       }
     }
     if (backendConnected) loadTimestamps();
@@ -195,19 +202,56 @@ export default function Home() {
     };
   }, [backendConnected]);
 
-  // Mode-dependent track and point resolution (Requirement #1 & #11)
-  const liveAuthoritative = backendConnected && dataStatus === 'REAL' && dataMode === 'REAL' && !datasetSynthetic && datasetLoaded;
-  const activeTrack: CycloneTrackPoint[] = oceanMode === 'LIVE'
-    ? (liveAuthoritative ? (cyclone?.track || []) : [])
-    : (cyclone?.track || DEMO_TRACK_TIMESTEPS);
+  // ============================================================
+  // Timeline: one per mode, each on its own real clock.
+  //
+  // LIVE  -> the real HYCOM model times the backend reported. No cyclone is
+  //          shown and no track point is invented: the model simply has a
+  //          finite set of times, and those are them.
+  // HISTORICAL REPLAY -> the NOAA IBTrACS best-track timestamps.
+  // ============================================================
+  const modelTimeline = useMemo(() => buildModelTimeline(datasetTimestamps), [datasetTimestamps]);
 
-  const currentPoint = activeTrack[Math.min(currentTrackIndex, activeTrack.length - 1)] || activeTrack[0];
+  const activeTrack: CycloneTrackPoint[] =
+    oceanMode === 'LIVE' ? modelTimeline : (cyclone?.track || []);
+
+  // -1 means "not positioned yet": each mode then opens on its own real
+  // default — LIVE on the newest model time, HISTORICAL REPLAY on the storm's
+  // peak fix. Deriving it (rather than setting it in an effect) means the
+  // first model-layer request already carries the final timestamp instead of
+  // firing once at a stale index and again at the real one.
+  const effectiveTrackIndex =
+    currentTrackIndex < 0
+      ? oceanMode === 'LIVE'
+        ? Math.max(0, modelTimeline.length - 1)
+        : (cyclone?.currentTrackIndex ?? 0)
+      : currentTrackIndex;
+
+  const currentPoint =
+    activeTrack[Math.min(effectiveTrackIndex, activeTrack.length - 1)] || activeTrack[0];
 
   // Single source of truth for the ocean-data timestamp. The legend effect and
   // the Cesium raster overlay MUST resolve to the same key or Phase 2B's
   // layer-data cache would key them separately and fetch the full grid twice.
-  const effectiveTimestamp =
-    oceanMode === 'LIVE' ? liveTimestamp : currentPoint?.timestamp;
+  //
+  // It is ALWAYS a model time the dataset really has:
+  //   LIVE       -> the model time the marker sits on;
+  //   HISTORICAL -> the newest model time available, because no model time
+  //                 corresponds to a 2020-2025 replay point. That substitution
+  //                 is not hidden: the model-time badge states the model date
+  //                 and the replay date side by side.
+  const modelDataTimestamp = useMemo<string | undefined>(() => {
+    if (oceanMode === 'LIVE') return modelTimeline[effectiveTrackIndex]?.timestamp;
+    return latestModelTimestamp(datasetTimestamps) ?? undefined;
+  }, [oceanMode, modelTimeline, effectiveTrackIndex, datasetTimestamps]);
+
+  // Time the depth-resolved instrument and the current field are requested at.
+  // Same reasoning as modelDataTimestamp, applied to the depth run's calendar:
+  // asking a depth dataset for a surface-file time is a guaranteed miss.
+  const depthModelTimestamp = useMemo<string | undefined>(
+    () => latestModelTimestamp(datasetDepthTimestamps) ?? undefined,
+    [datasetDepthTimestamps]
+  );
 
   // The header SST chip shows the basin-mean SST the backend actually used for
   // the heuristic, rather than a client-invented constant.
@@ -242,18 +286,23 @@ export default function Home() {
         ? null
         : riskAssessment?.unavailableReason ?? 'No risk assessment received from the backend.',
       coastalRiskWeights: riskAvailable ? riskAssessment!.weights : null,
+      // The score was computed from the model's ocean state at ITS date, which
+      // is not necessarily the storm's. Both travel with the number so the
+      // chip can label the mismatch instead of implying a match.
+      coastalRiskModelTimestamp: riskAvailable ? riskAssessment!.modelTimestamp ?? null : null,
+      coastalRiskTimeMatched: riskAvailable ? riskAssessment!.timeMatched === true : null,
       dataConfidencePct: oceanMode === 'SCENARIO' ? 75 : 92,
       forecastConfidencePct: currentPoint.forecastConfidencePct || 92,
     };
-  }, [cyclone, currentPoint, oceanMode, liveAuthoritative, riskAssessment, avgSSTFromRisk]);
+  }, [cyclone, currentPoint, oceanMode, riskAssessment, avgSSTFromRisk]);
 
   // Memoized callbacks: stable references prevent cascading re-renders of the
   // memoized CesiumGlobe subtree on unrelated top-level state changes.
   const handleOceanModeChange = useCallback((newMode: OceanMode) => {
     setOceanMode(newMode);
-    setCurrentTrackIndex(0);
+    // Back to "not positioned": the incoming mode picks its own real default.
+    setCurrentTrackIndex(-1);
     if (newMode === 'LIVE') {
-      setLiveTimestamp(new Date().toISOString());
       setLayers((prev) =>
         prev.map((l) => {
           if (l.id === 'sst') return { ...l, active: true };
@@ -296,9 +345,36 @@ export default function Home() {
     setSelectedArgoProfile(profile);
   }, []);
 
+  // ============================================================
+  // Argo in-situ profiles, filtered to the time on screen.
+  //
+  // A float that profiled on 3 October is real data, but it does not belong to
+  // 8 October. In LIVE the marker sits on a model time, so only profiles
+  // observed within ARGO_WINDOW_DAYS of it are drawn and the count is shown.
+  // In HISTORICAL REPLAY the marker is a cyclone fix from years away from the
+  // observations, so every profile stays visible and nothing claims a match.
+  // ============================================================
+  const visibleArgoProfiles = useMemo<ArgoProfile[]>(
+    () =>
+      oceanMode === 'LIVE'
+        ? filterProfilesToWindow(argoProfiles, modelTimeline[effectiveTrackIndex]?.timestamp)
+        : argoProfiles,
+    [argoProfiles, oceanMode, modelTimeline, effectiveTrackIndex]
+  );
+  const argoProfileCount = visibleArgoProfiles.length;
+
+  // LIVE OCEAN shows no cyclone. Dropping the cyclone layer here — rather than
+  // only hiding the track entity — keeps it out of the layer panel and stops
+  // it from becoming the inspector's active layer, which would put a cyclone
+  // card on screen in a mode that has no cyclone.
+  const visibleLayers = useMemo<GISLayer[]>(
+    () => (oceanMode === 'LIVE' ? layers.filter((l) => l.id !== 'cyclone') : layers),
+    [layers, oceanMode]
+  );
+
   const activeLayer =
-    layers.find((l) => l.active && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) ||
-    layers.find((l) => l.active) ||
+    visibleLayers.find((l) => l.active && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) ||
+    visibleLayers.find((l) => l.active) ||
     null;
 
   const hazard = useMemo<Hazard | null>(() => {
@@ -322,7 +398,7 @@ export default function Home() {
       setRiskAssessment(null);
       return;
     }
-    const idx = Math.min(currentTrackIndex, activeTrack.length - 1);
+    const idx = Math.min(effectiveTrackIndex, activeTrack.length - 1);
     const controller = new AbortController();
     let cancelled = false;
     setRiskLoading(true);
@@ -341,7 +417,7 @@ export default function Home() {
       cancelled = true;
       controller.abort();
     };
-  }, [cyclone, currentTrackIndex, activeTrack, oceanMode]);
+  }, [cyclone, effectiveTrackIndex, activeTrack, oceanMode]);
 
   // Fetch Dynamic Legend Bounds from API (Requirement #16)
   // Aborts in-flight layer queries on rapid layer/timeline toggling.
@@ -353,11 +429,19 @@ export default function Home() {
         setLegendBounds(null);
         return;
       }
+      // No model time means no dateable data. Requesting anyway would download
+      // the whole grid for the backend's default time — a second full fetch
+      // under a different cache key, for a layer whose legend would carry no
+      // date.
+      if (!modelDataTimestamp) {
+        setLegendBounds(null);
+        return;
+      }
       try {
         // Phase 2B: this shares the ApiProvider layer-data cache/dedup with the
         // Cesium raster overlay, so the same layer + timestamp is fetched once
         // (no duplicate HTTP request and no second full-grid download).
-        const data = await apiProvider.getLayerData(activeLayer.id, effectiveTimestamp, 3, abortController.signal);
+        const data = await apiProvider.getLayerData(activeLayer.id, modelDataTimestamp, 3, abortController.signal);
         if (abortController.signal.aborted) return;
         if (data && data.grid && (data.grid.values || data.grid.u)) {
           // Single-pass bounds over the valid cells. Deliberately NOT
@@ -402,6 +486,10 @@ export default function Home() {
               max,
               unit: data.units || activeLayer.unit || '',
               layerName: activeLayer.name,
+              // The model time the grid REALLY holds. The backend resolves an
+              // unmatched request to the nearest time it has, so this is the
+              // only date the legend may be labelled with.
+              timestamp: data.timestamp,
             });
             return;
           }
@@ -417,16 +505,33 @@ export default function Home() {
     return () => {
       abortController.abort();
     };
-  }, [activeLayer?.id, effectiveTimestamp, activeLayer]);
+  }, [activeLayer?.id, modelDataTimestamp, activeLayer]);
 
   // HYCOM model depth slice fetch (Phase 1B). Aborts in-flight requests on
   // rapid depth/variable/timestamp changes; the latest selection wins.
+  //
+  // The request time is the user's explicit choice, or the depth run's newest
+  // real time. It is never left to the server default: a slice that arrived
+  // without a stated time could not be labelled with one.
+  const depthRequestTimestamp = depthSliceSelection.timestamp ?? depthModelTimestamp;
+
   useEffect(() => {
     if (!depthSliceVisible) {
       void Promise.resolve().then(() => {
         setDepthSliceMetadata(null);
         setDepthSliceLoading(false);
         setDepthSliceUnavailable(null);
+      });
+      return;
+    }
+
+    if (!depthRequestTimestamp) {
+      void Promise.resolve().then(() => {
+        setDepthSliceMetadata(null);
+        setDepthSliceLoading(false);
+        setDepthSliceUnavailable(
+          'The HYCOM depth-resolved run reports no available model times, so no depth slice can be requested or dated.'
+        );
       });
       return;
     }
@@ -452,7 +557,7 @@ export default function Home() {
       return apiProvider.getDepthSlice(
         depthSliceSelection.variable,
         depthSliceSelection.depthM,
-        depthSliceSelection.timestamp,
+        depthRequestTimestamp,
         3,
         signal
       );
@@ -479,7 +584,7 @@ export default function Home() {
     return () => {
       abortController.abort();
     };
-  }, [depthSliceVisible, depthSliceSelection]);
+  }, [depthSliceVisible, depthSliceSelection, depthRequestTimestamp]);
 
   // ============================================================
   // Real current-field fetch (Phase 1E).
@@ -494,25 +599,28 @@ export default function Home() {
     depthSliceVisible && depthSliceSelection.variable === 'currents';
 
   // Data coordinates of the current field request:
-  // - following the depth-slice instrument: its depth + timestamp
-  // - otherwise: surface (0 m) at the timeline timestamp
+  // - following the depth-slice instrument: its depth + its explicit timestamp
+  // - otherwise: surface (0 m) at the depth run's newest real time, because the
+  //   UVEL/VVEL endpoint is served from the depth-resolved file, whose window
+  //   is not the surface file's.
   const currentFlowDepthM = currentFlowFollowsSlice ? depthSliceSelection.depthM : 0;
-  const currentFlowTimestamp = useMemo(() => {
-    if (currentFlowFollowsSlice) {
-      return depthSliceSelection.timestamp;
-    }
-    if (!effectiveTimestamp) {
-      return datasetTimestamps[0] || undefined;
-    }
-    if (datasetTimestamps.length > 0) {
-      const start = datasetTimestamps[0];
-      const end = datasetTimestamps[datasetTimestamps.length - 1];
-      if (effectiveTimestamp < start || effectiveTimestamp > end) {
-        return datasetTimestamps[0];
-      }
-    }
-    return effectiveTimestamp;
-  }, [currentFlowFollowsSlice, depthSliceSelection.timestamp, effectiveTimestamp, datasetTimestamps]);
+  //
+  // The old version compared a timeline timestamp against the dataset bounds by
+  // STRING and answered with ``datasetTimestamps[0]`` on any mismatch - a
+  // silent clamp that could put a different day's field on screen under the
+  // replay date. The request time is now always a real time the serving
+  // dataset has, so there is nothing left to clamp.
+  const currentFlowTimestamp = useMemo(
+    () =>
+      currentFlowFollowsSlice
+        ? (depthSliceSelection.timestamp ?? depthModelTimestamp)
+        : depthModelTimestamp,
+    [
+      currentFlowFollowsSlice,
+      depthSliceSelection.timestamp,
+      depthModelTimestamp,
+    ]
+  );
 
   useEffect(() => {
     if (!currentsLayerActive) {
@@ -521,6 +629,19 @@ export default function Home() {
         setCurrentFieldMetadata(null);
         setCurrentFieldStatus('SIMULATED');
         setCurrentFieldStatusReason(null);
+      });
+      return;
+    }
+
+    // UVEL/VVEL is served from the depth-resolved file. Until that file's own
+    // time range is known there is no dateable request to make, and asking
+    // without one would silently take the server's default instead.
+    if (!currentFlowTimestamp) {
+      void Promise.resolve().then(() => {
+        setCurrentField(null);
+        setCurrentFieldMetadata(null);
+        setCurrentFieldStatus('UNAVAILABLE');
+        setCurrentFieldStatusReason('The HYCOM depth-resolved run time range is not known yet.');
       });
       return;
     }
@@ -637,6 +758,19 @@ export default function Home() {
     setDepthSliceDisplay({ ...DEFAULT_DEPTH_SLICE_DISPLAY });
   }, []);
 
+  // Turning the depth instrument on without naming a time would make the picker
+  // display one time while the request (and the returned data) used another.
+  // The default is therefore written into the selection, so the control and the
+  // data always agree.
+  const handleToggleDepthSliceVisible = useCallback(() => {
+    if (!depthSliceVisible && depthModelTimestamp) {
+      setDepthSliceSelection((selection) =>
+        selection.timestamp ? selection : { ...selection, timestamp: depthModelTimestamp }
+      );
+    }
+    setDepthSliceVisible(!depthSliceVisible);
+  }, [depthSliceVisible, depthModelTimestamp]);
+
   // Map Click Inspector Dispatcher (Requirement #5, #7, #8)
   // Aborts in-flight inspection queries when the user clicks another point
   // or moves the timeline, so only the latest response reaches the UI.
@@ -647,7 +781,11 @@ export default function Home() {
     async function inspectMapPoint() {
       if (!inspectedCoords) return;
       const layerId = activeLayer?.id || 'cyclone';
-      const ts = currentPoint?.timestamp;
+      const isModelLayer = ['sst', 'salinity', 'currents', 'tchp'].includes(layerId);
+      // A model layer is inspected at the model time it is drawn at; a cyclone
+      // is inspected at the replay fix. Mixing the two is what produced an
+      // ocean reading stamped with a cyclone date.
+      const ts = isModelLayer ? modelDataTimestamp : currentPoint?.timestamp;
 
       if (layerId === 'cyclone' && oceanMode !== 'LIVE') {
         const cRes = await apiProvider.inspectCyclone(inspectedCoords.lat, inspectedCoords.lon, ts, cyclone?.id, signal);
@@ -778,7 +916,34 @@ export default function Home() {
     return () => {
       abortController.abort();
     };
-  }, [inspectedCoords, currentTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, cyclone?.id, oceanMode, activeLayer, hazard]);
+  }, [inspectedCoords, effectiveTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, modelDataTimestamp, cyclone?.id, oceanMode, activeLayer, hazard]);
+
+  // ============================================================
+  // Model-time badge (HISTORICAL REPLAY only)
+  //
+  // Built from the timestamps the payloads actually reported, never from the
+  // requested time: the backend may have resolved the request to a different
+  // day, and that is the day the pixels belong to.
+  // ============================================================
+  const modelDatesOnScreen = useMemo<string[]>(() => {
+    const dates: string[] = [];
+    if (depthSliceVisible && depthSliceMetadata?.timestamp) dates.push(depthSliceMetadata.timestamp);
+    if (currentFieldMetadata?.timestamp) dates.push(currentFieldMetadata.timestamp);
+    if (legendBounds?.timestamp) dates.push(legendBounds.timestamp);
+    return dates;
+  }, [depthSliceVisible, depthSliceMetadata, currentFieldMetadata, legendBounds]);
+
+  const modelTimeBadge =
+    oceanMode === 'LIVE' ? null : modelTimeBadgeText(modelDatesOnScreen, currentPoint?.timestamp);
+
+  const modelDateRange = useMemo(() => {
+    if (datasetTimestamps.length === 0) return null;
+    return {
+      start: datasetTimestamps[0],
+      end: datasetTimestamps[datasetTimestamps.length - 1],
+      steps: datasetTimestamps.length,
+    };
+  }, [datasetTimestamps]);
 
   return (
     <div className="w-screen h-screen overflow-hidden bg-[#05070a] flex flex-col relative font-sans text-slate-100 select-none">
@@ -796,15 +961,32 @@ export default function Home() {
         datasetSynthetic={datasetSynthetic}
         datasetLoaded={datasetLoaded}
         liveKpiAuthoritative={false}
+        modelDateRange={modelDateRange}
+        argoProfileCount={argoProfileCount}
       />
 
       {/* 2. Main 3D Cesium Earth Viewport */}
       <main className="flex-1 relative w-full h-full bg-[#05070a]">
+        {/* Model-time badge: the model layers on screen are real data from a
+            real date, and in HISTORICAL REPLAY that date is not the replay
+            date. This states both, so no value is ever read as contemporaneous
+            with the storm. LIVE needs no badge — there the model date IS the
+            timeline date. */}
+        {modelTimeBadge && (
+          <div
+            role="status"
+            data-testid="model-time-badge"
+            className="absolute top-[152px] left-1/2 -translate-x-1/2 z-30 max-w-[90vw] px-3 py-1.5 rounded-xl bg-amber-950/85 backdrop-blur-xl border border-amber-400/50 text-amber-200 font-mono text-[10px] font-bold tracking-wider shadow-2xl truncate"
+            title="These model layers are real HYCOM data, but from the model date shown — not from the cyclone replay date."
+          >
+            {modelTimeBadge}
+          </div>
+        )}
         <CesiumGlobe
           cyclone={oceanMode === 'LIVE' ? null : cyclone}
-          currentTrackIndex={currentTrackIndex}
-          layers={layers}
-          argoProfiles={argoProfiles}
+          currentTrackIndex={effectiveTrackIndex}
+          layers={visibleLayers}
+          argoProfiles={visibleArgoProfiles}
           selectedArgoProfile={selectedArgoProfile}
           depthSliceVisible={depthSliceVisible}
           depthSlicePayload={depthSliceMetadata}
@@ -818,7 +1000,7 @@ export default function Home() {
           onInspectPoint={handleInspectPoint}
           onAstronomicalUpdate={setAstroData}
           targetLocation={targetLocation}
-          timestamp={effectiveTimestamp}
+          timestamp={modelDataTimestamp}
         />
 
         {/* Vertical Rotated Margin Caption */}
@@ -827,12 +1009,16 @@ export default function Home() {
         </div>
 
         {/* 3. Left GIS Layer Instrument (Internal Scrollbar, Safe Height) */}
-        <LayerControl layers={layers} onToggleLayer={handleToggleLayer} cyclone={cyclone} />
+        <LayerControl
+          layers={visibleLayers}
+          onToggleLayer={handleToggleLayer}
+          cyclone={oceanMode === 'LIVE' ? null : cyclone}
+        />
 
         {/* HYCOM Model Depth Slice instrument (Phase 1B/1C) */}
         <DepthSliceControl
           visible={depthSliceVisible}
-          onToggleVisible={() => setDepthSliceVisible((v) => !v)}
+          onToggleVisible={handleToggleDepthSliceVisible}
           selection={depthSliceSelection}
           onChange={handleDepthSliceSelectionChange}
           display={depthSliceDisplay}
@@ -842,7 +1028,8 @@ export default function Home() {
           loading={depthSliceLoading}
           unavailable={depthSliceUnavailable}
           metadata={depthSliceMetadata}
-          datasetTimestamps={datasetTimestamps}
+          datasetTimestamps={datasetDepthTimestamps}
+          defaultTimestamp={depthModelTimestamp}
           availableDepthsM={depthSliceMetadata?.available_depths_m ?? null}
         />
 
@@ -889,10 +1076,15 @@ export default function Home() {
         {/* 8. Mode-Aware Bottom Time Axis Scrubber */}
         <Timeline
           track={activeTrack}
-          currentIndex={currentTrackIndex}
+          currentIndex={effectiveTrackIndex}
           onIndexChange={setCurrentTrackIndex}
           oceanMode={oceanMode}
           isHistorical={oceanMode === 'HISTORICAL'}
+          footerNote={
+            oceanMode === 'LIVE'
+              ? `${argoProfileCount} ARGO PROFILES ±5 d OF MODEL TIME`
+              : `${argoProfileCount} ARGO PROFILES (ALL DATES)`
+          }
         />
       </main>
 

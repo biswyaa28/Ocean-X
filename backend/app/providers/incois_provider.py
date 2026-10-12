@@ -26,6 +26,10 @@ def _hycom_data_status(ds=None) -> str:
             pass
     return 'REAL'
 from app.services.model_depth_axis import apply_model_depth_axis
+from app.services.model_time_matching import (
+    is_time_matched,
+    resolve_model_timestamp,
+)
 from app.models.schemas import (
     LayerDataResponse, LayerGridData, DepthSliceResponse, DepthSliceGridData,
     ScientificProvenance,
@@ -81,6 +85,14 @@ class DepthSliceVariableUnavailableError(DepthSliceError):
     Raised when e.g. UVEL or VVEL is absent from the dataset so the API can
     return an honest unavailable error instead of fabricating a vector field
     or substituting another variable.
+    """
+
+
+class LayerDataTimestampError(DepthSliceError):
+    """A surface-layer request carried a timestamp that cannot be read.
+
+    Distinct from a request for a time simply outside the dataset: an
+    unreadable one is a client error and is never answered with another day.
     """
 
 
@@ -432,8 +444,35 @@ class IncoisProvider:
         if not timestamps:
             return None
 
-        # Resolve timestamp
-        selected_ts = timestamp if timestamp in timestamps else timestamps[0]
+        # Resolve the requested time against the model's own times. This is an
+        # EXPLICIT resolution, reported back as ``timestamp``: the response
+        # always states which day it holds. The previous behaviour — a raw
+        # string membership test that fell through to ``timestamps[0]`` — was
+        # a silent clamp: it answered 2020 replay requests with the first
+        # October 2026 slice, and it also missed requests that were in the
+        # dataset but written with a different ISO spelling.
+        selected_ts = resolve_model_timestamp(timestamp, timestamps)
+        if selected_ts is None:
+            if timestamp and str(timestamp).strip():
+                # A request we cannot read must never be answered with some
+                # other day: raise a client error instead.
+                raise LayerDataTimestampError(
+                    f"Invalid or unparseable timestamp: {timestamp}.",
+                    detail={
+                        "message": f"Invalid or unparseable timestamp: {timestamp}.",
+                        "requestedTimestamp": timestamp,
+                        "source": "INCOIS RSMC HYCOM",
+                    },
+                )
+            return None
+
+        # "Matched" here means: matches the time THIS REQUEST asked for. Whether
+        # that model time corresponds to the cyclone being replayed is a
+        # separate question, answered by /risk and by the UI badge.
+        resolved_time_matched = (
+            True if not (timestamp and str(timestamp).strip())
+            else is_time_matched(selected_ts, timestamp)
+        )
 
         # Subset time slice
         try:
@@ -494,6 +533,8 @@ class IncoisProvider:
                 source=_c_source,
                 layer_name="currents",
                 timestamp=selected_ts,
+                requestedTimestamp=timestamp,
+                timeMatched=resolved_time_matched,
                 units="m/s",
                 bounds=bounds,
                 # A vector cell is only usable when BOTH components are valid.
@@ -548,6 +589,8 @@ class IncoisProvider:
             source=source_label,
             layer_name=layer_name_lower,
             timestamp=selected_ts,
+            requestedTimestamp=timestamp,
+            timeMatched=resolved_time_matched,
             units=units,
             bounds=bounds,
             validCellCount=valid_count,

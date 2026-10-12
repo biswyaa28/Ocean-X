@@ -136,6 +136,14 @@ describe('LayerControl live provenance labels', () => {
     expect(within(cyclone).queryByText('NOT CURRENTLY INTEGRATED')).not.toBeInTheDocument();
   });
 
+  it('hides the Cyclone Track row when there is no cyclone to show', () => {
+    // LIVE OCEAN passes no cyclone and no cyclone layer: the panel must not
+    // advertise a storm that is not on screen.
+    renderLayerControl([]);
+
+    expect(screen.queryByRole('button', { name: /Cyclone Track/i })).not.toBeInTheDocument();
+  });
+
   it('hides empty layer rows that are not currently integrated (Coastal Risk, Storm Surge, Chlorophyll, Rainfall)', () => {
     renderLayerControl([]);
 

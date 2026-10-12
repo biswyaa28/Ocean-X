@@ -97,10 +97,20 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
 
   const EMPTY_LAYER_IDS = new Set(['risk_zones', 'storm_surge', 'chlorophyll', 'rainfall']);
 
+  // The cyclone row is only offered when there IS a cyclone to show. LIVE
+  // OCEAN has none, and a row advertising one would be a storm claim the map
+  // does not make.
+  const hasCyclone =
+    layers.some((candidate) => candidate.id === 'cyclone') ||
+    Boolean(cyclone?.track && cyclone.track.length > 0);
+
   const visibleCategories = categories
     .map((cat) => ({
       ...cat,
       items: cat.items.filter((item) => {
+        if (item.id === 'cyclone' && !hasCyclone) {
+          return false;
+        }
         const liveStatus = getLiveStatus(item);
         if (EMPTY_LAYER_IDS.has(item.id) && liveStatus.statusType === 'not_integrated') {
           return false;

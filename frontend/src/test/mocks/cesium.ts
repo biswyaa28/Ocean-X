@@ -64,6 +64,46 @@ class FakeScreenSpaceEventHandler {
   destroy = vi.fn();
 }
 
+/**
+ * Chainable no-op standing in for a Cesium ConstantProperty. Every property
+ * and call resolves back to itself, so `entity.point.pixelSize.setValue(12)`
+ * and `entity.label.text.getValue()` both work however they are chained.
+ */
+const noop: unknown = new Proxy(function () {} as (...args: unknown[]) => unknown, {
+  get: (_target, prop) => (typeof prop === 'symbol' ? undefined : noop),
+  apply: () => noop,
+});
+
+const isObject = (value: unknown): value is object =>
+  value !== null && typeof value === 'object';
+
+/**
+ * Cesium entity options become real entities: primitives are lifted into
+ * `ConstantProperty`s, nested graphics objects gain mutators, and every
+ * property is reachable through them. Components rely on that (``point.pixelSize
+ * .setValue(...)``, ``position.setValue(...)``), so the mock models it:
+ *
+ *   - object values  -> a proxy that recurses (so class instances keep working
+ *     as values) and answers any unknown property with a chainable no-op;
+ *   - primitive values -> a chainable no-op, which is what a ConstantProperty
+ *     read looks like to component code.
+ *
+ * Only used for entities; imagery layers, camera and geometry stay untouched.
+ */
+function withCesiumMutators<T>(value: T, depth = 0): T {
+  if (!isObject(value) || depth > 8) return value;
+  return new Proxy(value as Record<PropertyKey, unknown>, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'symbol') return Reflect.get(target, prop, receiver);
+      const inner = Reflect.get(target, prop, receiver);
+      if (typeof inner === 'function') return inner;
+      if (isObject(inner)) return withCesiumMutators(inner, depth + 1);
+      // Primitives stand in for ConstantProperty values.
+      return noop;
+    },
+  }) as unknown as T;
+}
+
 /** Constructable Cartesian3 stand-in (FlowCanvasOverlay allocates scratch
  * Cartesians and clones camera positions per frame). */
 class FakeCartesian3 {
@@ -124,7 +164,11 @@ function fakeColor() {
 export class FakeViewer {
   imageryLayers = new FakeImageryLayerCollection();
   entities = {
-    add: vi.fn((opts?: unknown) => (opts && typeof opts === 'object' ? { ...(opts as Record<string, unknown>) } : {})),
+    add: vi.fn((opts?: unknown) =>
+      opts && typeof opts === 'object'
+        ? withCesiumMutators({ ...(opts as Record<string, unknown>) })
+        : {}
+    ),
     remove: vi.fn(() => true),
   };
   postRenderListeners: Array<() => void> = [];

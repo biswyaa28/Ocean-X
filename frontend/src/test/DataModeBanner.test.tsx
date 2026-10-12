@@ -9,6 +9,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { Header } from '../components/Header';
+import type { Cyclone } from '../types/oceanlens';
 
 // Minimal props that satisfy the Header contract
 const BASE_PROPS = {
@@ -67,7 +68,7 @@ describe('Header data-mode indicator (Phase 3)', () => {
     expect(indicator.textContent).toMatch(/SYNTHETIC FIXTURE/i);
   });
 
-  it('does not label LIVE as real without authoritative LIVE KPI data', () => {
+  it('does not claim real LIVE data when the model has no time range', () => {
     render(
       <Header
         {...BASE_PROPS}
@@ -77,8 +78,57 @@ describe('Header data-mode indicator (Phase 3)', () => {
         datasetSynthetic={false}
       />
     );
-    expect(screen.getByText(/LIVE OCEAN · DATA UNAVAILABLE \/ NON-AUTHORITATIVE/i)).toBeInTheDocument();
+    // No dataset range supplied: the ribbon says so rather than implying real data.
+    expect(screen.getByText(/LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE/i)).toBeInTheDocument();
+    expect(screen.getByText('UNAVAILABLE')).toBeInTheDocument();
     expect(screen.queryByText(/REAL INCOIS HYCOM DATA/i)).not.toBeInTheDocument();
+  });
+
+  it('reports the real model date range and Argo count in LIVE', () => {
+    render(
+      <Header
+        {...BASE_PROPS}
+        oceanMode="LIVE"
+        metrics={null}
+        dataMode="REAL"
+        datasetSynthetic={false}
+        modelDateRange={{
+          start: '2026-10-07T06:00:00.000000000',
+          end: '2026-10-08T18:00:00.000000000',
+          steps: 7,
+        }}
+        argoProfileCount={12}
+      />
+    );
+    expect(
+      screen.getByText(/LIVE OCEAN · INCOIS HYCOM · 2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText('12 PROFILES ±5 d')).toBeInTheDocument();
+    expect(screen.queryByText(/NO MODEL TIME RANGE AVAILABLE/i)).not.toBeInTheDocument();
+  });
+
+  it('names the actual cyclone and year in HISTORICAL REPLAY', () => {
+    render(
+      <Header
+        {...BASE_PROPS}
+        oceanMode="HISTORICAL"
+        metrics={null}
+        dataMode="REAL"
+        datasetSynthetic={false}
+        cyclone={
+          {
+            id: '2020136N10088',
+            name: 'AMPHAN',
+            basin: 'North Indian Ocean',
+            dataStatus: 'REAL',
+            currentTrackIndex: 28,
+            track: [{ timestamp: '2020-05-15T06:00:00Z' }],
+            forecastCone: [],
+          } as unknown as Cyclone
+        }
+      />
+    );
+    expect(screen.getByText(/HISTORICAL REPLAY · AMPHAN \(2020\) · NOAA IBTrACS/i)).toBeInTheDocument();
   });
 
   it('labels a disconnected demo fallback as non-authoritative instead of REAL', () => {

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { AppMode, OceanMode, DataStatus, DataModeType, KPIMetrics, Cyclone } from '../types/oceanlens';
+import { formatModelDate } from '../utils/modelTime';
 import { Compass, SlidersHorizontal, Activity } from 'lucide-react';
 
 interface HeaderProps {
@@ -19,6 +20,10 @@ interface HeaderProps {
   datasetSynthetic?: boolean;
   datasetLoaded?: boolean;
   liveKpiAuthoritative?: boolean;
+  /** The real model time range the dataset covers (LIVE OCEAN timeline). */
+  modelDateRange?: { start: string; end: string; steps: number } | null;
+  /** Argo profiles shown for the current time selection. */
+  argoProfileCount?: number | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +39,8 @@ export const Header: React.FC<HeaderProps> = ({
   datasetSynthetic = false,
   datasetLoaded = false,
   liveKpiAuthoritative = false,
+  modelDateRange = null,
+  argoProfileCount = null,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
   const isFixture = dataMode === 'FIXTURE' || datasetSynthetic;
@@ -41,22 +48,45 @@ export const Header: React.FC<HeaderProps> = ({
   const hasAuthoritativeLiveData = hasAuthoritativeRealData && liveKpiAuthoritative;
   const displayMetrics = oceanMode === 'LIVE' && !hasAuthoritativeLiveData ? null : metrics;
 
+  // LIVE OCEAN reports the dataset's own coverage — its real dates and the
+  // number of in-situ profiles at the selected model time. A cyclone is never
+  // shown in this mode, so there is nothing else to put there.
+  const modelRangeLabel = modelDateRange
+    ? (() => {
+        const start = formatModelDate(modelDateRange.start);
+        const end = formatModelDate(modelDateRange.end);
+        if (!start || !end) return null;
+        return start === end ? start : `${start} → ${end}`;
+      })()
+    : null;
+
   // Tooltip text for the risk chip. When the backend scored the cyclone we
   // list the actual weights it used so the number is never opaque; when it
   // declined we surface its reason verbatim.
   const riskTooltip = (() => {
     if (!displayMetrics) return undefined;
-    const { coastalRiskLevel, coastalRiskUnavailableReason, coastalRiskWeights } = displayMetrics;
+    const {
+      coastalRiskLevel,
+      coastalRiskUnavailableReason,
+      coastalRiskWeights,
+      coastalRiskModelTimestamp,
+      coastalRiskTimeMatched,
+    } = displayMetrics;
     if (coastalRiskLevel === null) {
       return (
         'UNAVAILABLE — no score was computed.\n' +
         (coastalRiskUnavailableReason ?? 'No reason supplied by the backend.')
       );
     }
-    const lines = [
-      'Unvalidated heuristic demo score — NOT validated, NOT for operational use.',
-      'Backend /risk used these hand-tuned weights:',
-    ];
+    const lines: string[] = [];
+    if (coastalRiskTimeMatched === false) {
+      // The score is real, but its ocean state is not the storm's own day.
+      lines.push(
+        `Ocean state from ${formatModelDate(coastalRiskModelTimestamp) ?? 'an unknown model date'}, not the storm date.`
+      );
+    }
+    lines.push('Unvalidated heuristic demo score — NOT validated, NOT for operational use.');
+    lines.push('Backend /risk used these hand-tuned weights:');
     if (coastalRiskWeights && Object.keys(coastalRiskWeights).length > 0) {
       for (const [k, v] of Object.entries(coastalRiskWeights)) {
         lines.push(`  ${k} = ${v}`);
@@ -207,30 +237,64 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* ONE Compact Integrated Telemetry & Provenance Ribbon (Requirement #12) */}
-      <div className="pointer-events-auto self-start bg-[#080c14]/80 backdrop-blur-xl border border-white/10 px-4 py-1.5 rounded-xl text-[10px] font-mono text-slate-300 flex items-center gap-3 shadow-xl max-w-full overflow-x-auto">
+      {/* ONE Compact Integrated Telemetry & Provenance Ribbon (Requirement #12).
+          Wraps rather than scrolls: a provenance label that is scrolled out of
+          sight is the same as a provenance label that is missing. */}
+      <div className="pointer-events-auto self-start bg-[#080c14]/80 backdrop-blur-xl border border-white/10 px-4 py-1.5 rounded-xl text-[10px] font-mono text-slate-300 flex flex-wrap items-center gap-x-3 gap-y-1 shadow-xl max-w-full">
         <div className="flex items-center gap-1.5 font-bold text-white shrink-0">
           <span className={`w-1.5 h-1.5 rounded-full animate-ping ${
             oceanMode === 'LIVE' ? 'bg-emerald-400' :
             oceanMode === 'HISTORICAL' ? 'bg-cyan-400' : 'bg-amber-400'
           }`} />
           <span>
-            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData ? 'LIVE OCEAN · REAL INCOIS HYCOM DATA' : 'LIVE OCEAN · DATA UNAVAILABLE / NON-AUTHORITATIVE') :
-             oceanMode === 'HISTORICAL' ? 'HISTORICAL REPLAY · AMPHAN (2020) · NOAA IBTrACS' :
-             'SCENARIO SIMULATION · NOT AN OFFICIAL FORECAST'}
+            {oceanMode === 'LIVE'
+              ? (modelRangeLabel
+                  ? `LIVE OCEAN · INCOIS HYCOM · ${modelRangeLabel}`
+                  : 'LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE')
+              : oceanMode === 'HISTORICAL'
+                ? (cyclone
+                    ? `HISTORICAL REPLAY · ${cyclone.name} (${cyclone.track[0]?.timestamp?.slice(0, 4) ?? '—'}) · NOAA IBTrACS`
+                    : 'HISTORICAL REPLAY · NO CYCLONE DATA')
+                : 'SCENARIO SIMULATION · NOT AN OFFICIAL FORECAST'}
           </span>
         </div>
 
         <span className="text-white/15 shrink-0">│</span>
 
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-slate-400">STATUS:</span>
-          <span className="text-cyan-300 font-bold">
-            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData && displayMetrics?.activeCyclones ? '01 ACTIVE CYCLONE' : 'LIVE KPI DATA UNAVAILABLE') :
-             oceanMode === 'HISTORICAL' ? 'HISTORICAL RECORD (NOAA IBTrACS)' :
-             'SIMULATION'}
-          </span>
+          <span className="text-slate-400">{oceanMode === 'LIVE' ? 'MODEL TIME:' : 'STATUS:'}</span>
+          {oceanMode === 'LIVE' ? (
+            modelRangeLabel ? (
+              <span
+                className="text-cyan-300 font-bold"
+                title={`${modelDateRange?.steps} real model time step(s) available: ${formatModelDate(modelDateRange?.start)} → ${formatModelDate(modelDateRange?.end)}`}
+              >
+                {modelRangeLabel}
+              </span>
+            ) : (
+              <span className="text-amber-300 font-bold">UNAVAILABLE</span>
+            )
+          ) : oceanMode === 'HISTORICAL' ? (
+            <span className="text-cyan-300 font-bold">HISTORICAL RECORD (NOAA IBTrACS)</span>
+          ) : (
+            <span className="text-cyan-300 font-bold">SIMULATION</span>
+          )}
         </div>
+
+        {oceanMode === 'LIVE' && (
+          <>
+            <span className="text-white/15 shrink-0">│</span>
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-slate-400">ARGO:</span>
+              <span
+                className="text-emerald-300 font-bold"
+                title="Argo in-situ profiles observed within ±5 days of the selected model time."
+              >
+                {argoProfileCount === null ? 'N/A' : `${argoProfileCount} PROFILES ±5 d`}
+              </span>
+            </div>
+          </>
+        )}
 
         {displayMetrics && (
           <>
@@ -284,6 +348,17 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 (HEURISTIC DEMO, NOT VALIDATED)
               </span>
+              {/* The ocean state behind the score is not the storm's own day.
+                  Marked visibly, not only in the tooltip, so it cannot be read
+                  as this storm's conditions. */}
+              {displayMetrics.coastalRiskTimeMatched === false && (
+                <span
+                  className="text-[9px] text-rose-400 tracking-wide font-bold"
+                  title={riskTooltip}
+                >
+                  (OCEAN STATE ≠ STORM DATE)
+                </span>
+              )}
             </div>
           </>
         )}

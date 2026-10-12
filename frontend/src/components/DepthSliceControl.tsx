@@ -33,6 +33,12 @@ interface DepthSliceControlProps {
   metadata: DepthSlicePayload | null;
   datasetTimestamps: string[];
   availableDepthsM: number[] | null;
+  /**
+   * The time the slice will actually be requested at when the user has not
+   * picked one. Displayed as the current selection so the control never shows a
+   * time the request is not using.
+   */
+  defaultTimestamp?: string | undefined;
 }
 
 const DEPTH_PRESETS_M = [0, 10, 50, 100, 250, 500];
@@ -51,6 +57,7 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
   metadata,
   datasetTimestamps,
   availableDepthsM,
+  defaultTimestamp,
 }) => {
   const varMeta = DEPTH_SLICE_VARIABLES.find((v) => v.id === selection.variable);
   const variableLabel = varMeta ? varMeta.label : selection.variable;
@@ -173,11 +180,14 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 <div className="relative">
                   <select
                     aria-label="Depth slice model timestamp"
-                    value={selection.timestamp ?? ''}
-                    onChange={(e) => onChange({ ...selection, timestamp: e.target.value || undefined })}
+                    value={selection.timestamp ?? defaultTimestamp ?? ''}
+                    onChange={(e) => onChange({ ...selection, timestamp: e.target.value || defaultTimestamp })}
                     className="w-full appearance-none bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10.5px] text-slate-100 focus:outline-none focus:border-indigo-400/60 pr-7"
                   >
-                    {datasetTimestamps.map((ts) => (
+                    {(defaultTimestamp && !datasetTimestamps.includes(defaultTimestamp)
+                      ? [defaultTimestamp, ...datasetTimestamps]
+                      : datasetTimestamps
+                    ).map((ts) => (
                       <option key={ts} value={ts} className="bg-[#080c14]">
                         {ts.replace('T', ' ').slice(0, 16)}
                       </option>

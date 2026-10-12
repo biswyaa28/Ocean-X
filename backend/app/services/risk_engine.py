@@ -26,6 +26,7 @@ from app.models.schemas import (
     RiskAssessment,
 )
 from app.providers.incois_provider import incois_provider
+from app.services.model_time_matching import format_timestamp, is_time_matched
 
 
 def get_risk_category(score: int) -> str:
@@ -46,6 +47,9 @@ def _unavailable(reason: str, cyclone: Optional[Cyclone] = None) -> RiskAssessme
         unavailableReason=reason,
         heuristicDemoScore=None,
         category=None,
+        # No score means no model time was used, and nothing was matched.
+        modelTimestamp=None,
+        timeMatched=False,
         modelType='prototype_rule_based',
         validated=False,
         operationalUse='NOT FOR OPERATIONAL USE',
@@ -143,6 +147,14 @@ def calculate_prototype_risk(
     except Exception as exc:
         return _unavailable(f"SST layer unavailable: {exc}", cyclone)
 
+    # The ocean state that produced this score came from ONE model time, which
+    # is generally not the storm's date. Record it explicitly: the caller must
+    # be able to label the score instead of implying a match that may not hold.
+    model_timestamp = getattr(tchp_layer, "timestamp", None)
+    if not model_timestamp:
+        model_timestamp = getattr(sst_layer, "timestamp", None)
+    time_matched = is_time_matched(model_timestamp, track_pt.timestamp)
+
     avg_tchp, tchp_valid, tchp_total = _layer_mean(tchp_layer)
     avg_sst, sst_valid, sst_total = _layer_mean(sst_layer)
 
@@ -234,16 +246,34 @@ def calculate_prototype_risk(
         ),
     ]
 
+    model_date = format_timestamp(model_timestamp) or 'UNKNOWN MODEL DATE'
     key_factors = [
         f"CYCLONE MAX WIND: {round(track_pt.maxWindKts)} KNOTS "
         f"({track_pt.windSource or 'unknown source'})"
         + (f" / {(track_pt.category or '').upper()}" if track_pt.category else ""),
         f"COASTAL DISTANCE: {round(track_pt.distanceToCoastKm)} KM TO NEAREST SHORE",
+        f"OCEAN STATE MODEL TIME: {model_date} "
+        f"({'time-matched' if time_matched else 'NOT the storm date'})",
         f"INCOIS TCHP: {round(avg_tchp, 1)} KJ/CM² "
         f"(mean over {tchp_valid} of {tchp_total} valid cells, not cyclone-centred)",
         f"INCOIS SST: {round(avg_sst, 1)} °C "
         f"(mean over {sst_valid} of {sst_total} valid cells, not cyclone-centred)",
     ]
+
+    model_date = format_timestamp(model_timestamp) or 'an unknown model date'
+    storm_date = format_timestamp(track_pt.timestamp) or track_pt.timestamp
+    time_limitation = (
+        f"Ocean state from {model_date}, not the storm date "
+        f"(storm point {storm_date}): the TCHP/SST means are unweighted "
+        "basin means over that single model time, not values at the cyclone "
+        "position on the day the cyclone was there."
+        if not time_matched
+        else (
+            f"Ocean state from {model_date}, within the match tolerance of the "
+            f"storm point ({storm_date}). TCHP and SST are still unweighted "
+            "basin means, not values at the cyclone position."
+        )
+    )
 
     explanation = Explanation(
         summary=(
@@ -254,9 +284,8 @@ def calculate_prototype_risk(
         keyFactors=key_factors,
         limitations=(
             f"{RISK_DISCLAIMER} It does not replace official IMD/INCOIS "
-            "warning bulletins. TCHP and SST are unweighted basin means, not "
-            "values at the cyclone position. Affected-region prediction is not "
-            "implemented, so no landfall geography is claimed."
+            f"warning bulletins. {time_limitation} Affected-region prediction "
+            "is not implemented, so no landfall geography is claimed."
         ),
         generatedAt=track_pt.timestamp,
     )
@@ -266,6 +295,8 @@ def calculate_prototype_risk(
         unavailableReason=None,
         heuristicDemoScore=score,
         category=category,
+        modelTimestamp=model_timestamp,
+        timeMatched=time_matched,
         modelType='prototype_rule_based',
         validated=False,
         operationalUse='NOT FOR OPERATIONAL USE',

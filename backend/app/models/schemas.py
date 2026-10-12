@@ -184,6 +184,15 @@ class RiskAssessment(BaseModel):
     unavailableReason: Optional[str] = None
     heuristicDemoScore: Optional[int] = None
     category: Optional[Literal['LOW', 'ELEVATED', 'MODERATE', 'HIGH', 'CRITICAL']] = None
+    #: The HYCOM model time the TCHP/SST means were read from. The score is a
+    #: function of the ocean state at THIS time, not of the storm's date, so it
+    #: is reported rather than left implicit. None when no score was produced.
+    modelTimestamp: Optional[str] = None
+    #: True only when ``modelTimestamp`` is within the match tolerance of the
+    #: cyclone point that was scored. False means the ocean state is from a
+    #: different day than the storm — the score stands, but it is not this
+    #: storm's own ocean state.
+    timeMatched: bool = False
     modelType: str = 'prototype_rule_based'
     validated: bool = False
     operationalUse: str = 'NOT FOR OPERATIONAL USE'
@@ -239,7 +248,17 @@ class LayerDataResponse(BaseModel):
     status: DataStatus
     source: str
     layer_name: str
+    #: The model time this grid ACTUALLY holds. When the requested time is not
+    #: in the dataset this is the nearest time the model does have, and
+    #: ``timeMatched`` is False — a response must never be readable as if it
+    #: described the requested date.
     timestamp: str
+    #: The time the caller asked for, when it sent one. Retained so a mismatch
+    #: is visible on the wire, not only in the resolved label.
+    requestedTimestamp: Optional[str] = None
+    #: True only when ``timestamp`` is within the match tolerance of
+    #: ``requestedTimestamp``.
+    timeMatched: bool = True
     units: str
     bounds: Dict[str, float]
     grid: LayerGridData

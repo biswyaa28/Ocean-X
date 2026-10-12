@@ -24,6 +24,7 @@ from app.providers.incois_provider import (
     DepthSliceTimestampError,
     DepthSliceVariableError,
     DepthSliceVariableUnavailableError,
+    LayerDataTimestampError,
     incois_provider,
 )
 from app.providers.argo_provider import argo_provider
@@ -200,6 +201,10 @@ def get_observations():
         "dataMode": settings.DATA_MODE,
         "source": "INCOIS & NOAA IBTrACS",
         "available_timestamps": timestamps,
+        # The depth-resolved file is a SEPARATE HYCOM run with its own window,
+        # which can differ from the surface file's. Publishing it is what lets a
+        # depth or currents request be made at a time that dataset really has.
+        "available_depth_timestamps": incois_provider.get_available_depth_timestamps(),
         "active_cyclone_count": len(cyclones)
     }
 
@@ -377,7 +382,20 @@ def get_layer_data(
     timestamp: Optional[str] = Query(None, description="ISO timestamp matching dataset available times"),
     stride: int = Query(3, description="Spatial downsampling stride for payload optimization")
 ):
-    layer_res = incois_provider.get_layer_data(layer_name=layer_name, timestamp=timestamp, stride=stride)
+    """Return one surface model layer.
+
+    The response carries both the time it was asked for (``requestedTimestamp``)
+    and the model time the grid actually holds (``timestamp``), plus
+    ``timeMatched``. A request for a time the dataset does not cover is
+    answered with the nearest time it does have and ``timeMatched: false`` —
+    never silently with a different day that the response reads as the request.
+    """
+    try:
+        layer_res = incois_provider.get_layer_data(layer_name=layer_name, timestamp=timestamp, stride=stride)
+    except LayerDataTimestampError as e:
+        # An unreadable timestamp is a client error; it is never answered with
+        # another day's field.
+        raise HTTPException(status_code=400, detail=e.detail)
     if not layer_res:
         raise HTTPException(
             status_code=404,

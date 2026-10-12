@@ -75,9 +75,17 @@ beforeEach(() => {
   getArgoProfiles.mockResolvedValue([]);
   getRealCurrentFieldPayload.mockResolvedValue(null);
   getLayerData.mockResolvedValue(null);
+  // /observations publishes two windows: the surface run's times and the
+  // depth-resolved run's (a different HYCOM file with its own range).
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
-    json: async () => ({ available_timestamps: ['2026-09-07T06:00:00.000000000'] }),
+    json: async () => ({
+      available_timestamps: ['2026-09-07T06:00:00.000000000'],
+      available_depth_timestamps: [
+        '2026-10-10T06:00:00.000000000',
+        '2026-10-17T00:00:00.000000000',
+      ],
+    }),
   });
 });
 
@@ -92,12 +100,23 @@ describe('Home — HYCOM model depth slice integration', () => {
 
     render(<Home />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /LIVE OCEAN/i }));
-    expect(await screen.findByText(/LIVE OCEAN · DATA UNAVAILABLE \/ NON-AUTHORITATIVE/i)).toBeInTheDocument();
-    expect(screen.queryByText(/REAL INCOIS HYCOM DATA/i)).not.toBeInTheDocument();
+    // No backend means no real model times, so LIVE says so instead of
+    // implying real HYCOM coverage.
+    expect(await screen.findByText(/LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE/i)).toBeInTheDocument();
+    expect(screen.queryByText(/INCOIS HYCOM · 2026/)).not.toBeInTheDocument();
   });
 
-  it('does not present hardcoded LIVE KPI values when no authoritative KPI source exists', async () => {
+  it('opens on the real model time range and the Argo count, never hardcoded KPIs', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        available_timestamps: [
+          '2026-10-07T06:00:00.000000000',
+          '2026-10-07T12:00:00.000000000',
+          '2026-10-08T18:00:00.000000000',
+        ],
+      }),
+    });
     getDataStatus.mockResolvedValue({
       mode: 'REAL' as const,
       backendConnected: true,
@@ -105,14 +124,26 @@ describe('Home — HYCOM model depth slice integration', () => {
       datasetSynthetic: false,
       datasetLoaded: true,
     });
+    getArgoProfiles.mockResolvedValue([
+      {
+        profile_id: 'p1', float_id: 'f1', platform_type: 'core', cycle_number: 1,
+        latitude: 12, longitude: 88, observation_time: '2026-10-08T06:00:00Z',
+        data_status: 'REAL', institution: 'IFREMER', observations_count: 10,
+        observations: [], provenance: { data_status: 'REAL' },
+      },
+    ]);
 
     render(<Home />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /LIVE OCEAN/i }));
-    expect(await screen.findByText(/LIVE OCEAN · DATA UNAVAILABLE \/ NON-AUTHORITATIVE/i)).toBeInTheDocument();
+    // The header reports the dataset's own coverage instead of a cyclone.
+    expect(
+      await screen.findByText(/LIVE OCEAN · INCOIS HYCOM · 2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 PROFILES ±5 d')).toBeInTheDocument();
+    // No hardcoded LIVE KPI values, and no cyclone provenance in LIVE mode.
     expect(screen.queryByText('22 KT')).not.toBeInTheDocument();
     expect(screen.queryByText('30.2 °C')).not.toBeInTheDocument();
-    expect(screen.queryByText(/REAL INCOIS HYCOM DATA/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/IBTrACS/)).not.toBeInTheDocument();
   });
 
   it('renders the depth-slice instrument header even before activation', async () => {
@@ -125,7 +156,7 @@ describe('Home — HYCOM model depth slice integration', () => {
     render(<Home />);
     fireEvent.click(await screen.findByTitle(/show model depth slice/i));
     await waitFor(() => expect(getDepthSlice).toHaveBeenCalledTimes(1));
-    expect(getDepthSlice).toHaveBeenCalledWith('temperature', 50, undefined, 3, expect.any(AbortSignal));
+    expect(getDepthSlice).toHaveBeenCalledWith('temperature', 50, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal));
     await waitFor(() => expect(screen.getByText(/MATCHED MODEL DEPTH/i)).toBeInTheDocument());
   });
 
@@ -180,7 +211,7 @@ describe('Home — HYCOM model depth slice integration', () => {
 
     fireEvent.change(screen.getByLabelText(/depth slice variable/i), { target: { value: 'salinity' } });
     await waitFor(() => expect(getDepthSlice).toHaveBeenCalledTimes(2));
-    expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, undefined, 3, expect.any(AbortSignal));
+    expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal));
   });
 
   it('timestamp switching refetches with the new timestamp', async () => {
@@ -190,10 +221,10 @@ describe('Home — HYCOM model depth slice integration', () => {
     await waitFor(() => expect(getDepthSlice).toHaveBeenCalledTimes(1));
 
     fireEvent.change(screen.getByLabelText(/depth slice model timestamp/i), {
-      target: { value: '2026-09-07T06:00:00.000000000' },
+      target: { value: '2026-10-10T06:00:00.000000000' },
     });
     await waitFor(() => expect(getDepthSlice).toHaveBeenCalledTimes(2));
-    expect(getDepthSlice).toHaveBeenLastCalledWith('temperature', 50, '2026-09-07T06:00:00.000000000', 3, expect.any(AbortSignal));
+    expect(getDepthSlice).toHaveBeenLastCalledWith('temperature', 50, '2026-10-10T06:00:00.000000000', 3, expect.any(AbortSignal));
   });
 
   it('unmount while a request is in-flight does not throw', async () => {
@@ -282,7 +313,7 @@ describe('Home — Phase 1C scientific visualization controls', () => {
 
     // switch variable → display resets (new scientific units/meaning)
     fireEvent.change(screen.getByLabelText(/depth slice variable/i), { target: { value: 'salinity' } });
-    await waitFor(() => expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, undefined, 3, expect.any(AbortSignal)));
+    await waitFor(() => expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal)));
     await waitFor(() => {
       expect((screen.getByLabelText(/depth slice color palette/i) as HTMLSelectElement).value).toBe('classic');
     });
@@ -434,7 +465,7 @@ describe('Home — Phase 1C scientific visualization controls', () => {
     // switch to salinity: the slice refetches and the colorbar follows
     fireEvent.change(screen.getByLabelText(/depth slice variable/i), { target: { value: 'salinity' } });
     await waitFor(() =>
-      expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, undefined, 3, expect.any(AbortSignal))
+      expect(getDepthSlice).toHaveBeenLastCalledWith('salinity', 50, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal))
     );
     await waitFor(() =>
       expect(within(screen.getByLabelText(/depth slice colorbar/i)).getByText(/COLORBAR · SALINITY/i)).toBeInTheDocument()
@@ -489,8 +520,11 @@ describe('Home — Phase 1E real current field', () => {
 
     render(<Home />);
     await waitFor(() => expect(getRealCurrentFieldPayload).toHaveBeenCalledTimes(1));
-    // surface default: depth 0, timestamp from the cyclone track point
-    expect(getRealCurrentFieldPayload).toHaveBeenCalledWith(0, expect.any(String), 3, expect.any(AbortSignal));
+    // surface default: depth 0 at the depth run's newest real time — the
+    // UVEL/VVEL endpoint is served from the depth-resolved file.
+    expect(getRealCurrentFieldPayload).toHaveBeenCalledWith(
+      0, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal)
+    );
     // REAL status chip with honest SURFACE (0 m) label
     await waitFor(() => expect(screen.getByText(/REAL HYCOM CURRENT FIELD/i)).toBeInTheDocument());
     expect(screen.getByText(/SURFACE \(0 m\)/i)).toBeInTheDocument();
@@ -539,7 +573,7 @@ describe('Home — Phase 1E real current field', () => {
     fireEvent.change(await screen.findByLabelText(/depth slice model depth level/i), { target: { value: '100' } });
 
     await waitFor(() =>
-      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(100, undefined, 3, expect.any(AbortSignal))
+      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(100, '2026-10-17T00:00:00.000000000', 3, expect.any(AbortSignal))
     );
     await waitFor(() => expect(screen.getByText(/100 m MODEL LEVEL/i)).toBeInTheDocument());
   });
@@ -556,12 +590,12 @@ describe('Home — Phase 1E real current field', () => {
     getDepthSlice.mockResolvedValue(makeCurrentsSlicePayload());
     fireEvent.click(await screen.findByTitle(/show model depth slice/i));
     fireEvent.change(await screen.findByLabelText(/depth slice model timestamp/i), {
-      target: { value: '2026-09-07T06:00:00.000000000' },
+      target: { value: '2026-10-10T06:00:00.000000000' },
     });
     // currents slice variable + a timestamp selection => flow follows that timestamp
     fireEvent.change(await screen.findByLabelText(/depth slice variable/i), { target: { value: 'currents' } });
     await waitFor(() =>
-      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(50, '2026-09-07T06:00:00.000000000', 3, expect.any(AbortSignal))
+      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(50, '2026-10-10T06:00:00.000000000', 3, expect.any(AbortSignal))
     );
   });
 
@@ -611,11 +645,11 @@ describe('Home — Phase 1E real current field', () => {
     fireEvent.click(await screen.findByTitle(/show model depth slice/i));
     fireEvent.change(await screen.findByLabelText(/depth slice variable/i), { target: { value: 'currents' } });
     fireEvent.change(await screen.findByLabelText(/depth slice model timestamp/i), {
-      target: { value: '2026-09-07T06:00:00.000000000' },
+      target: { value: '2026-10-10T06:00:00.000000000' },
     });
     // latest request: depth 50 at the new timestamp
     await waitFor(() =>
-      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(50, '2026-09-07T06:00:00.000000000', 3, expect.any(AbortSignal))
+      expect(getRealCurrentFieldPayload).toHaveBeenLastCalledWith(50, '2026-10-10T06:00:00.000000000', 3, expect.any(AbortSignal))
     );
     await waitFor(() => expect(screen.getByText(/REAL HYCOM CURRENT FIELD/i)).toBeInTheDocument());
   });

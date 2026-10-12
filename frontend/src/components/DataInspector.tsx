@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { DataStatus, GISLayer } from '../types/oceanlens';
+import { formatModelDate } from '../utils/modelTime';
 import { Activity, AlertCircle, MousePointerClick } from 'lucide-react';
 
 export interface InspectionData {
@@ -40,7 +41,7 @@ export interface InspectionData {
 interface DataInspectorProps {
   activeLayer: GISLayer | null;
   inspection: InspectionData | null;
-  legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string } | null;
+  legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string; timestamp?: string } | null;
   onClose?: () => void;
 }
 
@@ -84,16 +85,13 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
     badgeStyle = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
   }
 
-  // Format timestamp helper
+  // Format the timestamp of the data actually read. `new Date(string)` reads a
+  // stamp with no zone designator as LOCAL time, which would display a
+  // different date than the data belongs to.
   const formatTime = (ts?: string) => {
-    if (!ts) return 'N/A';
-    try {
-      const dt = new Date(ts);
-      if (isNaN(dt.getTime())) return ts;
-      return dt.toUTCString().replace('GMT', 'UTC');
-    } catch {
-      return ts;
-    }
+    const formatted = formatModelDate(ts);
+    if (formatted) return `${formatted.replace(' UTC', '')} UTC`;
+    return ts ? ts : 'N/A';
   };
 
   // Determine source label explicitly
@@ -330,6 +328,15 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
               <span>DYNAMIC LEGEND ({legendBounds?.unit || activeLayer.unit || 'UNITS'})</span>
               <span className="text-slate-300 font-bold">
                 {isSimulated ? 'PARAMETRIC RANGE' : 'INCOIS REAL DATA BOUNDS'}
+              </span>
+            </div>
+            {/* The legend describes one grid, and the grid has a date. */}
+            <div className="flex justify-between text-slate-400 font-mono" data-testid="legend-data-date">
+              <span>DATA DATE:</span>
+              <span className="text-cyan-300 font-bold">
+                {legendBounds?.timestamp
+                  ? formatTime(legendBounds.timestamp)
+                  : 'NO DATE — LAYER NOT LOADED'}
               </span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-gradient-to-r from-blue-600 via-teal-400 to-rose-500 opacity-80" />

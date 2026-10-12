@@ -152,6 +152,14 @@ export interface RiskAssessment {
   unavailableReason?: string | null;
   heuristicDemoScore: number | null; // 0 to 100, demo only
   category: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
+  /**
+   * The model time the TCHP/SST means were read from. The score is a function
+   * of the ocean state at THIS time, which is not necessarily the storm's
+   * date, so it travels with the number instead of being left implicit.
+   */
+  modelTimestamp?: string | null;
+  /** True only when `modelTimestamp` is within the match tolerance of the storm point. */
+  timeMatched?: boolean;
   modelType: 'prototype_rule_based';
   validated: false;
   operationalUse: string;
@@ -196,6 +204,10 @@ export interface KPIMetrics {
   coastalRiskUnavailableReason?: string | null;
   /** Hand-tuned weights returned by the backend, for display in a tooltip. */
   coastalRiskWeights?: Record<string, number> | null;
+  /** The model time the backend read the ocean state from. */
+  coastalRiskModelTimestamp?: string | null;
+  /** False when that model time is not the storm's date (beyond 48 h). */
+  coastalRiskTimeMatched?: boolean | null;
   dataConfidencePct: number;
   forecastConfidencePct: number;
 }
