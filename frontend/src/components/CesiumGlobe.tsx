@@ -2,15 +2,16 @@
 
 import dynamic from 'next/dynamic';
 import React from 'react';
-import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import { Cyclone, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
 import { DepthSlicePayload } from '../services/ApiProvider';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { DepthSliceRenderConfig } from '../utils/depthSliceViz';
 import { Loader2 } from 'lucide-react';
 import { perfMonitor } from '../utils/perfMonitor';
 
+// [CKPT-TEMP]
 const CesiumViewerInner = dynamic(
-  () => import('./CesiumViewerInner'),
+  () => import('./CesiumViewerInner').then((m) => { console.log('[CKPT-2] dynamic import RESOLVED'); return m; }).catch((e) => { console.log('[CKPT-2] dynamic import FAILED', e); throw e; }),
   {
     ssr: false,
     loading: () => (
@@ -27,10 +28,8 @@ const CesiumViewerInner = dynamic(
 interface CesiumGlobeProps {
   cyclone: Cyclone | null;
   currentTrackIndex: number;
-  stations: Station[];
   layers: GISLayer[];
   argoProfiles?: ArgoProfile[];
-  onSelectStation: (station: Station) => void;
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
@@ -64,9 +63,7 @@ function cesiumGlobePropsAreEqual(
 ): boolean {
   if (prev.cyclone !== next.cyclone) return false;
   if (prev.currentTrackIndex !== next.currentTrackIndex) return false;
-  if (prev.stations !== next.stations) return false;
   if (prev.argoProfiles !== next.argoProfiles) return false;
-  if (prev.onSelectStation !== next.onSelectStation) return false;
   if (prev.onSelectArgoProfile !== next.onSelectArgoProfile) return false;
   if (prev.onInspectPoint !== next.onInspectPoint) return false;
   if (prev.onAstronomicalUpdate !== next.onAstronomicalUpdate) return false;
@@ -102,6 +99,7 @@ function cesiumGlobePropsAreEqual(
 
 export const CesiumGlobe: React.FC<CesiumGlobeProps> = React.memo(
   (props) => {
+    console.log('[CKPT-1] CesiumGlobe wrapper RENDERED');
     if (process.env.NODE_ENV !== 'production') {
       perfMonitor.recordCesiumGlobeRender();
     }

@@ -5,7 +5,6 @@ import {
   RiskAssessment,
   CycloneTrackPoint,
   Hazard,
-  Station,
   GISLayer,
   KPIMetrics,
   DataStatus,
@@ -189,74 +188,7 @@ const DEMO_CYCLONE: Cyclone = {
   isHistorical: true,
 };
 
-const DEMO_STATIONS: Station[] = [
-  {
-    id: 'st-bd08',
-    name: 'INCOIS Ocean Buoy BD08',
-    latitude: 18.2,
-    longitude: 89.7,
-    region: 'East Bay of Bengal',
-    status: 'active',
-    type: 'buoy',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 30.2,
-      windSpeedKts: 48,
-      waveHeightM: 5.8,
-      pressureMb: 978,
-      salinityPsu: 33.4,
-    },
-  },
-  {
-    id: 'st-bd10',
-    name: 'INCOIS Ocean Buoy BD10',
-    latitude: 16.5,
-    longitude: 87.9,
-    region: 'Central Bay of Bengal',
-    status: 'active',
-    type: 'buoy',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 30.8,
-      windSpeedKts: 110,
-      waveHeightM: 9.4,
-      pressureMb: 942,
-      salinityPsu: 33.8,
-    },
-  },
-  {
-    id: 'st-paradip',
-    name: 'Paradeep Coastal Radar & Gauge',
-    latitude: 20.26,
-    longitude: 86.67,
-    region: 'Odisha Coast',
-    status: 'active',
-    type: 'coastal_radar',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 29.5,
-      windSpeedKts: 65,
-      waveHeightM: 4.2,
-      pressureMb: 975,
-    },
-  },
-  {
-    id: 'st-chennai',
-    name: 'Chennai Coastal Station',
-    latitude: 13.08,
-    longitude: 80.27,
-    region: 'Tamil Nadu Coast',
-    status: 'active',
-    type: 'tide_gauge',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 29.8,
-      windSpeedKts: 22,
-      waveHeightM: 2.1,
-      pressureMb: 1004,
-    },
-  },
-];
+
 
 const DEMO_LAYERS: GISLayer[] = [
   {
@@ -275,24 +207,6 @@ const DEMO_LAYERS: GISLayer[] = [
     status: 'SIMULATED',
     description: 'Surface current speed and flow direction (m/s)',
     unit: 'm/s',
-  },
-  {
-    id: 'wind',
-    name: 'Surface Wind Vectors',
-    category: 'physical',
-    active: true,
-    status: 'SIMULATED',
-    description: '10m surface wind speed and direction (knots)',
-    unit: 'kts',
-  },
-  {
-    id: 'wave_height',
-    name: 'Significant Wave Height',
-    category: 'physical',
-    active: true,
-    status: 'SIMULATED',
-    description: 'Significant wave height spatial grid (meters)',
-    unit: 'm',
   },
   {
     id: 'sst',
@@ -320,14 +234,6 @@ const DEMO_LAYERS: GISLayer[] = [
     status: 'SIMULATED',
     description: 'Ocean color / biogeochemical primary productivity',
     unit: 'mg/m³',
-  },
-  {
-    id: 'stations',
-    name: 'Monitoring Stations & Buoys',
-    category: 'infrastructure',
-    active: true,
-    status: 'SIMULATED',
-    description: 'INCOIS deep sea buoys and coastal radar stations',
   },
   {
     // Real Argo in-situ observation profiles (Phase 1D depth-profile drawer).
@@ -468,10 +374,6 @@ export class DemoProvider implements DataProvider {
     const hazards = await this.getHazards();
     // Unknown ids return null rather than silently resolving to a different hazard.
     return hazards.find((h) => h.id === id) ?? null;
-  }
-
-  async getStations(): Promise<Station[]> {
-    return DEMO_STATIONS;
   }
 
   async getLayers(): Promise<GISLayer[]> {

@@ -745,7 +745,9 @@ def match_argo_with_hycom(
             production paths from settings are used (raw file preferred,
             processed surface file as fallback). Integration tests pass the
             real production file explicitly; the default behavior is unchanged.
-        match_mode: "interpolated" (default) or "native" vertical matching.
+        match_mode: "model_levels" (default), "float_levels", or "native" vertical
+            matching. "interpolated" remains accepted as an alias for
+            "float_levels" because the drawer's COMPARISON selector sends it.
         spatial_mode: "bilinear" (default) or "nearest" horizontal matching.
     """
     match_mode = normalize_match_mode(match_mode)

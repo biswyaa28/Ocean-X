@@ -202,17 +202,6 @@ class Hazard(BaseModel):
     dataStatus: DataStatus
     riskAssessment: RiskAssessment
 
-class Station(BaseModel):
-    id: str
-    name: str
-    latitude: float
-    longitude: float
-    region: str
-    status: Literal['active', 'offline']
-    type: Literal['buoy', 'coastal_radar', 'tide_gauge']
-    dataStatus: DataStatus
-    currentMeasurements: Dict[str, Any]
-
 class GISLayer(BaseModel):
     id: str
     name: str

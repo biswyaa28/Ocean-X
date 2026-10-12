@@ -4,7 +4,6 @@ import {
   Cyclone,
   Hazard,
   RiskAssessment,
-  Station,
   GISLayer,
   KPIMetrics,
   DataStatus,
@@ -430,28 +429,6 @@ export class ApiProvider implements DataProvider {
     }
   }
 
-  async getStations(): Promise<Station[]> {
-    if (!(await this.checkBackend())) return demoProvider.getStations();
-    try {
-      const res = await fetch(`${API_BASE}/stations`);
-      if (!res.ok) return demoProvider.getStations();
-      return await res.json();
-    } catch {
-      return demoProvider.getStations();
-    }
-  }
-
-  /**
-   * Fetch the backend-authoritative layer definitions.
-   *
-   * "Never Silent Simulation": when the backend is unavailable, `/layers`
-   * fails or returns a non-OK response, or the payload is empty, this method
-   * MUST NOT substitute the demo layer set. The backend's own (possibly
-   * empty/unavailable) state is preserved. An empty array is the established
-   * provider contract for array-returning accessors (see getArgoProfiles),
-   * and LayerControl degrades gracefully with it (no live status/active
-   * overlay, no demo layer is manufactured).
-   */
   async getLayers(): Promise<GISLayer[]> {
     if (!(await this.checkBackend())) return [];
     try {

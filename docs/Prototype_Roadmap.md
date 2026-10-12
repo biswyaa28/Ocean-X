@@ -71,7 +71,7 @@ Definition of done:
 - evidence list
 - explanation
 - source status
-- impact-analysis screen
+- per-depth bias panel (shipped, replaces the planned impact-analysis screen)
 
 Definition of done:
 
@@ -104,7 +104,7 @@ Definition of done:
 Only after the UI works:
 
 - connect IBTrACS
-- test INCOIS/Copernicus access
+- test INCOIS access (done; no Copernicus adapter was built)
 - normalize responses
 - preserve fallback
 - add source metadata

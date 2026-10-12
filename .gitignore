@@ -69,8 +69,7 @@ yarn-debug.log*
 # Playwright MCP artifacts
 .playwright-mcp/
 
-# Casestudy, diagnostics, and root lockfile
-backend_casestudy/
-frontend_casestudy/
-package-lock.json
+# Agent tooling scratch (worktrees, bare clones)
+.delta/
+.kilo/
 docs/diagnostics/

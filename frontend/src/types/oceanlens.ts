@@ -172,23 +172,6 @@ export interface Hazard {
   riskAssessment: RiskAssessment;
 }
 
-export interface Station {
-  id: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  region: string;
-  status: 'active' | 'offline';
-  type: 'buoy' | 'coastal_radar' | 'tide_gauge';
-  dataStatus: DataStatus;
-  currentMeasurements: {
-    sstC?: number;
-    windSpeedKts?: number;
-    waveHeightM?: number;
-    pressureMb?: number;
-    salinityPsu?: number;
-  };
-}
 
 export interface GISLayer {
   id: string;

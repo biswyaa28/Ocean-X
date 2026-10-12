@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python)](https://www.python.org/)
 [![CesiumJS](https://img.shields.io/badge/CesiumJS-1.145-689f38?style=for-the-badge&logo=cesium)](https://cesium.com/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?style=for-the-badge&logo=tailwind-css)](https://tailwindcss.com/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)]()
 
 **An interactive 3D disaster-intelligence platform focused on the Bay of Bengal.**  
 Ocean-X synthesizes oceanographic observations, atmospheric dynamics, and cyclone telemetry into actionable decision-support insights.
@@ -201,14 +201,18 @@ directory (it installs from `frontend/package.json`).
 
 - **🌐 3D Bay of Bengal Globe:** Dynamic camera positioning, high-resolution bathymetric & satellite imagery rendered via **CesiumJS**.
 - **🌀 Cyclone Telemetry & Hazard Tracking:** Historical replay and forecast projections with storm tracks, central pressure, maximum sustained wind speeds, and coastal proximity.
-- **🌊 Multi-Layer Environmental Data:** Toggleable layers for:
-  - **Ocean Currents** (velocity vectors & direction)
-  - **Wind Dynamics** (surface wind vectors)
-  - **Sea Surface Temperature (SST)**
-  - **Wave Height & Period**
-  - **Coastal Monitoring Station Feeds**
-- **🛡️ Evidence-Based Risk Explainer:** Transparent risk scoring engine evaluating wind severity, wave heights, and exposure parameters without black-box ML claims.
-- **🔄 Data Resiliency Engine:** Seamless fallback between live provider APIs (INCOIS, NOAA IBTrACS, Copernicus) and deterministic local simulation models when external APIs are unavailable.
+- **🌊 Multi-Layer Environmental Data:** Toggleable layers, all backed by real INCOIS HYCOM output:
+  - **Ocean Currents** (HYCOM UVEL/VVEL velocity vectors)
+  - **Sea Surface Temperature (SST)** · **Sea Surface Salinity** · **Sea Surface Height (SSH)**
+  - **Mixed Layer Depth (MLD)**
+  - **Tropical Cyclone Heat Potential (TCHP)**
+  - **Argo Observations** (real GDAC in-situ profiles, T/S vs depth)
+- **🧪 Argo–Model Validation:** Real Argo profiles matched against real HYCOM runs, with QC policy, a time-gap guard, honest nulls, and depth-axis provenance. The TCHP/D26 comparison is genuinely computed, not mocked.
+- **🌀 Cyclone Telemetry:** Historical best-track replay from NOAA IBTrACS with per-point agency provenance (WMO / IMD), observed wind radii, and a data-completeness report.
+- **🛡️ Unvalidated Risk Demo:** A clearly-labelled **heuristic demo score** (`heuristicDemoScore`), never a forecast. It returns `UNAVAILABLE` with a reason rather than scoring on invented inputs, ships its weights in every response, and is marked **not validated, not for operational use** in the UI.
+- **🔄 Data Resiliency:** Falls back to an explicitly-labelled **demo provider** (never a silent simulation) when the backend is unreachable.
+
+> **Not implemented (removed):** the wave-height layer, the parametric surface-wind layer, and the coastal monitoring-station feeds. Each was permanently synthetic with no data behind it, so they were removed rather than shipped mislabelled. The impact-analysis endpoint does not exist.
 - **⏱️ Time-Machine Timeline Playback:** Interactive time slider supporting historical event reconstruction and forecast horizon browsing.
 
 ---
@@ -237,6 +241,40 @@ directory (it installs from `frontend/package.json`).
 
 ---
 
+## 💾 Data
+
+A fresh clone is **~68 MB** and runs. The multi-gigabyte ocean model is **not** in Git.
+
+### Committed to Git (small, real, ships with the clone)
+
+| Dataset | Path | Size | Notes |
+| :--- | :--- | :--- | :--- |
+| NOAA IBTrACS North Indian Ocean | `backend/data/raw/cyclones/ibtracs/ibtracs.NI.list.v04r01.csv` | ~27 MB | Force-tracked despite the `backend/data/raw/` ignore rule. Cyclone tracks, seasons ≥ 2020. |
+| Argo profiles (23 floats / 23 profiles / 6,560 levels) | `backend/data/processed/ocean/argo/argo_bob_processed.json` | ~2.4 MB | Real GDAC/INCOIS data, Oct 2026, Bay of Bengal. Provenance in `argo_bob_metadata.json`. |
+| Synthetic schema fixtures | `backend/tests/fixtures/hycom_*.nc` | ~90 KB | `synthetic='true'` in the NetCDF attrs. `FIXTURE` mode / CI only — **not scientific evidence**. |
+
+### NOT in Git — installed separately (~2.3 GB)
+
+| Dataset | Path | Notes |
+| :--- | :--- | :--- |
+| HYCOM daily subsets (6 runs) | `backend/data/raw/ocean/currents/RSMC_hycom_*.nc` | ~379 MB each. Real INCOIS output (`PyFerret V7.63`, CF-1.6). |
+| Processed surface field | `backend/data/processed/ocean/incois_hycom_bob_surface.nc` | ~13.5 MB. Derived from the runs above. |
+
+Both are covered by `.gitignore`. Install with:
+
+```bash
+python scripts/setup-data.py --check      # what is present / missing
+python scripts/setup-data.py --download   # ~9.85 GB source, asks first
+python scripts/setup-data.py --process    # regenerate the processed surface field
+python scripts/check-data.py              # preflight: AVAILABLE / MISSING / INVALID
+```
+
+**Without the model data the ocean layers, depth slices, currents and the Argo–model matchup are all unavailable** and the API says so explicitly rather than substituting values. Run the backend with `OCEANX_DATA_MODE=FIXTURE` to exercise the full pipeline on committed synthetic fixtures.
+
+> Legacy filename note: `arco_bob` / `incois_hycom_bob` is a historical tag for **BoB** = **Bay of Bengal**, not a single float.
+
+---
+
 ## 📐 Architecture
 
 Ocean-X uses a **Source-Agnostic Adapter Pattern** separating data provider integrations from the visualization interface:
@@ -255,8 +293,10 @@ graph TD
 
     SubGraph3[Data Resilience Layer]
     DomainModel --> AdapterMgr[Provider Adapter Manager]
-    AdapterMgr -->|Primary| RealData[INCOIS / NOAA / Copernicus Adapters]
-    AdapterMgr -->|Fallback| SimData[Deterministic Simulation Engine]
+    AdapterMgr -->|Primary| RealData[INCOIS RSMC HYCOM]
+    AdapterMgr -->|Primary| RealData2[Argo GDAC / INCOIS]
+    AdapterMgr -->|Primary| RealData3[NOAA IBTrACS]
+    AdapterMgr -->|Fallback| SimData[Explicitly-labelled Demo Provider]
 ```
 
 ---
@@ -343,19 +383,18 @@ npm run dev
 | `/api/status` | `GET` | System status + data mode (`dataMode`, `datasetSynthetic`) |
 | `/api/datasets` | `GET` | Dataset metadata |
 | `/api/cyclones` | `GET` | Cyclone tracks (NOAA IBTrACS) |
-| `/api/stations` | `GET` | Coastal monitoring stations |
 | `/api/hazards` | `GET` | Active hazard list |
-| `/api/risk/{id}` | `GET` | Prototype risk assessment |
+| `/api/risk/{id}` | `GET` | Unvalidated heuristic demo score (or `UNAVAILABLE` + reason) |
 | `/api/timeseries` | `GET` | Available HYCOM model timestamps |
 | `/api/layers` | `GET` | GIS layer list (status coherent with data mode) |
-| `/api/layers/{name}` | `GET` | Layer grid data (currents/sst/salinity/tchp) |
+| `/api/layers/{name}` | `GET` | Layer grid data (currents/sst/salinity/tchp/ssh/mld); masked cells are `null` |
 | `/api/model/depth-slice` | `GET` | HYCOM depth slice at nearest native model level |
+| `/api/observations` | `GET` | Dataset availability with derived (never hardcoded) status |
 | `/api/argo/floats` | `GET` | Argo float list |
 | `/api/argo/profiles` | `GET` | Argo profile list |
 | `/api/argo/{id}/matchup` | `GET` | Model–observation matchup, statistics & diagnostics |
+| `/api/argo/matchup/summary` | `GET` | Regional model–observation statistics |
 | `/api/inspect` | `GET` | Point ocean data inspection |
-
-> **Note:** `/api/v1/impact-analysis` does **not exist** in the current implementation and has been removed from this documentation.
 
 ---
 
@@ -500,7 +539,7 @@ OCEANX_DATA_MODE=FIXTURE python scripts/check-data.py
 
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements, dataset adapters, or visualization improvements.
 
-Distributed under the **MIT License**. See `LICENSE` for details.
+Distributed under the **MIT License**. *(No `LICENSE` file is committed yet — add one before publishing.)*
 
 ---
 

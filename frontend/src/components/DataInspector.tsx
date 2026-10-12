@@ -54,7 +54,7 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
 
   const layerId = activeLayer.id;
   const isNotIntegrated = ['storm_surge', 'chlorophyll', 'rainfall'].includes(layerId);
-  const isSimulated = activeLayer.status === 'SIMULATED' || ['wind', 'wave_height', 'stations', 'buoys'].includes(layerId);
+  const isSimulated = activeLayer.status === 'SIMULATED';
   const isDerived = layerId === 'risk_zones';
   const isPending = activeLayer.status === 'REAL SOURCE — INGESTION PENDING';
   const isTimestampUnavailable = inspection?.status === 'NO_REAL_MODEL_DATA' || inspection?.dataStatus === 'REAL DATASET — TIMESTAMP UNAVAILABLE';

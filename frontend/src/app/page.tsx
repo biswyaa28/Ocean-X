@@ -6,7 +6,6 @@ import { demoProvider } from '../services/DemoProvider';
 import {
   Cyclone,
   Hazard,
-  Station,
   GISLayer,
   KPIMetrics,
   AppMode,
@@ -24,8 +23,6 @@ import { LayerControl } from '../components/LayerControl';
 import { DepthSliceControl, DepthSliceSelection } from '../components/DepthSliceControl';
 import { ToolRail, ActiveRightTool } from '../components/ToolRail';
 import { Timeline } from '../components/Timeline';
-import { IntelligencePanel } from '../components/IntelligencePanel';
-import { StationModal } from '../components/StationModal';
 import { CesiumGlobe } from '../components/CesiumGlobe';
 import { ArgoMatchupDrawer } from '../components/ArgoMatchupDrawer';
 import { DataInspector, InspectionData } from '../components/DataInspector';
@@ -63,7 +60,6 @@ export default function Home() {
   const [activeRightTool, setActiveRightTool] = useState<ActiveRightTool>('storm');
 
   const [cyclone, setCyclone] = useState<Cyclone | null>(null);
-  const [stations, setStations] = useState<Station[]>([]);
   const [layers, setLayers] = useState<GISLayer[]>([]);
   const [argoProfiles, setArgoProfiles] = useState<ArgoProfile[]>([]);
   const [selectedArgoProfile, setSelectedArgoProfile] = useState<ArgoProfile | null>(null);
@@ -73,7 +69,6 @@ export default function Home() {
   const [riskLoading, setRiskLoading] = useState(false);
 
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(5);
-  const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [targetLocation, setTargetLocation] = useState<{ lat: number; lon: number; height?: number } | null>(null);
 
   // Inspection Data State & Dynamic Legend Bounds
@@ -137,7 +132,6 @@ export default function Home() {
       }
 
       const cyclones = await provider.getCyclones();
-      const st = await provider.getStations();
       const ly = await provider.getLayers();
       const argos = await provider.getArgoProfiles();
 
@@ -145,7 +139,6 @@ export default function Home() {
         setCyclone(cyclones[0]);
         setCurrentTrackIndex(cyclones[0].currentTrackIndex);
       }
-      setStations(st);
       setLayers(ly);
       setArgoProfiles(argos);
       setDataStatus(status.mode);
@@ -286,9 +279,6 @@ export default function Home() {
     setInspectedCoords({ lat, lon });
   }, []);
 
-  const handleSelectStation = useCallback((station: Station | null) => {
-    setSelectedStation(station);
-  }, []);
 
   const handleSelectArgoProfile = useCallback((profile: ArgoProfile | null) => {
     setSelectedArgoProfile(profile);
@@ -744,14 +734,6 @@ export default function Home() {
           dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'DERIVED ANALYTICS',
           source: 'OceanLens Hazard Risk Engine (unvalidated demo heuristic — not for operational use)',
         });
-      } else if (['wind', 'wave_height', 'stations', 'buoys'].includes(layerId)) {
-        setInspectionData({
-          latitude: inspectedCoords.lat,
-          longitude: inspectedCoords.lon,
-          timestamp: ts || new Date().toISOString(),
-          dataStatus: 'SIMULATED',
-          source: 'Simulated Analytical Model',
-        });
       } else if (['storm_surge', 'chlorophyll', 'rainfall'].includes(layerId)) {
         setInspectionData({
           latitude: inspectedCoords.lat,
@@ -793,7 +775,6 @@ export default function Home() {
         <CesiumGlobe
           cyclone={oceanMode === 'LIVE' ? null : cyclone}
           currentTrackIndex={currentTrackIndex}
-          stations={stations}
           layers={layers}
           argoProfiles={argoProfiles}
           depthSliceVisible={depthSliceVisible}
@@ -804,7 +785,6 @@ export default function Home() {
           currentFieldStatus={currentFieldStatus}
           currentFieldStatusReason={currentFieldStatusReason}
           currentFieldMetadata={currentFieldMetadata}
-          onSelectStation={handleSelectStation}
           onSelectArgoProfile={handleSelectArgoProfile}
           onInspectPoint={handleInspectPoint}
           onAstronomicalUpdate={setAstroData}
@@ -886,11 +866,6 @@ export default function Home() {
         />
       </main>
 
-      {/* 9. Station Inspection Modal */}
-      <StationModal
-        station={selectedStation}
-        onClose={() => handleSelectStation(null)}
-      />
     </div>
   );
 }

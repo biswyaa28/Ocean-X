@@ -56,14 +56,14 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
         { id: 'sst', name: 'Sea Surface Temperature', unit: '°C', statusBadge: 'REAL', statusType: 'real' },
         { id: 'salinity', name: 'Sea Surface Salinity', unit: 'PSU', statusBadge: 'REAL', statusType: 'real' },
         { id: 'tchp', name: 'Tropical Cyclone Heat Potential', unit: 'kJ/cm²', statusBadge: 'REAL', statusType: 'real' },
-        { id: 'wave_height', name: 'Wave Height', unit: 'm', statusBadge: 'SIMULATED', statusType: 'simulated' },
+        { id: 'ssh', name: 'Sea Surface Height', unit: 'm', statusBadge: 'REAL', statusType: 'real' },
+        { id: 'mld', name: 'Mixed Layer Depth', unit: 'm', statusBadge: 'REAL', statusType: 'real' },
         { id: 'chlorophyll', name: 'Chlorophyll-a', unit: 'mg/m³', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
     },
     {
       name: 'ATMOSPHERE',
       items: [
-        { id: 'wind', name: 'Wind Vectors', unit: 'kts', statusBadge: 'SIMULATED', statusType: 'simulated' },
         { id: 'rainfall', name: 'Rainfall', unit: 'mm/h', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
     },
@@ -71,8 +71,6 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
       name: 'OBSERVATIONS',
       items: [
         { id: 'argo', name: 'Argo Observations', unit: 'IN-SITU', statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' },
-        { id: 'stations', name: 'Monitoring Stations', statusBadge: 'SIMULATED', statusType: 'simulated' },
-        { id: 'buoys', name: 'Buoys', statusBadge: 'SIMULATED', statusType: 'simulated' },
       ],
     },
   ];

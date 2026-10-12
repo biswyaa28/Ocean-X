@@ -139,11 +139,11 @@ Do not label this as a validated ML model.
 
 For the 1–2 day MVP, persistent storage is optional.
 
-Preferred progression:
+What was actually built:
 
-1. Static JSON/CSV for the first working demo.
-2. PostgreSQL/PostGIS only if needed for persistent/queryable spatial data.
-3. Add migrations after the core demo is stable.
+1. Static JSON/CSV/NetCDF files read directly by the FastAPI service.
+2. **No database.** There is no PostgreSQL, PostGIS, or migration layer in this
+   codebase; persistence is the on-disk dataset, not a store.
 
 ## 10. Deployment
 

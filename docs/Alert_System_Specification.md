@@ -135,7 +135,7 @@ Source:
 Data status:
 REAL / FORECAST / SIMULATED
 
-[View Impact Analysis]
+[View per-depth bias panel]
 ```
 
 ## 9. Future Production Requirements

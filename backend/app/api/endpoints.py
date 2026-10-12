@@ -6,7 +6,6 @@ from app.core.config import settings
 from app.models.schemas import (
     Cyclone,
     Hazard,
-    Station,
     GISLayer,
     DatasetInfo,
     LayerDataResponse,
@@ -172,59 +171,6 @@ def get_cyclone_by_id(id: str):
         raise HTTPException(status_code=404, detail="Cyclone not found")
     return c
 
-@router.get("/stations", response_model=List[Station])
-def get_stations():
-    # Stations return explicit SIMULATED status until real station API streams are connected (Req #3)
-    return [
-        Station(
-            id='st-bd08',
-            name='INCOIS Ocean Buoy BD08',
-            latitude=18.2,
-            longitude=89.7,
-            region='East Bay of Bengal',
-            status='active',
-            type='buoy',
-            dataStatus='SIMULATED',
-            currentMeasurements={
-                'sstC': 30.2,
-                'windSpeedKts': 48,
-                'waveHeightM': 5.8,
-                'pressureMb': 978
-            }
-        ),
-        Station(
-            id='st-bd10',
-            name='INCOIS Ocean Buoy BD10',
-            latitude=16.5,
-            longitude=87.9,
-            region='Central Bay of Bengal',
-            status='active',
-            type='buoy',
-            dataStatus='SIMULATED',
-            currentMeasurements={
-                'sstC': 30.8,
-                'windSpeedKts': 110,
-                'waveHeightM': 9.4,
-                'pressureMb': 942
-            }
-        ),
-        Station(
-            id='st-paradip',
-            name='Paradeep Coastal Radar & Gauge',
-            latitude=20.26,
-            longitude=86.67,
-            region='Odisha Coast',
-            status='active',
-            type='coastal_radar',
-            dataStatus='SIMULATED',
-            currentMeasurements={
-                'sstC': 29.5,
-                'windSpeedKts': 65,
-                'waveHeightM': 4.2
-            }
-        )
-    ]
-
 @router.get("/observations")
 def get_observations():
     timestamps = incois_provider.get_available_timestamps()
@@ -339,8 +285,9 @@ def get_layers():
       DATA_MODE==REAL  + production file absent   → "NOT CURRENTLY INTEGRATED"
       DATA_MODE==FIXTURE                          → "SIMULATED"
 
-    The wind layer is always "SIMULATED" (parametric model, never HYCOM).
-    The Argo layer is always "REAL" (in-situ observations from GDAC).
+    Only layers backed by a real dataset are listed: the HYCOM physical
+    fields (currents, SST, salinity, TCHP, SSH, MLD) plus the Argo in-situ
+    layer, which is always "REAL".
     """
     data_mode = settings.DATA_MODE
     production_available = (
@@ -369,15 +316,6 @@ def get_layers():
             unit='m/s'
         ),
         GISLayer(
-            id='wind',
-            name='Atmospheric Surface Wind',
-            category='hazard',
-            active=True,
-            status='SIMULATED',
-            description='Surface wind velocity field (Simulated / Analytical Parametric Model)',
-            unit='kts'
-        ),
-        GISLayer(
             id='sst',
             name='Sea Surface Temp (SST)',
             category='physical',
@@ -403,6 +341,24 @@ def get_layers():
             status=hycom_status,
             description='INCOIS HYCOM tropical cyclone heat potential' + hycom_desc_suffix,
             unit='kJ/cm²'
+        ),
+        GISLayer(
+            id='ssh',
+            name='Sea Surface Height (SSH)',
+            category='physical',
+            active=False,
+            status=hycom_status,
+            description='INCOIS HYCOM sea surface height anomaly' + hycom_desc_suffix,
+            unit='m'
+        ),
+        GISLayer(
+            id='mld',
+            name='Mixed Layer Depth (MLD)',
+            category='physical',
+            active=False,
+            status=hycom_status,
+            description='INCOIS HYCOM mixed layer depth' + hycom_desc_suffix,
+            unit='m'
         ),
         GISLayer(
             id='argo',
@@ -521,8 +477,11 @@ def get_argo_hycom_matchup(
     profile_id: str,
     matchMode: Optional[str] = Query(
         None,
-        description="Vertical sub-sampling: 'interpolated' (default) blends between native HYCOM depths; "
-                    "'native' uses the nearest native level within the tolerance only",
+        description="Vertical sub-sampling: 'model_levels' (default) compares the model AT its "
+                    "own depth levels, interpolating the float onto each; 'float_levels' blends "
+                    "between native HYCOM depths onto every float depth; 'native' uses the "
+                    "nearest native level within the tolerance only. 'interpolated' is accepted "
+                    "as a backward-compatible alias for 'float_levels'.",
     ),
     spatialMode: Optional[str] = Query(
         None,

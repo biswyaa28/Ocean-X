@@ -122,10 +122,10 @@ A judge should be able to:
 1. Open the 3D Bay of Bengal view.
 2. Toggle environmental layers.
 3. Play a time sequence.
-4. Select a cyclone or station.
+4. Select a cyclone or an Argo float.
 5. See the relevant measurements/track information.
-6. Open an impact-analysis view.
-7. Understand why the prototype assigns a risk level.
+6. See a per-depth model-vs-observation bias panel (the regional summary).
+7. Understand why the prototype assigns a risk level, and that it is unvalidated.
 8. See the source/data status for displayed information.
 
 ## 10. Trust Requirements
@@ -142,14 +142,14 @@ Mock values must never be presented as live observations.
 
 ## 11. Source Strategy
 
-Initial candidate sources:
+Sources actually in use:
 
-- INCOIS Ocean State Forecast
-- Copernicus Marine Service
-- NOAA IBTrACS
-- NASA Earthdata
+- **INCOIS** — RSMC HYCOM ocean model (currents, SST, salinity, SSH, MLD, TCHP)
+- **Argo / INCOIS GDAC** — in-situ temperature & salinity profiles
+- **NOAA NCEI** — IBTrACS North Indian Ocean best tracks
 
-Source selection and access constraints must be verified before implementation.
+Copernicus Marine and NASA Earthdata were evaluated as candidates but no adapter
+was ever built; there is no Copernicus or NASA integration in this codebase.
 
 ## 12. Constraints
 

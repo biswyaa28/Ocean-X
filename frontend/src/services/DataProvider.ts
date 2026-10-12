@@ -2,7 +2,6 @@ import {
   Cyclone,
   Hazard,
   RiskAssessment,
-  Station,
   GISLayer,
   KPIMetrics,
   DataStatus,
@@ -27,7 +26,6 @@ export interface DataProvider {
    * declined to score comes back as `{status:'UNAVAILABLE', ...}`.
    */
   getRiskAssessment(cycloneId: string, index?: number): Promise<RiskAssessment | null>;
-  getStations(): Promise<Station[]>;
   getLayers(): Promise<GISLayer[]>;
   getKPIMetrics(timestepIndex?: number): Promise<KPIMetrics | null>;
   getDataStatus(): Promise<{ mode: DataStatus; backendConnected: boolean; dataMode: DataModeType; datasetSynthetic: boolean; datasetLoaded?: boolean }>;

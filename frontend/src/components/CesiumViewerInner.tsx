@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import { Cyclone, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
 import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
@@ -145,10 +145,8 @@ export function computeAstronomicalData(timestampStr: string, latDeg: number, lo
 interface CesiumViewerInnerProps {
   cyclone: Cyclone | null;
   currentTrackIndex: number;
-  stations: Station[];
   layers: GISLayer[];
   argoProfiles?: ArgoProfile[];
-  onSelectStation: (station: Station) => void;
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
@@ -173,10 +171,8 @@ interface CesiumViewerInnerProps {
 export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   cyclone,
   currentTrackIndex,
-  stations,
   layers,
   argoProfiles = [],
-  onSelectStation,
   onSelectArgoProfile,
   onInspectPoint,
   onAstronomicalUpdate,
@@ -196,7 +192,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const [viewerInstance, setViewerInstance] = useState<Cesium.Viewer | null>(null);
   const onInspectPointRef = useRef(onInspectPoint);
-  const onSelectStationRef = useRef(onSelectStation);
   const onSelectArgoProfileRef = useRef(onSelectArgoProfile);
   const rasterLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   // Dedicated imagery layer for the HYCOM model depth slice (Phase 1B).
@@ -235,9 +230,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   useEffect(() => {
     onInspectPointRef.current = onInspectPoint;
   }, [onInspectPoint]);
-  useEffect(() => {
-    onSelectStationRef.current = onSelectStation;
-  }, [onSelectStation]);
   useEffect(() => {
     onSelectArgoProfileRef.current = onSelectArgoProfile;
   }, [onSelectArgoProfile]);
@@ -293,6 +285,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
 
+    console.log('[CKPT-3] viewer CONSTRUCTOR about to run; container=', !!containerRef.current);
     Cesium.Ion.defaultAccessToken = process.env.NEXT_PUBLIC_CESIUM_TOKEN || '';
 
     try {
@@ -408,6 +401,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
       viewer.scene.globe.depthTestAgainstTerrain = false;
       viewerRef.current = viewer;
+      console.log('[CKPT-4] viewer READY (setViewerInstance called)');
       setViewerInstance(viewer);
 
       // Phase 2B: the scene properties above (lighting, atmosphere, sun/moon,
@@ -416,7 +410,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       // keep rendering afterwards until the globe is fully drawn.
       requestRenderRef.current();
 
-      // Event Handler for Station/Argo Clicks, Inspection & Dynamic Canvas Tooltips
+      // Event Handler for Argo Clicks, Inspection & Dynamic Canvas Tooltips
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
       // Click Handler
@@ -424,10 +418,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         const pickedObject = viewer.scene.pick(click.position);
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
-          if (props.stationData) {
-            onSelectStationRef.current(props.stationData.getValue());
-            return;
-          } else if (props.argoData && onSelectArgoProfileRef.current) {
+          if (props.argoData && onSelectArgoProfileRef.current) {
             onSelectArgoProfileRef.current(props.argoData.getValue());
             return;
           }
@@ -481,19 +472,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               timestamp: node.timestamp,
               source: 'NOAA IBTrACS v04r01',
               dataStatus: 'HISTORICAL RECORD',
-            });
-            return;
-          } else if (props.stationData) {
-            const st = props.stationData.getValue();
-            setHoverTooltip({
-              visible: true,
-              x: endPosition.x,
-              y: endPosition.y,
-              title: `STATION: ${st.name}`,
-              lat: st.latitude,
-              lon: st.longitude,
-              source: 'INCOIS Coastal Buoy Network',
-              dataStatus: st.dataStatus === 'SIMULATED' ? 'SIMULATED TELEMETRY' : `${st.dataStatus} TELEMETRY`,
             });
             return;
           } else if (props.argoData) {
@@ -1056,55 +1034,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       activeKeys.add('risk-sundarbans-sector');
     }
 
-    // 3. MONITORING STATIONS
-    if (isLayerActive('stations')) {
-      stations.forEach((st) => {
-        const haloKey = `station-halo-${st.id}`;
-        const haloEntity = acquireEntity(
-          viewer,
-          haloKey,
-          `halo|${st.id}|${st.latitude}|${st.longitude}`,
-          () => ({
-            name: `${st.name} Outer Halo`,
-            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-            ellipse: {
-              semiMajorAxis: 18000,
-              semiMinorAxis: 18000,
-              material: Cesium.Color.WHITE.withAlpha(0.04),
-              outline: true,
-              outlineColor: Cesium.Color.WHITE.withAlpha(0.4),
-              outlineWidth: 1.0,
-            },
-          })
-        );
-        haloEntity.show = true;
-        activeKeys.add(haloKey);
-
-        const pointKey = `station-${st.id}`;
-        const pointEntity = acquireEntity(
-          viewer,
-          pointKey,
-          `station|${st.id}|${st.latitude}|${st.longitude}`,
-          () => ({
-            name: st.name,
-            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-            point: {
-              pixelSize: 6,
-              color: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 1.5,
-            },
-            properties: {
-              stationData: st,
-            },
-          })
-        );
-        pointEntity.show = true;
-        activeKeys.add(pointKey);
-      });
-    }
-
-    // 4. REAL ARGO OBSERVATIONS LAYER
+    // 3. REAL ARGO OBSERVATIONS LAYER
     if (isLayerActive('argo') && argoProfiles) {
       argoProfiles.forEach((p) => {
         const haloKey = `argo-halo-${p.profile_id}`;
@@ -1179,11 +1109,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     // Phase 2B (requestRenderMode): entity *in-place* updates (position,
     // visibility, pixel size, label text, ...) are NOT scene-invalidating
     // events in Cesium — EntityCollection.collectionChanged does not request a
-    // frame — so cyclone geometry, track nodes, Sun/Moon, station and Argo
+    // frame — so cyclone geometry, track nodes, Sun/Moon and Argo
     // entity changes all invalidate here explicitly. (Add/remove of the entities
     // themselves and camera movement are auto-detected by Cesium.)
     requestRenderRef.current();
-  }, [cyclone, currentTrackIndex, stations, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
+  }, [cyclone, currentTrackIndex, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
 
   // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity / TCHP)
   // Phase 2B: raster encoding is now asynchronous (PNG Blob → object URL), so
@@ -1431,7 +1361,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   }, []);
 
 
-  const showWind = isLayerActive('wind');
+  // The parametric wind layer was removed; only real currents are drawn.
+  const showWind = false;
   const showCurrents = isLayerActive('currents');
   const activePt = cyclone?.track[Math.min(currentTrackIndex, (cyclone?.track.length || 1) - 1)];
 

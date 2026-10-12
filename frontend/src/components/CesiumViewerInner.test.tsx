@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, act } from '@testing-library/react';
 import React from 'react';
-import type { Station, GISLayer } from '../types/oceanlens';
+import type { GISLayer } from '../types/oceanlens';
 
 // Cesium mock must be in place BEFORE importing the component.
 import { cesiumMock, layerOps, resetLayerOps, resetViewerOptions, viewerOptions, requestRenderCalls, inputActions, createdViewers } from '../test/mocks/cesium';
@@ -43,12 +43,10 @@ import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../test/fixture
 import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
 import { clearRasterCache } from '../utils/rasterGen';
 
-const stations: Station[] = [];
 const layers: GISLayer[] = [
   { id: 'cyclone', name: 'Cyclone', category: 'hazard', active: false, status: 'REAL', description: '' },
   { id: 'sst', name: 'SST', category: 'physical', active: false, status: 'REAL', description: '' },
   { id: 'currents', name: 'Currents', category: 'physical', active: false, status: 'REAL', description: '' },
-  { id: 'wind', name: 'Wind', category: 'hazard', active: false, status: 'REAL', description: '' },
 ];
 
 type ViewerProps = React.ComponentProps<typeof CesiumViewerInner>;
@@ -58,9 +56,7 @@ function renderViewer(props: Partial<ViewerProps> = {}) {
     <CesiumViewerInner
       cyclone={null}
       currentTrackIndex={0}
-      stations={stations}
       layers={layers}
-      onSelectStation={() => {}}
       {...props}
     />
   );
@@ -167,10 +163,8 @@ describe('scenario 3 — surface + depth-slice mode', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={payload}
       />
     );
@@ -198,10 +192,8 @@ describe('scenario 4 & 13 — switching depth replaces the previous slice', () =
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 100, requested_depth_m: 100 })}
       />
     );
@@ -226,10 +218,8 @@ describe('scenarios 5 & 6 — switching variable and timestamp replaces the slic
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={makeDepthSlicePayload({ variable: 'salinity', units: 'PSU' })}
       />
     );
@@ -247,10 +237,8 @@ describe('scenarios 5 & 6 — switching variable and timestamp replaces the slic
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={makeDepthSlicePayload({ timestamp: '2026-09-07T12:00:00.000000000' })}
       />
     );
@@ -273,10 +261,8 @@ describe('scenario 7 — hiding the depth slice removes its layer', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible={false}
+          layers={layers}
+          depthSliceVisible={false}
         depthSlicePayload={makeDepthSlicePayload()}
       />
     );
@@ -299,10 +285,8 @@ describe('scenario 8 — payload removed (unavailable response)', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={null}
       />
     );
@@ -328,10 +312,8 @@ describe('scenario 9 & 13 — rapid selection churn never accumulates layers', (
         <CesiumViewerInner
           cyclone={null}
           currentTrackIndex={0}
-          stations={stations}
-          layers={layers}
-          onSelectStation={() => {}}
-          depthSliceVisible
+              layers={layers}
+              depthSliceVisible
           depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: depth, requested_depth_m: depth })}
         />
       );
@@ -528,9 +510,7 @@ function rerenderViewer(
     <CesiumViewerInner
       cyclone={null}
       currentTrackIndex={0}
-      stations={stations}
       layers={layers}
-      onSelectStation={() => {}}
       {...props}
     />
   );
@@ -702,10 +682,8 @@ describe('Phase 2B — Cesium on-demand rendering', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        timestamp="2026-09-07T18:00:00Z"
+          layers={layers}
+          timestamp="2026-09-07T18:00:00Z"
       />
     );
     await tick();
@@ -726,10 +704,8 @@ describe('Phase 2B — Cesium on-demand rendering', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 250, requested_depth_m: 250 })}
       />
     );
@@ -748,10 +724,8 @@ describe('Phase 2B — Cesium on-demand rendering', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-      />
+          layers={layers}
+        />
     );
     await tick();
 
@@ -824,10 +798,8 @@ describe('Phase 2B — raster imagery object URL lifecycle', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible
+          layers={layers}
+          depthSliceVisible
         depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 250, requested_depth_m: 250 })}
       />
     );
@@ -850,10 +822,8 @@ describe('Phase 2B — raster imagery object URL lifecycle', () => {
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        depthSliceVisible={false}
+          layers={layers}
+          depthSliceVisible={false}
         depthSlicePayload={makeDepthSlicePayload({ matched_depth_m: 50, requested_depth_m: 50 })}
       />
     );
@@ -909,10 +879,8 @@ describe('Phase 2B — hover picking and camera interaction remain functional', 
       <CesiumViewerInner
         cyclone={null}
         currentTrackIndex={0}
-        stations={stations}
-        layers={layers}
-        onSelectStation={() => {}}
-        targetLocation={{ lat: 20, lon: 90 }}
+          layers={layers}
+          targetLocation={{ lat: 20, lon: 90 }}
       />
     );
     await tick();

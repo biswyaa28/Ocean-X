@@ -9,7 +9,6 @@ vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
 const getDepthSlice = vi.fn();
 const getDataStatus = vi.fn();
 const getCyclones = vi.fn();
-const getStations = vi.fn();
 const getLayers = vi.fn();
 const getArgoProfiles = vi.fn();
 const getRealCurrentFieldPayload = vi.fn();
@@ -32,7 +31,6 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
       getRealCurrentFieldPayload(...(args as [number, string | undefined, number, AbortSignal])),
     getDataStatus: () => getDataStatus(),
     getCyclones: () => getCyclones(),
-    getStations: () => getStations(),
     getLayers: () => getLayers(),
     getArgoProfiles: () => getArgoProfiles(),
     getLayerData: (...args: [string, string | undefined, number, AbortSignal]) => getLayerData(...args),
@@ -67,7 +65,6 @@ beforeEach(() => {
     datasetLoaded: true,
   });
   getCyclones.mockResolvedValue([]);
-  getStations.mockResolvedValue([]);
   getLayers.mockResolvedValue([]);
   getArgoProfiles.mockResolvedValue([]);
   getRealCurrentFieldPayload.mockResolvedValue(null);
