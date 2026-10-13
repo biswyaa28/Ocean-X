@@ -1,7 +1,9 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { loadCesium } from '../lib/cesiumRuntime';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 import {
   ArgoMatchupResponse,
   Cyclone,
@@ -16,20 +18,19 @@ import { Loader2 } from 'lucide-react';
 import { perfMonitor } from '../utils/perfMonitor';
 import type { ArgoRibbonSceneData, RibbonVariable } from '../utils/argoProfileRibbon';
 
-const CesiumViewerInner = dynamic(
-  () => import('./CesiumViewerInner'),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="w-full h-full absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-cyan-400 gap-3">
-        <Loader2 className="w-10 h-10 animate-spin text-cyan-400" />
-        <div className="text-sm font-mono tracking-widest uppercase">
-          Initializing 3D Bay of Bengal Cesium Globe...
-        </div>
-      </div>
-    ),
-  }
+const GlobeLoadingFallback = () => (
+  <div className="w-full h-full absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-cyan-400 gap-3">
+    <Loader2 className="w-10 h-10 animate-spin text-cyan-400" />
+    <div className="text-sm font-mono tracking-widest uppercase">
+      Initializing 3D Bay of Bengal Cesium Globe...
+    </div>
+  </div>
 );
+
+const CesiumViewerInner = dynamic(() => import('./CesiumViewerInner'), {
+  ssr: false,
+  loading: GlobeLoadingFallback,
+});
 
 interface CesiumGlobeProps {
   cyclone: Cyclone | null;
@@ -119,11 +120,67 @@ function cesiumGlobePropsAreEqual(
   return true;
 }
 
+type CesiumPhase = 'loading' | 'ready' | 'error';
+
 export const CesiumGlobe: React.FC<CesiumGlobeProps> = React.memo(
   (props) => {
     if (process.env.NODE_ENV !== 'production') {
       perfMonitor.recordCesiumGlobeRender();
     }
+
+    // CesiumJS is a classic script loaded imperatively (see lib/cesiumRuntime),
+    // so nothing that touches the runtime may mount until it has resolved.
+    const [phase, setPhase] = useState<CesiumPhase>('loading');
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [attempt, setAttempt] = useState(0);
+
+    useEffect(() => {
+      let active = true;
+      setPhase('loading');
+      setLoadError(null);
+      loadCesium().then(
+        () => {
+          if (active) setPhase('ready');
+        },
+        (err: unknown) => {
+          if (!active) return;
+          setLoadError(
+            err instanceof Error ? err.message : 'Unknown CesiumJS load failure.'
+          );
+          setPhase('error');
+        }
+      );
+      return () => {
+        active = false;
+      };
+    }, [attempt]);
+
+    const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+    if (phase === 'loading') return <GlobeLoadingFallback />;
+
+    if (phase === 'error') {
+      return (
+        <div className="w-full h-full absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-center gap-4 px-6">
+          <AlertTriangle className="w-10 h-10 text-amber-400" aria-hidden="true" />
+          <div className="text-sm font-mono tracking-widest uppercase text-amber-400">
+            3D Globe Failed to Load
+          </div>
+          <p className="max-w-md text-xs text-slate-400 font-mono break-words">
+            {loadError}
+          </p>
+          <button
+            type="button"
+            onClick={retry}
+            className="inline-flex items-center gap-2 rounded-md border border-cyan-500/60 px-4 py-2 text-xs font-mono uppercase tracking-widest text-cyan-300 hover:bg-cyan-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+          >
+            <RefreshCw className="w-4 h-4" aria-hidden="true" />
+            Retry
+          </button>
+        </div>
+      );
+    }
+
     return <CesiumViewerInner {...props} />;
   },
   cesiumGlobePropsAreEqual

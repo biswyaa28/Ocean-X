@@ -8,6 +8,7 @@ import { cesiumMock, layerOps, resetLayerOps } from '../../test/mocks/cesium';
 vi.mock('../../lib/cesiumRuntime', () => ({
   __esModule: true,
   default: cesiumMock,
+  loadCesium: () => Promise.resolve(cesiumMock),
   Cesium: cesiumMock,
 }));
 vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
