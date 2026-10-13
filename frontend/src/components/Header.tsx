@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { PROJECT_NAME } from '../constants/project';
 import { AppMode, OceanMode, DataStatus, DataModeType, KPIMetrics, Cyclone } from '../types/oceanlens';
 import {
   LIVE_FRESHNESS_LIMIT_HOURS,
@@ -136,7 +137,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]" />
             <h1 className="font-display font-extrabold text-sm tracking-widest text-white uppercase">
-              OCEANLENS
+              {PROJECT_NAME.toUpperCase()}
             </h1>
           </div>
 

@@ -1,7 +1,17 @@
 import type { Metadata } from "next";
 import { Inter, Manrope, IBM_Plex_Mono } from "next/font/google";
-import Script from "next/script";
+import { PROJECT_NAME } from "../constants/project";
 import "./globals.css";
+
+/*
+ * Root layout — shared shell for EVERY route.
+ *
+ * Deliberately loads no CesiumJS. The dashboard pulls Cesium from
+ * src/app/app/layout.tsx instead, so a visitor landing on "/" never downloads
+ * the globe engine. Cesium is several megabytes; making the landing page pay
+ * for it would be the single largest cost on the page and buys nothing, since
+ * the landing page draws its own small canvas.
+ */
 
 const inter = Inter({
   variable: "--font-inter",
@@ -23,9 +33,16 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OCEANLENS — Bay of Bengal Geospatial Intelligence",
+  title: `${PROJECT_NAME} — Bay of Bengal Geospatial Intelligence`,
   description:
     "3D ocean science, cyclone hazard tracking, and disaster intelligence command center for the Bay of Bengal region.",
+  metadataBase: new URL("http://localhost:3000"),
+};
+
+export const viewport = {
+  themeColor: "#070a0f",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
@@ -39,28 +56,8 @@ export default function RootLayout({
       className={`${inter.variable} ${manrope.variable} ${ibmPlexMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full flex flex-col bg-[#070a0f] text-slate-100 font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-        {/*
-          CesiumJS is loaded as a CLASSIC SCRIPT rather than imported from
-          node_modules, on purpose.
-
-          Cesium inlines its Draco/Basis WASM decoders as template literals that
-          contain a raw NUL byte directly followed by the ASCII digits
-          `123456789`. Bundlers re-serialise string literals and rewrite that raw
-          NUL as the escape `\0`, producing `\01` — an octal escape sequence,
-          which is illegal inside a template literal. The bundled Cesium chunk
-          then fails to parse ("Octal escape sequences are not allowed in
-          template strings"), so it never evaluates, the dynamic import in
-          CesiumGlobe never resolves, and the globe hangs on its loading
-          fallback forever.
-
-          This reproduces on both the Turbopack and webpack builders. Loading the
-          prebuilt IIFE from public/ keeps Cesium out of the module graph
-          entirely. See src/lib/cesiumRuntime.ts for the full explanation.
-        */}
-        <Script src="/cesium/Cesium.js" strategy="beforeInteractive" />
         {children}
       </body>
     </html>
   );
 }
-

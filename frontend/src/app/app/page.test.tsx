@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import React from 'react';
 
-import { cesiumMock, layerOps, resetLayerOps } from '../test/mocks/cesium';
+import { cesiumMock, layerOps, resetLayerOps } from '../../test/mocks/cesium';
 // The components read Cesium from the runtime handle, not from 'cesium' —
 // see src/lib/cesiumRuntime.ts.
-vi.mock('../lib/cesiumRuntime', () => ({
+vi.mock('../../lib/cesiumRuntime', () => ({
   __esModule: true,
   default: cesiumMock,
   Cesium: cesiumMock,
@@ -26,8 +26,8 @@ type GetLayerData = (
 ) => Promise<null>;
 const getLayerData = vi.fn<GetLayerData>();
 
-vi.mock('../services/ApiProvider', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../services/ApiProvider')>();
+vi.mock('../../services/ApiProvider', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../services/ApiProvider')>();
   // Preserve the prototype chain (spread alone drops class methods).
   const mockProvider: typeof orig.apiProvider = Object.create(Object.getPrototypeOf(orig.apiProvider));
   Object.assign(mockProvider, orig.apiProvider, {
@@ -50,7 +50,7 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
 });
 
 import Home from './page';
-import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../test/fixtures/depthSliceFixtures';
+import { makeDepthSlicePayload, makeCurrentsSlicePayload } from '../../test/fixtures/depthSliceFixtures';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -505,7 +505,7 @@ describe('Home — Phase 1C scientific visualization controls', () => {
 // ============================================================
 // Phase 1E — real HYCOM UVEL/VVEL current field integration
 // ============================================================
-import type { GISLayer } from '../types/oceanlens';
+import type { GISLayer } from '../../types/oceanlens';
 
 const CURRENTS_LAYERS: GISLayer[] = [
   { id: 'cyclone', name: 'Cyclone Track & Forecast', category: 'hazard', active: false, status: 'REAL', description: '' },

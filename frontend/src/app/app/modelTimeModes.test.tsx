@@ -9,8 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import React from 'react';
 
-import { cesiumMock, resetLayerOps } from '../test/mocks/cesium';
-vi.mock('../lib/cesiumRuntime', () => ({
+import { cesiumMock, resetLayerOps } from '../../test/mocks/cesium';
+vi.mock('../../lib/cesiumRuntime', () => ({
   __esModule: true,
   default: cesiumMock,
   Cesium: cesiumMock,
@@ -32,8 +32,8 @@ type GetLayerData = (
 ) => Promise<unknown>;
 const getLayerData = vi.fn<GetLayerData>();
 
-vi.mock('../services/ApiProvider', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../services/ApiProvider')>();
+vi.mock('../../services/ApiProvider', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../services/ApiProvider')>();
   const mockProvider: typeof orig.apiProvider = Object.create(Object.getPrototypeOf(orig.apiProvider));
   Object.assign(mockProvider, orig.apiProvider, {
     getDepthSlice: (...args: unknown[]) => getDepthSlice(...args),
@@ -51,8 +51,8 @@ vi.mock('../services/ApiProvider', async (importOriginal) => {
 });
 
 import Home from './page';
-import { makeDepthSlicePayload } from '../test/fixtures/depthSliceFixtures';
-import type { ArgoProfile, Cyclone, GISLayer, RiskAssessment } from '../types/oceanlens';
+import { makeDepthSlicePayload } from '../../test/fixtures/depthSliceFixtures';
+import type { ArgoProfile, Cyclone, GISLayer, RiskAssessment } from '../../types/oceanlens';
 
 const MODEL_TIMES = [
   '2026-10-07T06:00:00.000000000',
