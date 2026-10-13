@@ -12,6 +12,7 @@ import {
   OceanMode,
   DataStatus,
   DataModeType,
+  ArgoMatchupResponse,
   ArgoProfile,
   CycloneTrackPoint,
   AstronomicalData,
@@ -21,6 +22,14 @@ import {
 import { Header } from '../components/Header';
 import { LayerControl } from '../components/LayerControl';
 import { DepthSliceControl, DepthSliceSelection } from '../components/DepthSliceControl';
+import { ArgoProfileRibbonControl } from '../components/ArgoProfileRibbonControl';
+import {
+  buildArgoRibbonSceneData,
+  RIBBON_DEFAULT_EXAGGERATION,
+  type RibbonVariable,
+} from '../utils/argoProfileRibbon';
+import { modelFileLabelDepth } from '../utils/modelDepthLabel';
+import { CLASSIC_PALETTE_ID } from '../utils/scientificPalettes';
 import { ToolRail, ActiveRightTool } from '../components/ToolRail';
 import { Timeline } from '../components/Timeline';
 import { CesiumGlobe } from '../components/CesiumGlobe';
@@ -63,6 +72,13 @@ export default function Home() {
   const [layers, setLayers] = useState<GISLayer[]>([]);
   const [argoProfiles, setArgoProfiles] = useState<ArgoProfile[]>([]);
   const [selectedArgoProfile, setSelectedArgoProfile] = useState<ArgoProfile | null>(null);
+  // --- Selected-float profile ribbon (3D scene) -----------------------------
+  // Computed here, once, so the 3D scene and the control panel read exactly the
+  // same levels, range and model markers; neither side re-derives anything.
+  const [ribbonVariable, setRibbonVariable] = useState<RibbonVariable>('temperature_c');
+  const [ribbonExaggeration, setRibbonExaggeration] = useState(RIBBON_DEFAULT_EXAGGERATION);
+  const [ribbonResetToken, setRibbonResetToken] = useState(0);
+  const [selectedMatchup, setSelectedMatchup] = useState<ArgoMatchupResponse | null>(null);
   // Authoritative heuristic score, fetched from GET /risk/{cycloneId}?index=N.
   // null until the first response arrives; never recomputed on the client.
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
@@ -343,7 +359,36 @@ export default function Home() {
 
   const handleSelectArgoProfile = useCallback((profile: ArgoProfile | null) => {
     setSelectedArgoProfile(profile);
+    // A matchup belongs to exactly one float; carrying it across a selection
+    // would put another float's model levels beside this one's ribbon.
+    setSelectedMatchup(null);
   }, []);
+
+  /** Ribbon scene data for the selected float: measured levels + model markers. */
+  const argoRibbonData = useMemo(
+    () =>
+      selectedArgoProfile
+        ? buildArgoRibbonSceneData(
+            selectedArgoProfile.observations ?? null,
+            ribbonVariable,
+            selectedMatchup?.comparisons ?? null,
+            selectedMatchup
+              ? {
+                  modelDepths: selectedMatchup.modelDepths,
+                  storedFileDepths: selectedMatchup.storedFileDepths,
+                }
+              : null,
+            (depthM) =>
+              selectedMatchup
+                ? modelFileLabelDepth(depthM, {
+                    modelDepths: selectedMatchup.modelDepths,
+                    storedFileDepths: selectedMatchup.storedFileDepths,
+                  })
+                : null
+          )
+        : null,
+    [selectedArgoProfile, ribbonVariable, selectedMatchup]
+  );
 
   // ============================================================
   // Argo in-situ profiles, filtered to the time on screen.
@@ -1008,6 +1053,12 @@ export default function Home() {
           currentFieldStatus={currentFieldStatus}
           currentFieldStatusReason={currentFieldStatusReason}
           currentFieldMetadata={currentFieldMetadata}
+          argoRibbon={argoRibbonData}
+          argoRibbonMatchup={selectedMatchup}
+          ribbonVariable={ribbonVariable}
+          ribbonPalette={CLASSIC_PALETTE_ID}
+          ribbonExaggeration={ribbonExaggeration}
+          ribbonResetToken={ribbonResetToken}
           onSelectArgoProfile={handleSelectArgoProfile}
           onInspectPoint={handleInspectPoint}
           onAstronomicalUpdate={setAstroData}
@@ -1045,6 +1096,18 @@ export default function Home() {
           availableDepthsM={depthSliceMetadata?.available_depths_m ?? null}
         />
 
+        <ArgoProfileRibbonControl
+          visible={Boolean(selectedArgoProfile)}
+          floatId={selectedArgoProfile?.float_id ?? null}
+          data={argoRibbonData}
+          variable={ribbonVariable}
+          paletteId={CLASSIC_PALETTE_ID}
+          exaggeration={ribbonExaggeration}
+          onVariableChange={setRibbonVariable}
+          onExaggerationChange={setRibbonExaggeration}
+          onResetView={() => setRibbonResetToken((token) => token + 1)}
+        />
+
         {/* 4. Right Map Tool Rail & Drawers */}
         <ToolRail
           activeTool={activeRightTool}
@@ -1061,6 +1124,7 @@ export default function Home() {
           profile={selectedArgoProfile}
           isDemo={!backendConnected}
           onClose={() => handleSelectArgoProfile(null)}
+          onMatchupLoaded={setSelectedMatchup}
         />
 
         {/* 6. Scientific Data Inspector Instrument (No Overlap) */}

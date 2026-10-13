@@ -1,11 +1,17 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import Cesium from '../lib/cesiumRuntime';
 // Type-only namespace import: fully erased at compile time, so Cesium is never bundled.
 import type * as CesiumTypes from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import { Cyclone, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import {
+  ArgoMatchupResponse,
+  Cyclone,
+  GISLayer,
+  ArgoProfile,
+  AstronomicalData,
+} from '../types/oceanlens';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
 import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
@@ -21,7 +27,23 @@ import {
 import { perfMonitor } from '../utils/perfMonitor';
 import { observedRadii, cycloneEyeLabel } from '../utils/cycloneObservation';
 import { formatModelDate } from '../utils/modelTime';
-import { modelDepthLabel } from '../utils/modelDepthLabel';
+import { modelDepthLabel, type ModelDepthAxis } from '../utils/modelDepthLabel';
+import {
+  CLASSIC_PALETTE_ID,
+  getPaletteForVariable,
+  samplePalette,
+} from '../utils/scientificPalettes';
+import {
+  RIBBON_DEFAULT_EXAGGERATION,
+  ribbonDepthTicks,
+  ribbonHeightM,
+  ribbonModelTooltip,
+  ribbonPointTooltip,
+  type ArgoRibbonSceneData,
+  type RibbonModelMarker,
+  type RibbonPoint,
+  type RibbonVariable,
+} from '../utils/argoProfileRibbon';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
@@ -146,6 +168,23 @@ export function computeAstronomicalData(timestampStr: string, latDeg: number, lo
   };
 }
 
+/**
+ * Rendering constants for the selected-float profile ribbon.
+ *
+ * The ribbon's DEPTH is real: only the drawn HEIGHT is exaggerated, and the
+ * labels always carry the true depth. These numbers therefore describe how the
+ * ribbon is drawn, never what it measures.
+ */
+const RIBBON_WIDTH_PX = 5;
+/** Comfortable hover radius for the few-pixel-wide ribbon, in screen pixels. */
+const RIBBON_HOVER_RADIUS_PX = 16;
+/** Globe opacity while a ribbon is showing, so the sub-surface column is visible. */
+const RIBBON_GLOBE_ALPHA = 0.25;
+const RIBBON_CAMERA_PITCH_DEG = -38;
+/** Camera altitude floor: a few hundred km keeps a short profile legible. */
+const RIBBON_MIN_CAMERA_HEIGHT_M = 260_000;
+const RIBBON_CAMERA_SPAN_FACTOR = 2.2;
+
 interface CesiumViewerInnerProps {
   cyclone: Cyclone | null;
   currentTrackIndex: number;
@@ -171,6 +210,22 @@ interface CesiumViewerInnerProps {
   currentFieldStatusReason?: string | null;
   /** Backend metadata for the current field (provenance chip). */
   currentFieldMetadata?: DepthSlicePayload | null;
+  /** Matchup of the selected float, used only to place and label model markers. */
+  argoRibbonMatchup?: ArgoMatchupResponse | null;
+  /**
+   * Precomputed ribbon for the selected float: the decimated measured levels,
+   * the model markers and why nothing is drawn if that is the case. Built by the
+   * page so the 3D scene and the control panel read the SAME numbers.
+   */
+  argoRibbon?: ArgoRibbonSceneData | null;
+  /** Measured quantity the ribbon is coloured by. */
+  ribbonVariable?: RibbonVariable;
+  /** Palette id for the ribbon's colour transfer function. */
+  ribbonPalette?: string;
+  /** Vertical exaggeration applied to DRAWN depth only. */
+  ribbonExaggeration?: number;
+  /** Incremented by the reset action to re-fly to the ribbon. */
+  ribbonResetToken?: number;
 }
 
 export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
@@ -192,6 +247,12 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   currentFieldStatus = 'SIMULATED',
   currentFieldStatusReason = null,
   currentFieldMetadata = null,
+  argoRibbonMatchup = null,
+  argoRibbon = null,
+  ribbonVariable = 'temperature_c',
+  ribbonPalette = CLASSIC_PALETTE_ID,
+  ribbonExaggeration = RIBBON_DEFAULT_EXAGGERATION,
+  ribbonResetToken = 0,
 }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1462,9 +1523,318 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   const showCurrents = isLayerActive('currents');
   const activePt = cyclone?.track[Math.min(currentTrackIndex, (cyclone?.track.length || 1) - 1)];
 
+  // ============================================================
+  // Selected float: vertical profile ribbon (additive)
+  //
+  // The whole feature is ONE effect with ONE cleanup, so selecting floats in a
+  // row cannot leave a ribbon, a marker or a globe setting behind.
+  //
+  // The ribbon is a PolylineCollection (one primitive per segment) rather than
+  // one entity per segment: ~100 polylines in one collection costs far less than
+  // 100 entities. Markers and depth ticks stay real entities so they keep labels
+  // and pick metadata. Total scene entities added: at most 6 + 6.
+  // ============================================================
+  /** Sampled axis vs the file's own labels, used to annotate model markers. */
+  const ribbonDepthAxis = useMemo<ModelDepthAxis | undefined>(
+    () =>
+      argoRibbonMatchup
+        ? {
+            modelDepths: argoRibbonMatchup.modelDepths,
+            storedFileDepths: argoRibbonMatchup.storedFileDepths,
+          }
+        : undefined,
+    [argoRibbonMatchup]
+  );
+
+  const [ribbonHover, setRibbonHover] = useState<string | null>(null);
+  const ribbonTeardownRef = useRef<(() => void) | null>(null);
+  const ribbonFlownProfileIdRef = useRef<string | null>(null);
+
+  const ribbonPaletteDefinition = useMemo(
+    () =>
+      getPaletteForVariable(
+        ribbonVariable === 'temperature_c' ? 'temperature' : 'salinity',
+        ribbonPalette
+      ),
+    [ribbonVariable, ribbonPalette]
+  );
+
+  // modelDepthLabel already appends "(file label N m)" when the file's own DEPTH
+  // disagrees with the sampled depth, so the marker's resolved file label is the
+  // only thing left to reconcile.
+  const markerDepthLabel = useCallback(
+    (depthM: number): string => modelDepthLabel(depthM, ribbonDepthAxis),
+    [ribbonDepthAxis]
+  );
+
+  useEffect(() => {
+    // Always tear the previous ribbon down first, so a changed variable,
+    // exaggeration, palette or profile can never stack a second one on top.
+    if (ribbonTeardownRef.current) {
+      ribbonTeardownRef.current();
+      ribbonTeardownRef.current = null;
+    }
+
+    const viewer = viewerRef.current;
+    const profile = selectedArgoProfile;
+    const data = argoRibbon;
+    if (!viewer || viewer.isDestroyed() || !profile || !data) return;
+    if (data.profile.points.length < 2) return;
+
+    const lat = profile.latitude;
+    const lon = profile.longitude;
+
+    // --- subsurface visibility ------------------------------------------------
+    // The ribbon hangs below the sea surface, so the globe above it has to be
+    // see-through. Previous settings are captured and restored exactly, so
+    // deselecting a float returns the scene to how the user had it.
+    const globe = viewer.scene.globe;
+    const previousTranslucency = {
+      enabled: globe.translucency.enabled,
+      frontFaceAlpha: globe.translucency.frontFaceAlpha,
+      backFaceAlpha: globe.translucency.backFaceAlpha,
+    };
+    globe.translucency.enabled = true;
+    globe.translucency.frontFaceAlpha = RIBBON_GLOBE_ALPHA;
+    globe.translucency.backFaceAlpha = RIBBON_GLOBE_ALPHA;
+
+    const positionAt = (depthM: number): CesiumTypes.Cartesian3 =>
+      Cesium.Cartesian3.fromDegrees(lon, lat, -ribbonHeightM(depthM, ribbonExaggeration));
+
+    // --- ribbon ---------------------------------------------------------------
+    // ONE primitive for the whole column, not one per segment:
+    //  - a single primitive with depth testing OFF is what makes a sub-surface
+    //    line visible through the globe. Neither PolylineGraphics nor
+    //    PolylineCollection expose a way to disable the depth test, so the
+    //    column is built as raw geometry with its own appearance.
+    //  - one primitive also keeps the entity/primitive count flat, which matters
+    //    because every extra scene object costs a frame.
+    const ribbonPositions = data.profile.points.map((point) => positionAt(point.depthM));
+    const ribbonColors = data.profile.points.map((point) => {
+      const { r, g, b } = samplePalette(ribbonPaletteDefinition, point.t);
+      return Cesium.Color.fromBytes(r, g, b, 255);
+    });
+    const ribbonPrimitive = viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: new Cesium.GeometryInstance({
+          geometry: new Cesium.PolylineGeometry({
+            positions: ribbonPositions,
+            width: RIBBON_WIDTH_PX,
+            // Straight segments: the ribbon must follow the measured levels, not
+            // curve between them.
+            arcType: Cesium.ArcType.NONE,
+            // Must be the APPEARANCE's own vertex format. Pairing the geometry
+            // with a different appearance's constant compiles, builds, and then
+            // silently renders one flat colour instead of the measured gradient.
+            vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
+            colors: ribbonColors,
+          }),
+        }),
+        appearance: new Cesium.PolylineColorAppearance({
+          // Per-vertex colours are interpolated along the polyline by this
+          // appearance, so the column reads as a continuous gradient between
+          // measured levels. PerInstanceColorAppearance is the documented
+          // general-purpose appearance but renders this geometry as nothing.
+          translucent: true,
+          renderState: {
+            depthTest: { enabled: false },
+          },
+        }),
+        asynchronous: false,
+      })
+    );
+
+    // --- depth ticks ----------------------------------------------------------
+    const createdEntities: CesiumTypes.Entity[] = [];
+    for (const tickM of ribbonDepthTicks(data.profile.maxDepthM)) {
+      createdEntities.push(
+        viewer.entities.add({
+          id: `argo-ribbon-tick-${profile.profile_id}-${tickM}`,
+          position: positionAt(tickM),
+          point: {
+            pixelSize: 4,
+            color: Cesium.Color.fromCssColorString('#7dd3fc').withAlpha(0.9),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: `${tickM} m`,
+            font: '9px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            fillColor: Cesium.Color.fromCssColorString('#bae6fd'),
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.85),
+            backgroundPadding: new Cesium.Cartesian2(4, 3),
+            // Depth ticks sit to the LEFT of the ribbon; the model markers and
+            // their labels sit to the right, so the two never overlap.
+            pixelOffset: new Cesium.Cartesian2(-52, -10),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        })
+      );
+    }
+
+    // --- model markers --------------------------------------------------------
+    for (const marker of data.markers) {
+      const { r, g, b } = samplePalette(ribbonPaletteDefinition, marker.t);
+      createdEntities.push(
+        viewer.entities.add({
+          id: `argo-ribbon-model-${profile.profile_id}-${marker.depthM}`,
+          position: positionAt(marker.depthM),
+          point: {
+            pixelSize: 11,
+            color: Cesium.Color.fromBytes(r, g, b, 255),
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: modelDepthLabel(marker.depthM, ribbonDepthAxis),
+            font: '8px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            fillColor: Cesium.Color.WHITE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#7c2d12').withAlpha(0.92),
+            backgroundPadding: new Cesium.Cartesian2(4, 3),
+            // Offset beside the ribbon so float and model never overlap.
+            pixelOffset: new Cesium.Cartesian2(52, 0),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          properties: { ribbonModelMarker: marker },
+        })
+      );
+    }
+
+    // --- hover ----------------------------------------------------------------
+    // A SECOND handler on the same canvas, deliberately not merged into the
+    // existing one: the ribbon owns its own tooltip state, so hovering it can
+    // never clear the cyclone/float tooltip and vice versa. Only one can be
+    // non-null at a time because they pick different objects.
+    const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    hoverHandler.setInputAction((movement: { endPosition: CesiumTypes.Cartesian2 }) => {
+      if (!movement?.endPosition) return;
+      // Cesium's pick payload is a union; this handler only needs the entity
+      // `properties` bag or a primitive's `id` position, so it is narrowed to
+      // exactly those two shapes rather than the full typed union.
+      const picked = viewer.scene.pick(movement.endPosition) as
+        | { id?: { properties?: unknown }; primitive?: unknown }
+        | undefined;
+      const entityProperties = (picked?.id as { properties?: unknown } | undefined)?.properties as
+        | { ribbonModelMarker?: { getValue?: () => unknown } }
+        | undefined;
+      const marker = entityProperties?.ribbonModelMarker?.getValue?.() as
+        | RibbonModelMarker
+        | undefined;
+      if (marker) {
+        setRibbonHover(ribbonModelTooltip(marker, ribbonVariable, markerDepthLabel));
+        return;
+      }
+      setRibbonHover(null);
+
+      // The ribbon is ONE primitive spanning every segment, so a 3D pick on it
+      // names no vertex, and the line is only a few pixels wide. Instead every
+      // measured level is projected to the screen and the nearest one within
+      // RIBBON_HOVER_RADIUS_PX is named. That uses only public Cesium API, gives
+      // the line a comfortable hover target, and still quotes a real measured
+      // level rather than an interpolated depth.
+      let nearest: RibbonPoint | null = null;
+      let nearestDistance = RIBBON_HOVER_RADIUS_PX;
+      for (const point of data.profile.points) {
+        const window = Cesium.SceneTransforms.worldToWindowCoordinates(
+          viewer.scene,
+          positionAt(point.depthM)
+        );
+        if (!window) continue;
+        const distance = Math.hypot(
+          window.x - movement.endPosition.x,
+          window.y - movement.endPosition.y
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = point;
+        }
+      }
+      if (nearest) setRibbonHover(ribbonPointTooltip(nearest, ribbonVariable));
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    // --- camera ---------------------------------------------------------------
+    // Only on a genuinely new selection, or an explicit reset: never on an
+    // unrelated re-render, which would yank the camera out from under the user.
+    if (ribbonFlownProfileIdRef.current !== profile.profile_id || ribbonResetToken > 0) {
+      // Frame the WHOLE column, not a point on it. A plain flyTo aimed at the
+      // surface position puts the sub-surface column below the viewport at any
+      // useful tilt, so the column is bounded by a sphere instead and the
+      // camera backs off far enough to hold both ends.
+      const columnM = ribbonHeightM(data.profile.maxDepthM ?? 0, ribbonExaggeration);
+      const columnSphere = Cesium.BoundingSphere.fromPoints([
+        positionAt(data.profile.minDepthM ?? 0),
+        positionAt(data.profile.maxDepthM ?? 0),
+      ]);
+      viewer.camera.flyToBoundingSphere(columnSphere, {
+        offset: new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(0.0),
+          Cesium.Math.toRadians(RIBBON_CAMERA_PITCH_DEG),
+          Math.max(RIBBON_MIN_CAMERA_HEIGHT_M, columnM * RIBBON_CAMERA_SPAN_FACTOR)
+        ),
+        duration: 1.4,
+      });
+      ribbonFlownProfileIdRef.current = profile.profile_id;
+    }
+
+    requestRenderRef.current();
+
+    // --- teardown -------------------------------------------------------------
+    ribbonTeardownRef.current = () => {
+      hoverHandler.destroy();
+      viewer.scene.primitives.remove(ribbonPrimitive);
+      createdEntities.forEach((entity) => viewer.entities.remove(entity));
+      globe.translucency.enabled = previousTranslucency.enabled;
+      globe.translucency.frontFaceAlpha = previousTranslucency.frontFaceAlpha;
+      globe.translucency.backFaceAlpha = previousTranslucency.backFaceAlpha;
+      requestRenderRef.current();
+    };
+  }, [
+    selectedArgoProfile,
+    argoRibbon,
+    argoRibbonMatchup,
+    ribbonPaletteDefinition,
+    ribbonVariable,
+    ribbonExaggeration,
+    ribbonResetToken,
+    markerDepthLabel,
+  ]);
+
+  // Release on unmount, independent of the effect above.
+  useEffect(
+    () => () => {
+      ribbonTeardownRef.current?.();
+      ribbonTeardownRef.current = null;
+    },
+    []
+  );
+
   return (
     <div className="w-full h-full absolute inset-0 bg-[#05070a] relative">
       <div ref={containerRef} className="w-full h-full absolute inset-0 bg-[#05070a]" />
+
+      {/*
+        Profile ribbon readout. Kept separate from the map tooltip above and
+        pinned to the ribbon's own readout, so hovering the water column cannot
+        clear a cyclone or float tooltip and vice versa.
+      */}
+      {ribbonHover && (
+        <div
+          data-testid="ribbon-hover-readout"
+          className="absolute bottom-8 left-1/2 -translate-x-1/2 z-40 pointer-events-none font-mono text-[10px] px-3 py-1.5 rounded-lg bg-[#080c14]/95 border border-amber-400/40 text-amber-100 whitespace-nowrap"
+        >
+          {ribbonHover}
+        </div>
+      )}
 
       {/* Dynamic Map Hover Tooltip Overlay (Requirement 1) */}
       {hoverTooltip && hoverTooltip.visible && (

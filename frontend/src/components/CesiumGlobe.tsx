@@ -2,12 +2,19 @@
 
 import dynamic from 'next/dynamic';
 import React from 'react';
-import { Cyclone, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import {
+  ArgoMatchupResponse,
+  Cyclone,
+  GISLayer,
+  ArgoProfile,
+  AstronomicalData,
+} from '../types/oceanlens';
 import { DepthSlicePayload } from '../services/ApiProvider';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { DepthSliceRenderConfig } from '../utils/depthSliceViz';
 import { Loader2 } from 'lucide-react';
 import { perfMonitor } from '../utils/perfMonitor';
+import type { ArgoRibbonSceneData, RibbonVariable } from '../utils/argoProfileRibbon';
 
 const CesiumViewerInner = dynamic(
   () => import('./CesiumViewerInner'),
@@ -49,6 +56,14 @@ interface CesiumGlobeProps {
   currentFieldStatusReason?: string | null;
   /** Backend metadata for the current field (provenance chip). */
   currentFieldMetadata?: DepthSlicePayload | null;
+  /** Matchup of the selected float, used only for model marker placement/labels. */
+  argoRibbonMatchup?: ArgoMatchupResponse | null;
+  /** Precomputed ribbon for the selected float. */
+  argoRibbon?: ArgoRibbonSceneData | null;
+  ribbonVariable?: RibbonVariable;
+  ribbonPalette?: string;
+  ribbonExaggeration?: number;
+  ribbonResetToken?: number;
 }
 
 /**
@@ -78,6 +93,12 @@ function cesiumGlobePropsAreEqual(
   if (prev.currentFieldStatus !== next.currentFieldStatus) return false;
   if (prev.currentFieldStatusReason !== next.currentFieldStatusReason) return false;
   if (prev.currentFieldMetadata !== next.currentFieldMetadata) return false;
+  if (prev.argoRibbon !== next.argoRibbon) return false;
+  if (prev.argoRibbonMatchup !== next.argoRibbonMatchup) return false;
+  if (prev.ribbonVariable !== next.ribbonVariable) return false;
+  if (prev.ribbonPalette !== next.ribbonPalette) return false;
+  if (prev.ribbonExaggeration !== next.ribbonExaggeration) return false;
+  if (prev.ribbonResetToken !== next.ribbonResetToken) return false;
 
   if (prev.layers === next.layers) return true;
   if (prev.layers.length !== next.layers.length) return false;

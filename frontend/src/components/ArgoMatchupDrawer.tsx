@@ -29,6 +29,12 @@ interface ArgoMatchupDrawerProps {
   profile: ArgoProfile | null;
   onClose: () => void;
   isDemo?: boolean;
+  /**
+   * Reports the loaded matchup upward so the 3D scene can draw the model's
+   * levels beside the float ribbon. Optional and additive: the drawer behaves
+   * identically without it, it just stops feeding the scene.
+   */
+  onMatchupLoaded?: (matchup: ArgoMatchupResponse | null) => void;
 }
 
 type DrawerTab = 'profile' | 'matchup' | 'region' | 'data';
@@ -669,8 +675,17 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
   );
 }
 
-export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, onClose, isDemo }) => {
+export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({
+  profile,
+  onClose,
+  isDemo,
+  onMatchupLoaded,
+}) => {
   const [matchup, setMatchup] = useState<ArgoMatchupResponse | null>(null);
+  const onMatchupLoadedRef = useRef(onMatchupLoaded);
+  useEffect(() => {
+    onMatchupLoadedRef.current = onMatchupLoaded;
+  }, [onMatchupLoaded]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   // Vertical matching mode requested by the user. The backend is the authority
@@ -697,6 +712,7 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
       const requestId = ++matchupRequestIdRef.current;
       const { signal } = controller;
       setMatchup(null);
+      onMatchupLoadedRef.current?.(null);
       setLoading(true);
       setError(null);
       try {
@@ -704,6 +720,7 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
         if (signal.aborted || requestId !== matchupRequestIdRef.current) return;
         if (res) {
           setMatchup(res);
+          onMatchupLoadedRef.current?.(res);
           setError(res.statusMessage || null);
         } else {
           setMatchup(null);
