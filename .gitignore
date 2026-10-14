@@ -84,3 +84,5 @@ yarn-debug.log*
 # TRACKED: they are the evidence behind the bias and TCHP figures quoted in the
 # UI, they are a few kilobytes each, and an untracked number nobody can check is
 # the thing this repository is trying to avoid.
+shot-*.png
+verify-*.png
