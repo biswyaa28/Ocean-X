@@ -414,7 +414,20 @@ const TchpScatter: React.FC<{
   );
 };
 
-export const RegionalSummary: React.FC = () => {
+interface RegionalSummaryProps {
+  /**
+   * Condensed layout for short viewports: keeps the headline counts, the depth
+   * provenance note and the TCHP definition note, and drops the long-form
+   * charts and statistics blocks.
+   *
+   * Nothing is condensed INTO a smaller number. A figure that only exists in a
+   * dropped section is simply absent, because a summarised aggregate the full
+   * view never computed would be a value this project could not source.
+   */
+  compact?: boolean;
+}
+
+export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact = false }) => {
   const [summary, setSummary] = useState<ArgoMatchupSummary | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [unavailable, setUnavailable] = useState<string | null>(null);
@@ -541,6 +554,18 @@ export const RegionalSummary: React.FC = () => {
             </div>
           </div>
 
+          {compact && temperatureRows.length === 0 && (
+            <div
+              role="status"
+              className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-2.5 font-mono text-[9.5px] text-slate-400"
+            >
+              <AlertCircle className="w-4 h-4 text-slate-500 shrink-0" />
+              <span>NO PER-DEPTH BIAS AVAILABLE — NO PROFILE PRODUCED A PAIR.</span>
+            </div>
+          )}
+
+          {!compact && (
+          <>
           <TchpScatter
             points={summary.tchpScatter}
             ruleOfThumb={summary.tchpRuleOfThumbKJPerCm2}
@@ -714,6 +739,8 @@ export const RegionalSummary: React.FC = () => {
                 </tbody>
               </table>
             </div>
+          )}
+          </>
           )}
         </>
       )}

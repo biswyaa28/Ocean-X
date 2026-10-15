@@ -3,7 +3,7 @@
 import React from 'react';
 import { DataStatus, GISLayer } from '../types/oceanlens';
 import { formatModelDate } from '../utils/modelTime';
-import { Activity, AlertCircle, MousePointerClick } from 'lucide-react';
+import { Activity, AlertCircle, MousePointerClick, X } from 'lucide-react';
 
 export interface InspectionData {
   latitude: number;
@@ -42,12 +42,19 @@ interface DataInspectorProps {
   activeLayer: GISLayer | null;
   inspection: InspectionData | null;
   legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string; timestamp?: string } | null;
+  /**
+   * Clears the current inspection, returning the panel to its "INSPECTOR READY"
+   * state. The panel itself is a persistent instrument and is not dismissed.
+   * Optional so the component still renders when nothing wires it.
+   */
+  onClose?: () => void;
 }
 
 export const DataInspector: React.FC<DataInspectorProps> = ({
   activeLayer,
   inspection,
   legendBounds,
+  onClose,
 }) => {
   if (!activeLayer) return null;
 
@@ -137,7 +144,7 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
 
   return (
     <div className="fixed left-6 lg:left-80 bottom-24 z-20 font-mono text-xs select-none pointer-events-auto transition-all duration-300">
-      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 shadow-2xl w-72 sm:w-80 text-slate-100 font-sans space-y-3">
+      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 shadow-2xl w-72 sm:w-80 text-slate-100 font-sans space-y-3 max-h-[calc(100vh-17rem)] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/10 pb-2.5 font-mono gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -152,9 +159,22 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
             </div>
           </div>
 
-          <span className={`text-[8.5px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono shrink-0 max-w-[140px] truncate ${badgeStyle}`}>
-            {badgeText}
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className={`text-[8.5px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono max-w-[140px] truncate ${badgeStyle}`}>
+              {badgeText}
+            </span>
+            {onClose && inspection && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Clear inspection"
+                title="Clear inspection"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-white/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Content Body based on Selection State */}

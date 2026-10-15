@@ -314,9 +314,16 @@ export default function Home() {
       avgSSTC: avgSSTFromRisk,
       coastalRiskLevel: riskAvailable ? riskAssessment!.category : null,
       coastalRiskScore: riskAvailable ? riskAssessment!.heuristicDemoScore : null,
-      coastalRiskUnavailableReason: riskAvailable
-        ? null
-        : riskAssessment?.unavailableReason ?? 'No risk assessment received from the backend.',
+      // A request is outstanding when one is in scope and the answer on hand
+      // is not its response. Deriving it keeps the flag from ever disagreeing
+      // with the score's own identity.
+      coastalRiskLoading: riskKey !== null && riskState?.key !== riskKey,
+      coastalRiskUnavailableReason:
+        riskKey !== null && riskState?.key !== riskKey
+          ? null
+          : riskAvailable
+            ? null
+            : riskAssessment?.unavailableReason ?? 'No risk assessment received from the backend.',
       coastalRiskWeights: riskAvailable ? riskAssessment!.weights : null,
       // The score was computed from the model's ocean state at ITS date, which
       // is not necessarily the storm's. Both travel with the number so the
@@ -326,7 +333,15 @@ export default function Home() {
       dataConfidencePct: oceanMode === 'SCENARIO' ? 75 : 92,
       forecastConfidencePct: currentPoint.forecastConfidencePct || 92,
     };
-  }, [cyclone, currentPoint, oceanMode, riskAssessment, avgSSTFromRisk]);
+  }, [
+    cyclone,
+    currentPoint,
+    oceanMode,
+    riskAssessment,
+    avgSSTFromRisk,
+    riskKey,
+    riskState?.key,
+  ]);
 
   // Memoized callbacks: stable references prevent cascading re-renders of the
   // memoized CesiumGlobe subtree on unrelated top-level state changes.
@@ -1160,6 +1175,7 @@ useEffect(() => {
           activeLayer={activeLayer}
           inspection={inspectionData}
           legendBounds={legendBounds}
+          onClose={() => setInspectionData(null)}
         />
 
         {/* 7. Research Mode Technical Banner Overlay */}

@@ -83,11 +83,18 @@ export const Header: React.FC<HeaderProps> = ({
     if (!displayMetrics) return undefined;
     const {
       coastalRiskLevel,
+      coastalRiskLoading,
       coastalRiskUnavailableReason,
       coastalRiskWeights,
       coastalRiskModelTimestamp,
       coastalRiskTimeMatched,
     } = displayMetrics;
+    if (coastalRiskLoading) {
+      return (
+        'SCORING — the backend has been asked for a score and has not answered yet.\n' +
+        'This is not an unavailability.'
+      );
+    }
     if (coastalRiskLevel === null) {
       return (
         'UNAVAILABLE — no score was computed.\n' +
@@ -369,6 +376,7 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-slate-400">RISK:</span>
               <span
                 className={`font-bold tracking-wider ${
+                  displayMetrics.coastalRiskLoading ? 'text-cyan-300' :
                   displayMetrics.coastalRiskLevel === null ? 'text-slate-500' :
                   displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
                   displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
@@ -377,8 +385,11 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
                 title={riskTooltip}
               >
-                {displayMetrics.coastalRiskLevel ?? 'UNAVAILABLE'}
-                {displayMetrics.coastalRiskScore !== null &&
+                {displayMetrics.coastalRiskLoading
+                  ? 'SCORING…'
+                  : displayMetrics.coastalRiskLevel ?? 'UNAVAILABLE'}
+                {!displayMetrics.coastalRiskLoading &&
+                displayMetrics.coastalRiskScore !== null &&
                 displayMetrics.coastalRiskScore !== undefined
                   ? ` ${displayMetrics.coastalRiskScore}/100`
                   : ''}
