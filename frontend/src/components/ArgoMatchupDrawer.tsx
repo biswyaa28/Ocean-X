@@ -39,6 +39,39 @@ interface ArgoMatchupDrawerProps {
 
 type DrawerTab = 'profile' | 'matchup' | 'region' | 'data';
 
+/**
+ * Below this height the region tab cannot show its full set of charts without
+ * scrolling, so RegionalSummary is asked for its compact layout. Measured on the
+ * element itself, so rotating a phone or resizing the window is handled.
+ */
+const REGION_COMPACT_HEIGHT_PX = 520;
+
+function useCompactBelow(thresholdPx: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [compact, setCompact] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+
+    const measure = (height: number) => {
+      if (height > 0) setCompact(height < thresholdPx);
+    };
+
+    measure(node.getBoundingClientRect().height);
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) measure(entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [thresholdPx]);
+
+  return { ref, compact };
+}
+
+
 const TAB_LABELS: Record<DrawerTab, string> = {
   profile: 'PROFILE',
   matchup: 'MODEL COMPARISON',
@@ -867,6 +900,12 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({
     [matchup]
   );
 
+  // Declared with the other hooks: `if (!profile) return null` sits below this
+  // point, and a hook called after an early return would change hook order
+  // between renders.
+  const { ref: regionRef, compact: regionCompact } =
+    useCompactBelow(REGION_COMPACT_HEIGHT_PX);
+
   if (!profile) return null;
 
   const isDemoFallback =
@@ -881,7 +920,10 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({
 
   return (
     <div className="fixed right-20 top-36 z-30 font-mono text-xs select-none transition-all duration-300">
-      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 rounded-2xl p-4.5 shadow-2xl w-[420px] text-slate-100 font-sans max-h-[calc(100vh-180px)] flex flex-col">
+      <div
+        ref={regionRef}
+        className="bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 rounded-2xl p-4.5 shadow-2xl w-[420px] text-slate-100 font-sans max-h-[calc(100vh-180px)] flex flex-col"
+      >
         {/* Drawer Header */}
         <div className="flex items-center justify-between pb-3 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-2">
@@ -1428,7 +1470,7 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({
           {/* ================= DATA TAB (raw observations) ================= */}
           {/* ================= REGIONAL SUMMARY TAB ================= */}
           {activeTab === 'region' && (
-            <RegionalSummary />
+            <RegionalSummary compact={regionCompact} />
           )}
 
           {/* ================= DATA / PROVENANCE TAB ================= */}

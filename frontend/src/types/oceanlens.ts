@@ -202,6 +202,12 @@ export interface KPIMetrics {
   /** The backend's heuristicDemoScore, or null when unavailable. */
   coastalRiskScore?: number | null;
   coastalRiskUnavailableReason?: string | null;
+  /**
+   * True while a score request is outstanding. Distinct from
+   * coastalRiskUnavailableReason: the backend has not declined, it has not
+   * answered yet, and reporting one as the other invents a state it never sent.
+   */
+  coastalRiskLoading?: boolean;
   /** Hand-tuned weights returned by the backend, for display in a tooltip. */
   coastalRiskWeights?: Record<string, number> | null;
   /** The model time the backend read the ocean state from. */
