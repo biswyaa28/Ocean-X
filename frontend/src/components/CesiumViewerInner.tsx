@@ -380,6 +380,13 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
 
+    // Captured once, up front, and reused by the teardown below. Neither ref is
+    // ever reassigned (both are mutated in place), so these stay the exact
+    // registries this viewer populated — reading .current during cleanup would
+    // only look as if it could hand back a different map.
+    const registry = entityRegistryRef.current;
+    const sigs = entitySigRef.current;
+
     Cesium.Ion.defaultAccessToken = process.env.NEXT_PUBLIC_CESIUM_TOKEN || '';
 
     try {
@@ -625,8 +632,6 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           depthSliceSourceReleaseRef.current();
           depthSliceSourceReleaseRef.current = null;
         }
-        const registry = entityRegistryRef.current;
-        const sigs = entitySigRef.current;
         if (viewerRef.current && !viewerRef.current.isDestroyed()) {
           viewerRef.current.destroy();
           viewerRef.current = null;
@@ -1229,6 +1234,13 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     // entity changes all invalidate here explicitly. (Add/remove of the entities
     // themselves and camera movement are auto-detected by Cesium.)
     requestRenderRef.current();
+    // hoveredProfileId and selectedArgoProfile are read above only to give a
+    // freshly created entity the right initial label visibility. They are
+    // deliberately NOT dependencies: the effect below ("Dynamically toggle Argo
+    // float text label visibility on hover / selection") keeps them correct on
+    // change without rebuilding entities. Listing them here would re-run the
+    // entire scene pass on every mouse move over a float.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyclone, currentTrackIndex, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
 
   // Dynamically toggle Argo float text label visibility on hover / selection
@@ -1819,6 +1831,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     ribbonExaggeration,
     ribbonResetToken,
     markerDepthLabel,
+    ribbonDepthAxis,
   ]);
 
   // Release on unmount, independent of the effect above.
