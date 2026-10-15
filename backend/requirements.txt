@@ -1,6 +1,6 @@
 fastapi>=0.110.0
 uvicorn>=0.28.0
-pydantic>=2.6.0
+pydantic>=2.14.1
 xarray>=2024.2.0
 netCDF4>=1.6.5
 numpy>=2.5.4
@@ -11,9 +11,9 @@ gsw>=3.6.20
 pytest>=9.1.1
 httpx>=0.27.0
 # Reference cross-check for bilinear interpolation against scipy.interpolate (NumPy >= 2.0 compatible)
-scipy>=1.15.0
+scipy>=1.18.1
 
-# Floors note: the pandas/numpy/pytest lower bounds above were raised to the
+# Floors note: the pandas/numpy/pytest/pydantic lower bounds above were raised to the
 # versions this suite is actually exercised against. `>=2.2.0` resolved to
 # pandas 3 on every install since the major shipped, so the old floor claimed
 # support for a version nothing had been run against. CI and local both resolve
