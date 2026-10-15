@@ -6,10 +6,12 @@ the HYCOM paths at committed SYNTHETIC schema-compatible fixtures (announced
 in the test banner) so the suite never requires the multi-gigabyte
 production data. Assertions are identical in both modes.
 """
+import threading
 import pytest
 from app.core.config import settings
 from fastapi.testclient import TestClient
 from app.main import app
+from app.api import endpoints
 
 client = TestClient(app)
 
@@ -62,6 +64,95 @@ def test_landing_summary_is_compact_and_contains_dashboard_counts():
         "modelRunCount",
     ))
     assert isinstance(payload["dataScope"], str)
+
+
+def _fake_summary(profile_count):
+    """A stand-in for get_argo_matchup_summary() with a controllable profile count."""
+    return {
+        "includedProfileCount": profile_count,
+        "excludedProfileCount": 0,
+        "modelRuns": ["run-a"],
+    }
+
+
+def test_landing_summary_recomputes_once_the_cache_expires(monkeypatch):
+    """A cached landing summary must not outlive its TTL.
+
+    scripts/archive_hycom_runs.py adds HYCOM runs to the data directory while
+    the server keeps running. Without an expiry the landing page would keep
+    advertising the pre-archive counts forever, contradicting /api/status.
+    """
+    calls = []
+
+    def counting_summary():
+        calls.append(1)
+        return _fake_summary(len(calls))
+
+    monkeypatch.setattr(endpoints, "get_argo_matchup_summary", counting_summary)
+    monkeypatch.setattr(endpoints, "LANDING_SUMMARY_TTL_SECONDS", 300.0)
+
+    endpoints.reset_landing_summary_cache()
+    first = endpoints.get_landing_summary()
+    assert len(calls) == 1
+    assert endpoints.get_landing_summary() == first, "within the TTL the value must be reused"
+    assert len(calls) == 1, "a second request inside the TTL must not recompute"
+
+    # Simulate the archive run: the underlying data changed underneath us.
+    monkeypatch.setattr(endpoints, "LANDING_SUMMARY_TTL_SECONDS", 0.0)
+    second = endpoints.get_landing_summary()
+
+    assert len(calls) == 2, "an expired cache must recompute"
+    assert second != first, "a recomputed summary must reflect the changed data"
+    assert second["includedProfileCount"] == 2
+
+
+def test_landing_summary_does_not_hand_out_its_cache_by_reference(monkeypatch):
+    """Callers must not be able to mutate the process-wide cached summary."""
+    monkeypatch.setattr(endpoints, "get_argo_matchup_summary", lambda: _fake_summary(7))
+    endpoints.reset_landing_summary_cache()
+
+    first = endpoints.get_landing_summary()
+    first["argoProfileCount"] = -999
+    first["injected"] = "should not persist"
+
+    second = endpoints.get_landing_summary()
+    assert second["argoProfileCount"] != -999, "mutating one response corrupted the cache"
+    assert "injected" not in second, "a caller added a key that leaked into the cache"
+
+
+def test_landing_summary_computes_once_under_concurrent_requests(monkeypatch):
+    """Concurrent first hits must not each run the expensive matchup summary.
+
+    The endpoint is a sync `def`, so Starlette runs it in a threadpool. Without
+    a lock every simultaneous visitor recomputes the whole matchup summary.
+    """
+    started = threading.Event()
+    calls = []
+
+    def slow_summary():
+        calls.append(1)
+        started.set()
+        # Long enough that unguarded callers would all pile in together.
+        threading.Event().wait(0.05)
+        return _fake_summary(11)
+
+    monkeypatch.setattr(endpoints, "get_argo_matchup_summary", slow_summary)
+    endpoints.reset_landing_summary_cache()
+
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(endpoints.get_landing_summary()))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    started.wait(timeout=2)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(calls) == 1, f"expected exactly 1 computation across 8 threads, got {len(calls)}"
+    assert len(results) == 8
+    assert all(result == results[0] for result in results), "all callers must see the same value"
 
 def test_datasets():
     response = client.get("/datasets")
