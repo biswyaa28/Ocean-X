@@ -1,4 +1,6 @@
 import math
+import threading
+import time
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
@@ -47,7 +49,26 @@ from app.services.matchup_summary import (
 
 
 router = APIRouter()
+
+# How long a computed landing summary may be reused before it is recomputed.
+# Short enough that an archive run becomes visible without a restart, long
+# enough that ordinary repeat visits never redo the matchup summary.
+LANDING_SUMMARY_TTL_SECONDS = 300.0
+
 _landing_summary_cache: Optional[Dict[str, Any]] = None
+_landing_summary_cached_at: float = 0.0
+# The endpoint is a sync `def`, so Starlette runs it in a threadpool. Without
+# this, every simultaneous first visitor would recompute the summary.
+_landing_summary_lock = threading.Lock()
+
+
+def reset_landing_summary_cache() -> None:
+    """Drop the cached landing summary so the next request recomputes it."""
+    global _landing_summary_cache, _landing_summary_cached_at
+    with _landing_summary_lock:
+        _landing_summary_cache = None
+        _landing_summary_cached_at = 0.0
+
 
 @router.get("/health")
 def get_health():
@@ -96,25 +117,36 @@ def get_status():
 def get_landing_summary():
     """Return the small set of measured counts used by the landing page.
 
-    The first request reuses the existing providers and matchup summary
-    calculation. The compact result is then held for the lifetime of this
-    process, so the landing page never downloads the full profile, cyclone, or
-    regional-summary payloads and repeated visits do not repeat the work.
+    The landing page needs six measured numbers, not the full profile, cyclone
+    or regional-summary payloads, so they are computed once and reused. The
+    result is cached for LANDING_SUMMARY_TTL_SECONDS rather than forever:
+    scripts/archive_hycom_runs.py adds HYCOM runs to the data directory while
+    the server is running, and an immortal cache would keep advertising the
+    pre-archive counts against a freshly computed /api/status.
+
+    A copy is returned so a caller can never reach into the process-wide cache.
     """
-    global _landing_summary_cache
-    if _landing_summary_cache is None:
-        profiles = argo_provider.get_profiles()
-        cyclones = ibtracs_provider.load_cyclones()
-        summary = get_argo_matchup_summary()
-        _landing_summary_cache = {
-            "argoProfileCount": len(profiles),
-            "includedProfileCount": int(summary.get("includedProfileCount", 0)),
-            "excludedProfileCount": int(summary.get("excludedProfileCount", 0)),
-            "cycloneTrackCount": len(cyclones),
-            "modelRunCount": len(summary.get("modelRuns") or []),
-            "dataScope": settings.DATA_SCOPE,
-        }
-    return _landing_summary_cache
+    global _landing_summary_cache, _landing_summary_cached_at
+    with _landing_summary_lock:
+        now = time.monotonic()
+        expired = (
+            _landing_summary_cache is None
+            or (now - _landing_summary_cached_at) >= LANDING_SUMMARY_TTL_SECONDS
+        )
+        if expired:
+            profiles = argo_provider.get_profiles()
+            cyclones = ibtracs_provider.load_cyclones()
+            summary = get_argo_matchup_summary()
+            _landing_summary_cache = {
+                "argoProfileCount": len(profiles),
+                "includedProfileCount": int(summary.get("includedProfileCount", 0)),
+                "excludedProfileCount": int(summary.get("excludedProfileCount", 0)),
+                "cycloneTrackCount": len(cyclones),
+                "modelRunCount": len(summary.get("modelRuns") or []),
+                "dataScope": settings.DATA_SCOPE,
+            }
+            _landing_summary_cached_at = time.monotonic()
+        return dict(_landing_summary_cache)
 
 @router.get("/datasets", response_model=List[DatasetInfo])
 def get_datasets():
