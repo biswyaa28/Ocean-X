@@ -43,6 +43,12 @@ type DrawerTab = 'profile' | 'matchup' | 'region' | 'data';
  * Below this height the region tab cannot show its full set of charts without
  * scrolling, so RegionalSummary is asked for its compact layout. Measured on the
  * element itself, so rotating a phone or resizing the window is handled.
+ *
+ * 520px is where the full layout stops fitting: the drawer's own header, tab
+ * strip and padding take ~150px, leaving ~370px, and the per-depth bias charts
+ * alone need more than that. This is a layout judgement rather than a
+ * measurement, so it is worth revisiting if the drawer's chrome changes — the
+ * cost of being wrong in either direction is only scrolling.
  */
 const REGION_COMPACT_HEIGHT_PX = 520;
 
