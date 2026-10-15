@@ -181,28 +181,90 @@ def test_residual_percent_is_never_computed_against_zero():
 
 # --- the time-gap guard ----------------------------------------------------
 
-def test_time_gap_guard_withholds_the_tchp_residual():
-    """A residual across two different ocean states is not model error."""
-    from app.core.config import settings
+def test_time_gap_guard_withholds_the_tchp_residual(monkeypatch):
+    """A residual across two different ocean states is not model error.
 
-    if not [p for p in settings.HYCOM_RAW_CANDIDATES if p.is_file()]:
+    This used to assert only over profiles the installed data happened to place
+    beyond the limit, and skip when there were none — which is every install so
+    far. A guard that decides whether statistics are published at all was
+    therefore never actually executed by the suite.
+
+    The limit is lowered instead, so the guard runs deterministically whatever
+    data happens to be installed.
+    """
+    # Patch the settings object the MATCHUP MODULE holds, not the one
+    # app.core.config currently exports. tests/test_data_mode.py reloads
+    # app.core.config, which rebinds cfg.settings to a new instance, while the
+    # service keeps the original — so patching the freshly-imported object has
+    # no effect on the code under test once that file has run.
+    from app.services import model_observation_matchup as matchup_service
+
+    service_settings = matchup_service.settings
+
+    if not [p for p in service_settings.HYCOM_RAW_CANDIDATES if p.is_file()]:
         pytest.skip("no model files installed")
 
-    # The curated offline fallback profiles sit a month from the archived runs,
-    # so they are the natural "too_large" case when installed.
+    # Both bounds, not just the max: classify_time_gap tests GOOD first, so a
+    # zero max would still return "good" for an exactly-coincident pair. Set
+    # below any achievable gap so every matchup lands in too_large.
+    monkeypatch.setattr(service_settings, "MATCHUP_TIME_GAP_GOOD_H", -1.0)
+    monkeypatch.setattr(service_settings, "MATCHUP_TIME_GAP_MAX_H", -1.0)
+
     results = [
         match_argo_with_hycom(profile["profile_id"])
         for profile in _some_profiles()
     ]
     results = [r for r in results if r and not r.get("statusMessage")]
-    too_large = [r for r in results if r["timeGapStatus"] == "too_large"]
-    for result in too_large:
+    assert results, "expected at least one matchup to run against installed data"
+
+    for result in results:
+        assert result["timeGapStatus"] == "too_large"
         assert result["statisticsSuppressed"] is True
+        # The headline numbers must be withheld, not zero-filled.
         assert result["tchpResidualKjCm2"] is None
         assert result["tchpResidualPercent"] is None
         assert result["metricsStatus"] == "TIME_GAP_TOO_LARGE"
-    if not too_large:
-        pytest.skip("no profile in this data set has a too_large time gap")
+        # ...and the reason has to reach the reader, not just the status.
+        # It travels as timeGapReason; statusMessage stays None here.
+        reason = result["timeGapReason"]
+        assert reason and "time gap" in reason.lower()
+
+
+def test_time_gap_boundaries_are_classified_exactly():
+    """The good/marginal/too_large edges are inclusive where documented."""
+    from app.services import model_observation_matchup as matchup_service
+
+    # Read the thresholds from the module under test, not from a re-import of
+    # app.core.config — see the note in the guard test above.
+    good_h = matchup_service.settings.MATCHUP_TIME_GAP_GOOD_H
+    max_h = matchup_service.settings.MATCHUP_TIME_GAP_MAX_H
+    classify_time_gap = matchup_service.classify_time_gap
+
+    assert classify_time_gap(0)[0] == "good"
+    assert classify_time_gap(good_h)[0] == "good"
+    assert classify_time_gap(good_h + 0.01)[0] == "marginal"
+    assert classify_time_gap(max_h)[0] == "marginal"
+    assert classify_time_gap(max_h + 0.01)[0] == "too_large"
+
+    # An unknown gap is treated as too large, never as a clean match.
+    status, reason = classify_time_gap(None)
+    assert status == "too_large"
+    assert reason and "unknown" in reason.lower()
+
+    status, reason = classify_time_gap(float("nan"))
+    assert status == "too_large"
+    assert reason
+
+
+def test_marginal_gaps_still_publish_statistics():
+    """A disclosed marginal gap is usable; only too_large withholds numbers."""
+    from app.services.model_observation_matchup import classify_time_gap
+
+    status, reason = classify_time_gap(48.0)
+    assert status == "marginal"
+    # Marginal carries no suppression reason; the caller discloses it instead.
+    assert reason is None
+
 
 
 # --- regional summary ------------------------------------------------------

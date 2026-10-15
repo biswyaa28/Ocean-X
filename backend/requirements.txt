@@ -3,12 +3,18 @@ uvicorn>=0.28.0
 pydantic>=2.6.0
 xarray>=2024.2.0
 netCDF4>=1.6.5
-numpy>=1.26.0
-pandas>=2.2.0
+numpy>=2.5.4
+pandas>=3.0.6
 dask>=2024.2.0
 # TEOS-10 / GSW: pressure (dbar) -> geometric depth (m) for the Argo matchup.
 gsw>=3.6.20
-pytest>=8.0.0
+pytest>=9.1.1
 httpx>=0.27.0
 # Reference cross-check for bilinear interpolation against scipy.interpolate (NumPy >= 2.0 compatible)
 scipy>=1.15.0
+
+# Floors note: the pandas/numpy/pytest lower bounds above were raised to the
+# versions this suite is actually exercised against. `>=2.2.0` resolved to
+# pandas 3 on every install since the major shipped, so the old floor claimed
+# support for a version nothing had been run against. CI and local both resolve
+# pandas 3.x / numpy 2.5.x and the suite is green on them.
