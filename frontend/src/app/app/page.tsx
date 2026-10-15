@@ -231,8 +231,10 @@ export default function Home() {
   // ============================================================
   const modelTimeline = useMemo(() => buildModelTimeline(datasetTimestamps), [datasetTimestamps]);
 
-  const activeTrack: CycloneTrackPoint[] =
-    oceanMode === 'LIVE' ? modelTimeline : (cyclone?.track || []);
+  const activeTrack: CycloneTrackPoint[] = useMemo(
+    () => (oceanMode === 'LIVE' ? modelTimeline : (cyclone?.track ?? [])),
+    [oceanMode, modelTimeline, cyclone?.track]
+  );
 
   // -1 means "not positioned yet": each mode then opens on its own real
   // default — LIVE on the newest model time, HISTORICAL REPLAY on the storm's
@@ -447,7 +449,7 @@ export default function Home() {
       dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : cyclone.dataStatus,
       riskAssessment,
     };
-  }, [cyclone, currentPoint, oceanMode]);
+  }, [cyclone, currentPoint, oceanMode, riskAssessment]);
 
   // Fetch the unvalidated heuristic score from the backend for the cyclone
   // point currently on screen. Aborted on rapid scrubbing so a slow response
@@ -857,7 +859,7 @@ useEffect(() => {
             dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'REAL',
             source: oceanMode === 'SCENARIO' ? 'Disaster Response Simulation Model' : 'NOAA IBTrACS v04r01',
           });
-        } else if (currentPoint) {
+        } else if (currentPoint?.latitude !== undefined) {
           setInspectionData({
             latitude: currentPoint.latitude,
             longitude: currentPoint.longitude,
@@ -969,7 +971,25 @@ useEffect(() => {
     return () => {
       abortController.abort();
     };
-  }, [inspectedCoords, effectiveTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, modelDataTimestamp, cyclone?.id, oceanMode, activeLayer, hazard]);
+  }, [
+    inspectedCoords,
+    effectiveTrackIndex,
+    activeLayer?.id,
+    backendConnected,
+    modelDataTimestamp,
+    cyclone?.id,
+    cyclone?.name,
+    oceanMode,
+    activeLayer,
+    hazard,
+    currentPoint?.timestamp,
+    currentPoint?.latitude,
+    currentPoint?.longitude,
+    currentPoint?.maxWindKts,
+    currentPoint?.centralPressureMb,
+    currentPoint?.category,
+    currentPoint?.distanceToCoastKm,
+  ]);
 
   // ============================================================
   // Model-time badge (HISTORICAL REPLAY only)
