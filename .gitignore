@@ -33,6 +33,13 @@ backend/.env
 #  - see data/manifest.json and data/README.md)
 backend/data/raw/
 frontend/public/landing/raw/
+
+# ...EXCEPT the IBTrACS North Indian Ocean best-track file, which IS tracked.
+# load_cyclones() returns an empty list when it is absent, so a fresh clone
+# without it silently loses every cyclone track and the risk engine has nothing
+# to score. It is ~27 MB of public NOAA data and is force-added with
+# `git add -f` when this exception is used. See README.md, "Data sources".
+!backend/data/raw/cyclones/ibtracs/ibtracs.NI.list.v04r01.csv
 *.nc
 *.nc4
 *.nc.part

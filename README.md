@@ -41,11 +41,11 @@ There are **two ways to run OCEAN-X**:
    synthetic, schema-compatible HYCOM fixtures committed to this repository.
    **No large download is required.**
 2. **REAL Production HYCOM Mode** — only required for actual production HYCOM
-   runtime verification. Requires the ~9.85 GB INCOIS HYCOM dataset to be
+   runtime verification. Requires the ~10.58 GB INCOIS HYCOM dataset to be
    installed and processed locally (see
    [Optional: REAL Production HYCOM](#optional-real-production-hycom)).
 
-> ✅ **The normal SIH demo does NOT require downloading the ~9.85 GB production
+> ✅ **The normal SIH demo does NOT require downloading the ~10.58 GB production
 > HYCOM dataset.** The repository contains small synthetic HYCOM fixtures for
 > development and testing (`backend/tests/fixtures/hycom_raw_fixture.nc` and
 > `backend/tests/fixtures/hycom_surface_fixture.nc`).
@@ -170,7 +170,7 @@ See [🔵 Data Modes — REAL vs FIXTURE](#-data-modes--real-vs-fixture) for det
 #### Troubleshooting
 
 **"HYCOM dataset not found"** — Expected for a fresh clone when running in REAL
-mode: the ~9.85 GB production dataset is intentionally not committed to Git. For
+mode: the ~10.58 GB production dataset is intentionally not committed to Git. For
 the SIH demo, run in FIXTURE mode (`OCEANX_DATA_MODE=FIXTURE`) as shown above.
 
 **"Backend unavailable"** — Confirm the backend is running by checking
@@ -328,7 +328,7 @@ nothing is installed.
 
 ```bash
 python scripts/setup-data.py --check      # what is present / missing
-python scripts/setup-data.py --download   # ~9.85 GB source, asks first
+python scripts/setup-data.py --download   # ~10.58 GB source, asks first
 python scripts/setup-data.py --process    # regenerate the processed surface field
 python scripts/check-data.py              # preflight: AVAILABLE / MISSING / INVALID
 ```
@@ -420,7 +420,7 @@ REAL ocean-field mode requires installing them:
 # From the repository root
 python scripts/check-data.py          # preflight: what is present/missing
 python scripts/setup-data.py          # instructions
-python scripts/setup-data.py --download   # optional: ~9.85 GB INCOIS HYCOM source
+python scripts/setup-data.py --download   # optional: ~10.58 GB INCOIS HYCOM source
 ```
 See [data/README.md](data/README.md) for the full dataset inventory,
 provenance and policies.
@@ -516,7 +516,9 @@ Ocean-X/
 > in FIXTURE mode with the committed synthetic fixtures (see
 > [Quick Start](#quick-start)).
 
-- The production INCOIS HYCOM dataset is approximately **9.85 GB**.
+- The production INCOIS HYCOM dataset is approximately **10.58 GB**
+  (10,581,647,292 bytes — 9.85 GiB in binary units; the same number, counted
+  two ways. Older revisions of this README quoted only the GiB figure).
 - It is **intentionally NOT committed to Git** (`.gitignore` excludes large raw
   NetCDF / scientific files).
 - The repository expects the documented INCOIS HYCOM source file
@@ -535,13 +537,13 @@ Ocean-X/
 ```bash
 python scripts/check-data.py              # preflight: what is present/missing
 python scripts/setup-data.py --check      # status; exit 1 when required data is missing
-python scripts/setup-data.py --download   # ~9.85 GB INCOIS HYCOM source (asks for confirmation)
+python scripts/setup-data.py --download   # ~10.58 GB INCOIS HYCOM source (asks for confirmation)
 python scripts/setup-data.py --process    # regenerate the processed surface NetCDF
 python scripts/check-data.py              # re-check -> "Required HYCOM data available: YES"
 ```
 
 `--download` is supported automatically only for datasets with a verified public
-source (`HYCOM_RSMC_RAW`, ~9.85 GB); it announces the size, asks for confirmation
+source (`HYCOM_RSMC_RAW`, ~10.58 GB); it announces the size, asks for confirmation
 first, and resumes if interrupted. `--process` regenerates the derived surface
 dataset by running `backend/scripts/extract_hycom_bob.py` (it prefers the backend
 `.venv` interpreter, which has `xarray` + `netCDF4`).
@@ -607,7 +609,7 @@ OCEANX_DATA_MODE=FIXTURE python scripts/check-data.py
 
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements, dataset adapters, or visualization improvements.
 
-Distributed under the **MIT License**. *(No `LICENSE` file is committed yet — add one before publishing.)*
+Distributed under the **MIT License** — see [LICENSE](LICENSE).
 
 ---
 

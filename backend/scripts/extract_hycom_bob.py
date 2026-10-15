@@ -67,7 +67,7 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 # ------------------------------------------------------------
 
 print("\nOpening source dataset...")
-print("The original 9.85 GB file will NOT be modified.")
+print("The original 10.58 GB file will NOT be modified.")
 
 ds = xr.open_dataset(
     RAW_FILE,
@@ -418,6 +418,6 @@ print(
 
 print("\nData status: REAL")
 print("Provider: INCOIS")
-print("\nOriginal 9.85 GB source file was NOT modified.")
+print("\nOriginal 10.58 GB source file was NOT modified.")
 
 print("\n" + "=" * 72)
