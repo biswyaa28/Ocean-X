@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { RegionalSummary, depthTooltipLabel } from '../../components/RegionalSummary';
 import { apiProvider } from '../../services/ApiProvider';
 import type { ArgoMatchupSummary } from '../../types/oceanlens';
@@ -156,7 +156,10 @@ describe('RegionalSummary', () => {
     });
     expect(screen.queryByText('2902746')).toBeNull();
 
-    toggle.click();
+    // Wrapped so the expanded-rows state update is applied inside act.
+    await act(async () => {
+      toggle.click();
+    });
     await waitFor(() => expect(screen.getByText('2902746')).toBeTruthy());
     expect(screen.getByText('4.50')).toBeTruthy();
   });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import LandingPage from './page';
 import { PROJECT_EVENT, PROJECT_NAME, PROJECT_TAGLINE, PROJECT_TEAM } from '../constants/project';
@@ -46,19 +46,22 @@ afterEach(() => {
 });
 
 describe('LandingPage', () => {
-  it('renders the project name from the shared constant', () => {
+  it('renders the project name from the shared constant', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     expect(screen.getByRole('link', { name: new RegExp(`${PROJECT_NAME} home`, 'i') })).toBeTruthy();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('measure');
   });
 
-  it('states the one-line value proposition', () => {
+  it('states the one-line value proposition', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     expect(screen.getByText(PROJECT_TAGLINE)).toBeTruthy();
   });
 
-  it('links to /app from the hero and the footer', () => {
+  it('links to /app from the hero and the footer', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const toApp = screen
       .getAllByRole('link')
       .filter((link) => link.getAttribute('href') === '/app');
@@ -67,14 +70,16 @@ describe('LandingPage', () => {
     expect(hero).toBeTruthy();
   });
 
-  it('has a secondary action that smooth-scrolls to how it works', () => {
+  it('has a secondary action that smooth-scrolls to how it works', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const cta = screen.getByRole('link', { name: /explore the data/i });
     expect(cta.getAttribute('href')).toBe('#features');
   });
 
-  it('renders the landing navigation and anchored content sections', () => {
+  it('renders the landing navigation and anchored content sections', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     expect(screen.getByRole('navigation')).toBeTruthy();
     expect(screen.getByRole('link', { name: /features/i }).getAttribute('href')).toBe('#features');
     expect(screen.getByRole('link', { name: /data flow/i }).getAttribute('href')).toBe('#how-it-works');
@@ -83,8 +88,9 @@ describe('LandingPage', () => {
     expect(document.querySelector('#data-note')).toBeTruthy();
   });
 
-  it('uses semantic landmarks and a sane heading order', () => {
+  it('uses semantic landmarks and a sane heading order', async () => {
     const { container } = render(<LandingPage />);
+    await act(async () => {});
     expect(container.querySelector('main')).toBeTruthy();
     expect(container.querySelector('footer')).toBeTruthy();
     const levels = Array.from(container.querySelectorAll('h1,h2,h3')).map((h) =>
@@ -97,8 +103,9 @@ describe('LandingPage', () => {
     });
   });
 
-  it('describes each screenshot with real alt text', () => {
+  it('describes each screenshot with real alt text', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const images = Array.from(document.querySelectorAll('img'));
     expect(images).toHaveLength(5);
     images.forEach((img) => {
@@ -109,23 +116,26 @@ describe('LandingPage', () => {
     expect(images.slice(1).every((img) => img.getAttribute('loading') === 'lazy')).toBe(true);
   });
 
-  it('ships the three captured screenshots', () => {
+  it('ships the three captured screenshots', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const images = Array.from(document.querySelectorAll('img'));
     expect(images.some((img) => img.getAttribute('alt')?.includes('3D globe'))).toBe(true);
     expect(images.some((img) => img.getAttribute('alt')?.includes('profile ribbon'))).toBe(true);
     expect(images.some((img) => img.getAttribute('alt')?.includes('TCHP product'))).toBe(true);
   });
 
-  it('shows the team and event in the footer', () => {
+  it('shows the team and event in the footer', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(screen.getByText(new RegExp(escape(PROJECT_TEAM)))).toBeTruthy();
     expect(screen.getByText(new RegExp(escape(PROJECT_EVENT)))).toBeTruthy();
   });
 
-  it('names its real data sources in the how-it-works flow', () => {
+  it('names its real data sources in the how-it-works flow', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const text = document.body.textContent ?? '';
     expect(text).toContain('INCOIS RSMC HYCOM');
     expect(text).toContain('Argo GDAC');
@@ -134,8 +144,9 @@ describe('LandingPage', () => {
     expect(text).toContain('CesiumJS');
   });
 
-  it('presents features as factual rows with source tags', () => {
+  it('presents features as factual rows with source tags', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     expect(screen.getByText('3D globe: model + Argo together')).toBeTruthy();
     // getAllByText: two cards legitimately credit the same source — the globe
     // screenshot and the cyclone-heat screenshot are both HYCOM products. What
@@ -145,8 +156,9 @@ describe('LandingPage', () => {
     expect(document.querySelectorAll('[data-testid="feature-row"]')).toHaveLength(3);
   });
 
-  it('names every real data source it draws on', () => {
+  it('names every real data source it draws on', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     // IBTrACS supplies cyclone tracks and the risk engine rather than any one
     // feature screenshot, so it is asserted against the page as a whole.
     const text = document.body.textContent ?? '';
@@ -155,8 +167,9 @@ describe('LandingPage', () => {
     });
   });
 
-  it('uses the dedicated feature screenshots and regional TCHP note', () => {
+  it('uses the dedicated feature screenshots and regional TCHP note', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const featureImages = Array.from(document.querySelectorAll('[data-testid="feature-row"] img'));
     expect(featureImages[0]?.getAttribute('src')).toContain('globe');
     expect(featureImages[1]?.getAttribute('src')).toContain('matchup');
@@ -165,8 +178,9 @@ describe('LandingPage', () => {
     expect(screen.getByText(/float-derived TCHP vs INCOIS TCHP product/i)).toBeTruthy();
   });
 
-  it('makes no claim the app cannot back up', () => {
+  it('makes no claim the app cannot back up', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const text = (document.body.textContent ?? '').toLowerCase();
     // These are the specific overclaims a landing page drifts into.
     ['trusted by', 'industry-leading', 'real-time', 'industry standard', 'used by agencies'].forEach(
@@ -176,8 +190,9 @@ describe('LandingPage', () => {
     );
   });
 
-  it('states the demo subset honestly', () => {
+  it('states the demo subset honestly', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     const text = (document.body.textContent ?? '').toLowerCase();
     expect(text).toContain('demo subset');
     expect(text).toContain('optional');
@@ -185,6 +200,7 @@ describe('LandingPage', () => {
 
   it('withholds the figures while the backend is unreachable', async () => {
     render(<LandingPage />);
+    await act(async () => {});
     await waitFor(() => expect(screen.getByTestId('live-stats-unavailable')).toBeTruthy());
     expect(screen.queryByTestId('live-stats')).toBeNull();
   });

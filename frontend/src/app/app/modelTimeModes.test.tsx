@@ -194,7 +194,12 @@ describe('HISTORICAL REPLAY model-time badge', () => {
     render(<Home />);
     // Wait for the model window to have arrived.
     await screen.findByText('2026-10-07 06:00 UTC → 2026-10-08 18:00 UTC');
-    fireEvent.click(screen.getByRole('button', { name: /HISTORICAL REPLAY/i }));
+    // Switching modes kicks off the risk request and the replay-time fetch.
+    // Wrapping the click (and the settle) keeps those updates inside act.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /HISTORICAL REPLAY/i }));
+    });
+    await act(async () => {});
   }
 
   it('names the model date and the replay date it is not matched to', async () => {
