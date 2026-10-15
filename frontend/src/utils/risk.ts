@@ -7,8 +7,6 @@
  * the constants and the band mapping, so the UI can label a backend score
  * without ever producing one of its own.
  */
-import { RiskAssessment, CycloneTrackPoint } from '../types/oceanlens';
-
 /** Must stay in sync with backend RISK_HEURISTIC_WEIGHTS. */
 export const RISK_HEURISTIC_WEIGHTS: Record<string, number> = {
   windMaxPoints: 45.0,

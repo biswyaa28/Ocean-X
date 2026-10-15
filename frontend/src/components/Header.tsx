@@ -10,7 +10,7 @@ import {
   describeModelRanges,
   formatModelDate,
 } from '../utils/modelTime';
-import { Compass, SlidersHorizontal, Activity } from 'lucide-react';
+import { Compass, SlidersHorizontal } from 'lucide-react';
 
 interface HeaderProps {
   mode: AppMode;

@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useState, type ElementType, type ReactNode } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 export default function Reveal({
   children,
@@ -30,30 +31,22 @@ export default function Reveal({
   as?: ElementType;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [shown, setShown] = useState(false);
+  const [seen, setSeen] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+
+  // The content must never depend on an animation to become visible, so
+  // reduced-motion reveals unconditionally. Whether IntersectionObserver exists
+  // is a browser capability, not component state, so it is read during render.
+  const revealed = seen || reducedMotion || typeof IntersectionObserver === 'undefined';
 
   useEffect(() => {
     const node = ref.current;
-    if (!node) return;
-
-    if (
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
-      setShown(true);
-      return;
-    }
-
-    if (typeof IntersectionObserver === 'undefined') {
-      setShown(true);
-      return;
-    }
+    if (!node || revealed) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setShown(true);
+          setSeen(true);
           observer.disconnect();
         }
       },
@@ -61,15 +54,15 @@ export default function Reveal({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [revealed]);
 
   return (
     <Tag
       ref={ref}
-      style={shown ? { transitionDelay: `${delay}ms` } : undefined}
-      data-revealed={shown ? 'true' : 'false'}
+      style={revealed ? { transitionDelay: `${delay}ms` } : undefined}
+      data-revealed={revealed ? 'true' : 'false'}
       className={`transition-[opacity,transform] duration-700 ease-out motion-reduce:transition-none motion-reduce:translate-y-0 motion-reduce:opacity-100 ${
-        shown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
+        revealed ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
       } ${className ?? ''}`}
     >
       {children}

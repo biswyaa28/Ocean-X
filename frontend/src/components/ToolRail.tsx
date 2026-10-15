@@ -12,7 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { Cyclone, Hazard, CycloneTrackPoint, AstronomicalData } from '../types/oceanlens';
+import { Cyclone, Hazard, CycloneTrackPoint, AstronomicalData, type FlyToTarget } from '../types/oceanlens';
 import { ToolModals } from './ToolModals';
 
 export type ActiveRightTool =
@@ -32,7 +32,7 @@ interface ToolRailProps {
   hazard?: Hazard | null;
   currentPoint?: CycloneTrackPoint | null;
   astroData?: AstronomicalData | null;
-  onFlyTo?: (location: { lat: number; lon: number; height?: number }) => void;
+  onFlyTo?: (location: FlyToTarget) => void;
 }
 
 export const ToolRail: React.FC<ToolRailProps> = ({

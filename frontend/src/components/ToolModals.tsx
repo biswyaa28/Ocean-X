@@ -15,15 +15,14 @@ import {
   Check,
   Sun,
   Moon,
-  Compass,
 } from 'lucide-react';
-import { Cyclone, Hazard, CycloneTrackPoint, AstronomicalData } from '../types/oceanlens';
+import { Cyclone, Hazard, CycloneTrackPoint, AstronomicalData, type FlyToTarget } from '../types/oceanlens';
 import { ActiveRightTool } from './ToolRail';
 
 interface ToolModalsProps {
   activeTool: ActiveRightTool;
   onClose: () => void;
-  onFlyTo: (location: { lat: number; lon: number; height?: number }) => void;
+  onFlyTo: (location: FlyToTarget) => void;
   cyclone: Cyclone | null;
   hazard: Hazard | null;
   currentPoint: CycloneTrackPoint | null;
@@ -154,7 +153,7 @@ export const ToolModals: React.FC<ToolModalsProps> = ({
                 </div>
 
                 <button
-                  onClick={() => onFlyTo({ lat: 0, lon: 0, isSun: true } as any)}
+                  onClick={() => onFlyTo({ lat: 0, lon: 0, isSun: true })}
                   className="w-full mt-1.5 py-1.5 px-2.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-[9.5px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all group"
                 >
                   <Navigation className="w-3 h-3 group-hover:scale-110 transition-transform" />
@@ -190,7 +189,7 @@ export const ToolModals: React.FC<ToolModalsProps> = ({
                 </div>
 
                 <button
-                  onClick={() => onFlyTo({ lat: 0, lon: 0, isMoon: true } as any)}
+                  onClick={() => onFlyTo({ lat: 0, lon: 0, isMoon: true })}
                   className="w-full mt-1.5 py-1.5 px-2.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 font-bold text-[9.5px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all group"
                 >
                   <Navigation className="w-3 h-3 group-hover:scale-110 transition-transform" />

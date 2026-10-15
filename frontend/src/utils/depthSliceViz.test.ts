@@ -206,7 +206,7 @@ describe('computeSliceDataRange — ignores masked cells only', () => {
   // excluded; a genuine 0 is included, so a cool/fresh-water reading still
   // sets the lower bound.
   it('excludes nulls and keeps real zeros', () => {
-    const payload = {
+    const payload = makeDepthSlicePayload({
       grid: {
         latitudes: [10, 11, 12],
         longitudes: [80, 81, 82],
@@ -216,7 +216,7 @@ describe('computeSliceDataRange — ignores masked cells only', () => {
           [30, 40, 50],
         ],
       },
-    } as any;
+    });
 
     const bounds = computeSliceDataRange(payload);
     expect(bounds).not.toBeNull();
@@ -225,7 +225,7 @@ describe('computeSliceDataRange — ignores masked cells only', () => {
   });
 
   it('returns null when every cell is masked', () => {
-    const payload = {
+    const payload = makeDepthSlicePayload({
       grid: {
         latitudes: [10, 11],
         longitudes: [80, 81],
@@ -234,7 +234,7 @@ describe('computeSliceDataRange — ignores masked cells only', () => {
           [null, null],
         ],
       },
-    } as any;
+    });
 
     expect(computeSliceDataRange(payload)).toBeNull();
   });

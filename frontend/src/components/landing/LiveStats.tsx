@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 export interface LandingStats {
   argoProfiles: number;
@@ -79,22 +80,28 @@ export function CountUp({
   durationMs?: number;
   className?: string;
 }) {
-  const [display, setDisplay] = useState(0);
-  const [started, setStarted] = useState(false);
+  const [seen, setSeen] = useState(false);
+  const [animated, setAnimated] = useState<number | null>(null);
   const ref = useRef<HTMLSpanElement | null>(null);
   const frameRef = useRef(0);
+  const reducedMotion = usePrefersReducedMotion();
+
+  // Browser capability, not component state: without IntersectionObserver the
+  // number is never observed, so it starts counting immediately.
+  const started = seen || typeof IntersectionObserver === 'undefined';
+
+  // The displayed figure is derived, not stored. Reduced motion reads `value`
+  // directly, so honouring it never needs a setState in the effect body — which
+  // is what caused the extra cascading render this replaces.
+  const display = !started ? 0 : reducedMotion ? value : (animated ?? 0);
 
   useEffect(() => {
     const node = ref.current;
     if (!node || started) return;
-    if (typeof IntersectionObserver === 'undefined') {
-      setStarted(true);
-      return;
-    }
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setStarted(true);
+          setSeen(true);
           observer.disconnect();
         }
       },
@@ -105,29 +112,19 @@ export function CountUp({
   }, [started]);
 
   useEffect(() => {
-    if (!started) return;
-
-    const reduced =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    if (reduced) {
-      setDisplay(value);
-      return;
-    }
+    if (!started || reducedMotion) return;
 
     const start = performance.now();
     const tick = (now: number) => {
       const progress = Math.min(1, (now - start) / durationMs);
       // easeOutCubic: fast at first, settling gently, which reads as "arriving".
       const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.round(value * eased));
+      setAnimated(Math.round(value * eased));
       if (progress < 1) frameRef.current = requestAnimationFrame(tick);
     };
     frameRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [started, value, durationMs]);
+  }, [started, reducedMotion, value, durationMs]);
 
   return (
     <span ref={ref} className={className}>

@@ -19,6 +19,17 @@ const eslintConfig = defineConfig([
     // Third-party, pre-minified build output — not ours to lint.
     "public/cesium/**",
   ]),
+  {
+    rules: {
+      // A leading underscore means "this parameter is required by the interface
+      // but deliberately unused here" — the convention the data providers use
+      // for stubbed methods. Same convention TypeScript itself honours.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

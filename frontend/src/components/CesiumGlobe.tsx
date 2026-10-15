@@ -134,10 +134,18 @@ export const CesiumGlobe: React.FC<CesiumGlobeProps> = React.memo(
     const [loadError, setLoadError] = useState<string | null>(null);
     const [attempt, setAttempt] = useState(0);
 
-    useEffect(() => {
-      let active = true;
+    // Retrying resets the outcome during render rather than from inside the
+    // effect. Resetting there means one render shows the previous attempt's
+    // error while the new load is already running.
+    const [shownAttempt, setShownAttempt] = useState(attempt);
+    if (shownAttempt !== attempt) {
+      setShownAttempt(attempt);
       setPhase('loading');
       setLoadError(null);
+    }
+
+    useEffect(() => {
+      let active = true;
       loadCesium().then(
         () => {
           if (active) setPhase('ready');

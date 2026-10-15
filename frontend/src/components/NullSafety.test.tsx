@@ -34,7 +34,7 @@ const emptyObservation: InspectionData = {
 
 describe('DataInspector — null observations', () => {
   it('renders NOT OBSERVED rather than a blank or a fabricated number', () => {
-    render(<DataInspector activeLayer={layer} inspection={emptyObservation} onClose={vi.fn()} />);
+    render(<DataInspector activeLayer={layer} inspection={emptyObservation} />);
 
     const labels = screen.getAllByText('NOT OBSERVED');
     // wind, pressure and distance all report absence.
@@ -42,7 +42,7 @@ describe('DataInspector — null observations', () => {
   });
 
   it('never renders the old fabricated constants', () => {
-    render(<DataInspector activeLayer={layer} inspection={emptyObservation} onClose={vi.fn()} />);
+    render(<DataInspector activeLayer={layer} inspection={emptyObservation} />);
     expect(screen.queryByText(/45 KTS/)).not.toBeInTheDocument();
     expect(screen.queryByText(/990 MB/)).not.toBeInTheDocument();
   });
@@ -57,7 +57,6 @@ describe('DataInspector — null observations', () => {
           centralPressureMb: 985,
           distanceToCoastKm: 563,
         }}
-        onClose={vi.fn()}
       />
     );
 
