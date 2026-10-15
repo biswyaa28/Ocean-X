@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
-import OceanCanvas, { particleCountFor, prefersReducedMotion } from './OceanCanvas';
+import OceanCanvas, { particleCountFor, particleDepth, prefersReducedMotion } from './OceanCanvas';
 
 /**
  * The hero canvas draws with requestAnimationFrame forever unless something stops
@@ -67,6 +67,15 @@ describe('particleCountFor', () => {
     const phone = particleCountFor(360, 740);
     const laptop = particleCountFor(1440, 900);
     expect(laptop).toBeGreaterThan(phone);
+  });
+
+  describe('particleDepth', () => {
+    it('assigns a slower back layer without increasing the particle count', () => {
+      expect(particleDepth(0)).toBe('back');
+      expect(particleDepth(1)).toBe('front');
+      expect(particleDepth(2)).toBe('front');
+      expect(particleDepth(3)).toBe('back');
+    });
   });
 
   it('never exceeds the hard ceiling on a very large display', () => {

@@ -20,8 +20,11 @@ const inter = Inter({
 });
 
 const manrope = Manrope({
+  weight: ["700", "800"],
   variable: "--font-manrope",
   subsets: ["latin"],
+  fallback: ["Arial", "Helvetica", "sans-serif"],
+  adjustFontFallback: true,
   display: "swap",
 });
 

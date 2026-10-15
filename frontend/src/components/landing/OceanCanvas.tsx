@@ -42,6 +42,7 @@ type Particle = {
   maxLife: number;
   /** Slight per-particle speed variation so the field does not look rigid. */
   speed: number;
+  depth: 'front' | 'back';
 };
 
 export function prefersReducedMotion(): boolean {
@@ -80,7 +81,15 @@ function flowAt(x: number, y: number, t: number): { vx: number; vy: number } {
   return { vx: Math.cos(angle), vy: Math.sin(angle) };
 }
 
-function spawnParticle(width: number, height: number): Particle {
+export function particleDepth(index: number): 'front' | 'back' {
+  return index % 3 === 0 ? 'back' : 'front';
+}
+
+function spawnParticle(
+  width: number,
+  height: number,
+  depth: 'front' | 'back'
+): Particle {
   const maxLife = 90 + Math.random() * 190;
   return {
     x: Math.random() * width,
@@ -88,6 +97,7 @@ function spawnParticle(width: number, height: number): Particle {
     life: Math.random() * maxLife,
     maxLife,
     speed: 0.55 + Math.random() * 0.95,
+    depth,
   };
 }
 
@@ -180,15 +190,21 @@ export default function OceanCanvas() {
       canvas.width = Math.floor(width * ratio);
       canvas.height = Math.floor(height * ratio);
       // Draw in CSS pixels; the transform handles the devicePixelRatio.
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      if (typeof ctx.setTransform === 'function') {
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      }
 
       const target = particleCountFor(width, height);
       if (particles.length === 0) {
-        particles = Array.from({ length: target }, () => spawnParticle(width, height));
+        particles = Array.from({ length: target }, (_, index) =>
+          spawnParticle(width, height, particleDepth(index))
+        );
       } else if (particles.length > target) {
         particles.length = target;
       } else {
-        while (particles.length < target) particles.push(spawnParticle(width, height));
+        while (particles.length < target) {
+          particles.push(spawnParticle(width, height, particleDepth(particles.length)));
+        }
       }
     };
 
@@ -207,8 +223,9 @@ export default function OceanCanvas() {
       for (const particle of particles) {
         const { vx, vy } = flowAt(particle.x, particle.y, time / 1000);
         // Gentle mouse parallax, bounded so it never fights the flow field.
-        particle.x += vx * particle.speed * 34 * delta + parallaxX * 6 * delta;
-        particle.y += vy * particle.speed * 34 * delta + parallaxY * 6 * delta;
+        const depthSpeed = particle.depth === 'back' ? 0.48 : 1;
+        particle.x += vx * particle.speed * 34 * depthSpeed * delta + parallaxX * 6 * delta;
+        particle.y += vy * particle.speed * 34 * depthSpeed * delta + parallaxY * 6 * delta;
 
         if (particle.x < -20) particle.x = width + 20;
         if (particle.x > width + 20) particle.x = -20;
@@ -216,17 +233,21 @@ export default function OceanCanvas() {
         if (particle.y > height + 20) particle.y = -20;
 
         particle.life -= 1;
-        if (particle.life <= 0) Object.assign(particle, spawnParticle(width, height));
+        if (particle.life <= 0) {
+          Object.assign(particle, spawnParticle(width, height, particle.depth));
+        }
 
         // Fade in and out across the particle's life, so respawns do not pop.
         const lifeRatio = particle.life / particle.maxLife;
-        const alpha = Math.min(1, (1 - lifeRatio) * 6) * Math.min(1, lifeRatio * 6) * 0.55;
+        const depthAlpha = particle.depth === 'back' ? 0.22 : 0.55;
+        const alpha = Math.min(1, (1 - lifeRatio) * 6) * Math.min(1, lifeRatio * 6) * depthAlpha;
         if (alpha <= 0.01) continue;
 
         const rgb =
           40 + Math.round(particle.speed * 60) + Math.round(particle.y * 0.02);
         ctx.fillStyle = `rgba(${Math.min(120, rgb)}, ${Math.min(230, 150 + Math.round(particle.x * 0.05))}, 238, ${alpha})`;
-        ctx.fillRect(particle.x, particle.y, 1.6, 1.6);
+        const size = particle.depth === 'back' ? 1 : 1.6;
+        ctx.fillRect(particle.x, particle.y, size, size);
       }
 
       frame = requestAnimationFrame(draw);

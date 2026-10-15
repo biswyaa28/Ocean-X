@@ -41,6 +41,28 @@ def test_status():
     )
     assert data["datasetLoaded"] == has_incois, "datasetLoaded must reflect actual file presence"
 
+def test_landing_summary_is_compact_and_contains_dashboard_counts():
+    response = client.get("/api/summary/landing")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {
+        "argoProfileCount",
+        "includedProfileCount",
+        "excludedProfileCount",
+        "cycloneTrackCount",
+        "modelRunCount",
+        "dataScope",
+    }
+    assert all(isinstance(payload[key], int) for key in (
+        "argoProfileCount",
+        "includedProfileCount",
+        "excludedProfileCount",
+        "cycloneTrackCount",
+        "modelRunCount",
+    ))
+    assert isinstance(payload["dataScope"], str)
+
 def test_datasets():
     response = client.get("/datasets")
     assert response.status_code == 200
