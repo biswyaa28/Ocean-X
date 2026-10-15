@@ -4,7 +4,14 @@ import React from 'react';
 
 // Cesium mock must be in place BEFORE importing the component.
 import { cesiumMock, resetLayerOps } from '../test/mocks/cesium';
-vi.mock('cesium', () => ({ __esModule: true, ...cesiumMock }));
+// The components read Cesium from the runtime handle, not from 'cesium' —
+// see src/lib/cesiumRuntime.ts.
+vi.mock('../lib/cesiumRuntime', () => ({
+  __esModule: true,
+  default: cesiumMock,
+  loadCesium: () => Promise.resolve(cesiumMock),
+  Cesium: cesiumMock,
+}));
 vi.mock('cesium/Build/Cesium/Widgets/widgets.css', () => ({}));
 
 import { FlowCanvasOverlay, PARTICLE_CONFIG } from './FlowCanvasOverlay';

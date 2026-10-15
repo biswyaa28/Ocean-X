@@ -6,6 +6,7 @@ export type DataStatus =
   | 'SIMULATED'
   | 'NOT CURRENTLY INTEGRATED'
   | 'DEMO'
+  | 'UNAVAILABLE'
   | 'OBSERVATION'
   | 'FORECAST';
 
@@ -67,25 +68,35 @@ export type CycloneCategory =
   | 'Extremely Severe Cyclonic Storm'
   | 'Super Cyclonic Storm';
 
+/** Which agency a best-track value was actually read from. */
+export type ObservationSource = 'WMO' | 'IMD';
+
 export interface CycloneTrackPoint {
   id: string;
   timestamp: string; // ISO 8601 string
   latitude: number;
   longitude: number;
-  maxWindKts: number;
-  centralPressureMb: number;
-  category: CycloneCategory;
+  /**
+   * Observable fields are nullable: the backend reports absence rather than
+   * substituting a plausible constant. Every consumer must handle `null`.
+   */
+  maxWindKts: number | null;
+  centralPressureMb: number | null;
+  category: CycloneCategory | null;
+  windSource?: ObservationSource | null;
+  pressureSource?: ObservationSource | null;
   status: 'OBSERVATION' | 'FORECAST';
-  distanceToCoastKm: number;
-  stormSpeedKts: number;
-  stormDirDeg: number;
-  forecastConfidencePct?: number;
+  distanceToCoastKm: number | null;
+  stormSpeedKts: number | null;
+  stormDirDeg: number | null;
+  forecastConfidencePct?: number | null;
 }
 
 export interface WindRadius {
-  r34ktsKm: number;
-  r50ktsKm: number;
-  r64ktsKm: number;
+  r34ktsKm: number | null;
+  r50ktsKm: number | null;
+  r64ktsKm: number | null;
+  source?: string | null;
 }
 
 export interface ForecastConePoint {
@@ -102,17 +113,24 @@ export interface Cyclone {
   dataStatus: DataStatus;
   currentTrackIndex: number;
   track: CycloneTrackPoint[];
+  /** Always empty: IBTrACS holds best-track history, not forecasts. */
   forecastCone: ForecastConePoint[];
   windRadius: WindRadius;
+  dataCompleteness?: {
+    trackPoints: number;
+    withWind: number;
+    withPressure: number;
+  } | null;
   sourceAttribution: string;
   isHistorical?: boolean;
 }
 
 export interface Evidence {
   variable: string;
-  value: string;
+  /** Null when the underlying observation is genuinely absent. */
+  value: string | null;
   unit: string;
-  trend: 'increasing' | 'decreasing' | 'neutral';
+  trend: 'increasing' | 'decreasing' | 'neutral' | 'unknown';
   relevance: string;
   status: DataStatus;
 }
@@ -124,12 +142,31 @@ export interface Explanation {
   generatedAt: string;
 }
 
+/**
+ * An UNVALIDATED demo heuristic. `status` is authoritative: when it is
+ * 'UNAVAILABLE' the score is null and `unavailableReason` says why. Never
+ * present this number as a forecast or an official warning.
+ */
 export interface RiskAssessment {
-  score: number; // 0 to 100
-  category: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  status: 'OK' | 'UNAVAILABLE';
+  unavailableReason?: string | null;
+  heuristicDemoScore: number | null; // 0 to 100, demo only
+  category: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
+  /**
+   * The model time the TCHP/SST means were read from. The score is a function
+   * of the ocean state at THIS time, which is not necessarily the storm's
+   * date, so it travels with the number instead of being left implicit.
+   */
+  modelTimestamp?: string | null;
+  /** True only when `modelTimestamp` is within the match tolerance of the storm point. */
+  timeMatched?: boolean;
   modelType: 'prototype_rule_based';
+  validated: false;
+  operationalUse: string;
+  disclaimer: string;
+  weights: Record<string, number>;
   evidence: Evidence[];
-  explanation: Explanation;
+  explanation: Explanation | null;
   affectedRegions: string[];
 }
 
@@ -137,29 +174,12 @@ export interface Hazard {
   id: string;
   title: string;
   type: 'cyclone' | 'high_wave' | 'strong_wind' | 'storm_surge' | 'coastal_erosion';
-  severity: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  severity: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
   location: string;
   dataStatus: DataStatus;
   riskAssessment: RiskAssessment;
 }
 
-export interface Station {
-  id: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  region: string;
-  status: 'active' | 'offline';
-  type: 'buoy' | 'coastal_radar' | 'tide_gauge';
-  dataStatus: DataStatus;
-  currentMeasurements: {
-    sstC?: number;
-    windSpeedKts?: number;
-    waveHeightM?: number;
-    pressureMb?: number;
-    salinityPsu?: number;
-  };
-}
 
 export interface GISLayer {
   id: string;
@@ -173,10 +193,27 @@ export interface GISLayer {
 
 export interface KPIMetrics {
   activeCyclones: number;
-  maxWindKts: number;
-  maxWaveHeightM: number;
-  avgSSTC: number;
-  coastalRiskLevel: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  /** Null when the observation is genuinely absent from the source. */
+  maxWindKts: number | null;
+  maxWaveHeightM: number | null;
+  avgSSTC: number | null;
+  /** Null when the unvalidated demo heuristic declined to score. */
+  coastalRiskLevel: 'LOW' | 'ELEVATED' | 'MODERATE' | 'HIGH' | 'CRITICAL' | null;
+  /** The backend's heuristicDemoScore, or null when unavailable. */
+  coastalRiskScore?: number | null;
+  coastalRiskUnavailableReason?: string | null;
+  /**
+   * True while a score request is outstanding. Distinct from
+   * coastalRiskUnavailableReason: the backend has not declined, it has not
+   * answered yet, and reporting one as the other invents a state it never sent.
+   */
+  coastalRiskLoading?: boolean;
+  /** Hand-tuned weights returned by the backend, for display in a tooltip. */
+  coastalRiskWeights?: Record<string, number> | null;
+  /** The model time the backend read the ocean state from. */
+  coastalRiskModelTimestamp?: string | null;
+  /** False when that model time is not the storm's date (beyond 48 h). */
+  coastalRiskTimeMatched?: boolean | null;
   dataConfidencePct: number;
   forecastConfidencePct: number;
 }
@@ -205,8 +242,58 @@ export interface ArgoProfile {
   provenance: ScientificProvenance;
 }
 
+/** How a matched level's model value was obtained (backend-reported). */
+export type MatchupMethod = 'native' | 'interpolated';
+
+/**
+ * Observation-model time-separation classification. "too_large" means both
+ * profiles are returned but residual statistics are withheld.
+ */
+export type MatchupTimeGapStatus = 'good' | 'marginal' | 'too_large';
+
+/** Horizontal sub-sampling applied by the backend. */
+export type MatchupSpatialMode = 'bilinear' | 'nearest';
+
+/**
+ * Vertical comparison mode applied by the backend.
+ * - 'model_levels' (default): compare at the model's own depth levels; the
+ *   float is interpolated onto each of them. Pairs are independent and the
+ *   residual excludes model interpolation error.
+ * - 'float_levels': interpolate the model onto every float depth. Includes
+ *   model interpolation error across the model's sparse depth levels.
+ * - 'native': nearest native model level within the matching tolerance.
+ */
+export type MatchupMode = 'model_levels' | 'float_levels' | 'native';
+
+/** Per-level method reported by the backend. */
+export type MatchupLevelMethod =
+  | 'native'
+  | 'interpolated'
+  | 'float_native'
+  | 'float_interpolated';
+
+/**
+ * How the float depth was obtained: "pressure_gsw" (TEOS-10 pressure-to-depth
+ * conversion at the float latitude) or "provided" (source depth_m unchanged).
+ * The profile-level summary may also be "mixed" or "unavailable".
+ */
+export type MatchupDepthSource = 'pressure_gsw' | 'provided' | 'mixed' | 'unavailable';
+
 export interface DepthComparison {
   depthM: number;
+  depthSource?: MatchupDepthSource | 'model_level' | null;
+  method?: MatchupLevelMethod | null;
+  /** model_levels mode only: the float levels bracketing this model level. */
+  modelDepthM?: number | null;
+  floatBracketTopM?: number | null;
+  floatBracketBottomM?: number | null;
+  floatBracketGapM?: number | null;
+  floatBracketMaxGapM?: number | null;
+  floatTemperatureMethod?: string | null;
+  floatSalinityMethod?: string | null;
+  floatTemperatureRejected?: string | null;
+  floatSalinityRejected?: string | null;
+  argoVariableSource?: 'adjusted' | 'raw' | null;
   argoTemperatureC?: number | null;
   modelTemperatureC?: number | null;
   temperatureResidualC?: number | null;
@@ -240,7 +327,164 @@ export interface MatchupDiagnostics {
   deepestMatchedObservationDepthM?: number | null;
   deepestMatchedModelDepthM?: number | null;
   repeatedNativeDepthMatchCount: number;
+  interpolatedLevelCount: number;
+  nativeLevelCount: number;
+  /** What matchedPercentage is measured against. */
+  matchedPercentageBasis?: 'model_levels' | 'argo_observations';
+  totalModelLevels?: number | null;
+  /** Surface levels that borrowed a shallow float sample (not native, not interpolated). */
+  nearSurfaceSubstitutionCount?: number;
   interpolationApplied: boolean;
+  /**
+   * Levels whose Argo QC flags were absent from the source and were therefore
+   * accepted on the documented lenient assumption. A count above zero means
+   * part of the sample has no quality-control provenance.
+   */
+  missingQcLevelCount: number;
+  timeDifferenceHours?: number | null;
+  timeGapStatus?: MatchupTimeGapStatus | null;
+}
+
+/**
+ * Live evidence that the model's 2D TCHP field and the float-derived TCHP use
+ * different conventions. Every number here is computed at request time from the
+ * model's own temperature; nothing is a stored constant.
+ */
+export interface TCHPModelDefinition {
+  status: string;
+  reason: string | null;
+  profileCount: number;
+  /** The isotherm the FLOAT definition uses (26 C). */
+  floatIsothermC: number;
+  fieldMeanKjCm2: number | null;
+  /** The model's own temperature profile, recomputed with the float definition. */
+  modelProfileMeanKjCm2: number | null;
+  /** Field / recomputed under the float definition: > 1 means not the same quantity. */
+  ratioAtFloatIsothermMean: number | null;
+  ratioAtFloatIsothermMedian: number | null;
+  /** The isotherm that WOULD reproduce the field from the model's own profile. */
+  referenceIsothermC: number | null;
+  referenceProfileMeanKjCm2: number | null;
+  /** Field / recomputed at referenceIsothermC; near 1 confirms a convention difference. */
+  referenceRatio: number | null;
+  referenceCoverage: number;
+  modelProfileMaxGapM: number;
+}
+
+/** Per-model-depth row of the regional summary. */
+export interface MatchupSummaryDepthRow {
+  modelDepthM: number;
+  temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+}
+
+export interface ArgoMatchupSummary {
+  matchMode: MatchupMode;
+  modelDataset: string;
+  modelDataStatus?: ScientificDataStatus;
+  modelRuns: string[];
+  modelDepthAxis?: string;
+  modelDepthAxisRule?: string;
+  modelDepths?: number[];
+  storedFileDepths?: number[];
+  floatBracketMaxGapM: number;
+  floatBracketMaxGapDeepM: number;
+  floatBracketDeepBreakpointM: number;
+  totalProfileCount: number;
+  includedProfileCount: number;
+  excludedProfileCount: number;
+  excludedProfileReasons: Record<string, number>;
+  excludedProfiles: { profileId: string; reason: string; excludedModelLevels?: string[] }[];
+  byModelDepth: MatchupSummaryDepthRow[];
+  /** Regional TCHP residual statistics, reduced per profile. */
+  tchp: {
+    n: number;
+    bias: number | null;
+    mae: number | null;
+    rmse: number | null;
+    medianBias: number | null;
+    meanModelMinusFloat: number | null;
+    meanFloat: number | null;
+    meanModel: number | null;
+  };
+  tchpScatter: TchpScatterPoint[];
+  tchpProfiles: {
+    profileId: string;
+    floatId: string;
+    tchpFloatKjCm2: number | null;
+    tchpModelKjCm2: number | null;
+    tchpResidualKjCm2: number | null;
+    tchpResidualPercent: number | null;
+    d26FloatM: number | null;
+    mldModelM: number | null;
+    metricsStatus?: string | null;
+    metricsReason?: string | null;
+  }[];
+  tchpIsothermC: number;
+  tchpDefinitionStatus?: string | null;
+  /**
+   * Whether INCOIS's 2D TCHP field is the same quantity as the float-derived
+   * TCHP. Computed live from the model's own temperature profile, so the UI can
+   * quote a measured ratio instead of an assumed one.
+   */
+  tchpModelDefinition?: TCHPModelDefinition | null;
+  /** Widely quoted screening threshold, drawn as a reference line only. */
+  tchpRuleOfThumbKJPerCm2: number;
+  overall: {
+    temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+    salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  };
+  profiles: {
+    profileId: string;
+    floatId: string;
+    observationTimestamp: string;
+    timeDifferenceHours: number | null;
+    timeGapStatus: MatchupTimeGapStatus | null;
+    modelRun?: string | null;
+    pairCount: number;
+    temperaturePairCount: number;
+    salinityPairCount: number;
+    temperature: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+    salinity: { n: number; bias: number | null; mae: number | null; rmse: number | null };
+  }[];
+}
+
+/**
+ * Float-derived cyclone heat content against the model's own products.
+ *
+ * TCHP is in kJ/cm2 (the unit the model's field carries) and the residual is
+ * `model - float`, matching the temperature convention: positive means the
+ * model carries more heat than the float measured.
+ *
+ * `metricsStatus`/`metricsReason` explain a missing value. A missing
+ * measurement and a measurement of zero are different claims and are never
+ * conflated - `tchpFloatKjCm2` is 0 only when the float's surface really is
+ * below the isotherm.
+ */
+export interface ArgoOceanHeat {
+  tchpFloatKjCm2: number | null;
+  tchpModelKjCm2: number | null;
+  tchpResidualKjCm2: number | null;
+  tchpResidualPercent: number | null;
+  d26FloatM: number | null;
+  mldModelM: number | null;
+  metricsStatus?: string | null;
+  metricsReason?: string | null;
+  metricsSurfaceDepthM?: number | null;
+  metricsSurfaceTemperatureC?: number | null;
+  /** Why the model's own TCHP may not be directly comparable. */
+  tchpDefinitionStatus?: string | null;
+  tchpIsothermC: number;
+  tchpMetricsMaxGapM: number;
+}
+
+/** One point of the regional float-vs-model TCHP scatter. */
+export interface TchpScatterPoint {
+  profileId: string;
+  floatId: string;
+  tchpFloatKjCm2: number;
+  tchpModelKjCm2: number;
+  residualKjCm2: number | null;
 }
 
 export interface ArgoMatchupResponse {
@@ -255,11 +499,35 @@ export interface ArgoMatchupResponse {
   matchedModelLat: number;
   matchedModelLon: number;
   timeDifferenceHours: number;
+  timeInterpolationApplied?: boolean;
+  timeGapStatus?: MatchupTimeGapStatus;
+  timeGapReason?: string | null;
+  statisticsSuppressed?: boolean;
+  modelRun?: string | null;
+  availableModelRuns?: { run: string; timeGapHours: number; leadHours: number; dataStatus?: string }[];
   distanceKm: number;
+  spatialMode?: MatchupSpatialMode;
   matchedDepths: number[];
   matchedPointCount: number;
   matchingToleranceM: number;
+  matchMode?: MatchupMode;
   modelDepthSelection: string;
+  modelDepthAxis?: string;
+  modelDepthAxisRule?: string;
+  modelDepths?: number[];
+  storedFileDepths?: number[];
+  depthSource?: MatchupDepthSource;
+  /** Variable family actually read for the whole profile: "raw" | "adjusted". */
+  variableBasis?: 'raw' | 'adjusted';
+  /** Requested Argo data mode ("R"/"A"/"D") or "auto" when auto-detected. */
+  argoDataMode?: 'R' | 'A' | 'D' | 'auto';
+  missingQcLevelCount?: number;
+  qcFlagsUsed?: { raw?: number[]; adjusted?: number[] };
+  /** model_levels mode: model levels that produced no pair, with the reason. */
+  excludedModelLevels?: { modelDepthM: number; reason: string }[];
+  floatBracketMaxGapM?: number;
+  floatBracketMaxGapDeepM?: number;
+  floatBracketDeepBreakpointM?: number;
   comparisons: DepthComparison[];
   dataStatus: DataStatus;
   source: string;
@@ -267,6 +535,25 @@ export interface ArgoMatchupResponse {
   statusMessage?: string | null;
   statistics?: MatchupStatisticsByVariable | null;
   diagnostics?: MatchupDiagnostics | null;
+  /**
+   * Cyclone-relevant heat content: float-derived TCHP/D26 against the model's
+   * own 2D TCHP and MLD products at the same location and time. See
+   * `ArgoOceanHeat` for the zero-versus-missing contract.
+   */
+  heat?: ArgoOceanHeat;
+  tchpFloatKjCm2?: number | null;
+  tchpModelKjCm2?: number | null;
+  tchpResidualKjCm2?: number | null;
+  tchpResidualPercent?: number | null;
+  d26FloatM?: number | null;
+  mldModelM?: number | null;
+  metricsStatus?: string | null;
+  metricsReason?: string | null;
+  metricsSurfaceDepthM?: number | null;
+  metricsSurfaceTemperatureC?: number | null;
+  tchpDefinitionStatus?: string | null;
+  tchpIsothermC?: number;
+  tchpMetricsMaxGapM?: number;
 }
 
 export interface AstronomicalData {
@@ -288,4 +575,22 @@ export interface AstronomicalData {
     lat: number;
     lon: number;
   };
+}
+
+/**
+ * A camera fly-to target.
+ *
+ * `isSun` / `isMoon` select the sub-point of that body rather than a fixed
+ * lat/lon: the viewer resolves the body's position for the current timestamp.
+ * They travel with the target through AppState.setTargetLocation, so they are
+ * part of the contract rather than an untyped extra field.
+ */
+export interface FlyToTarget {
+  lat: number;
+  lon: number;
+  height?: number;
+  /** Point the camera at the Sun's sub-point for the current timestamp. */
+  isSun?: boolean;
+  /** Point the camera at the Moon's sub-point for the current timestamp. */
+  isMoon?: boolean;
 }

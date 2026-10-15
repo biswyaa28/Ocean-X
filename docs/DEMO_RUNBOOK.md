@@ -11,7 +11,7 @@ This runbook explains how to reproduce, run, and demonstrate the OCEAN-X prototy
 | Requirement | Version | Notes |
 |---|---|---|
 | Python | ≥ 3.10 | For backend |
-| Node.js | ≥ 18.0 | For frontend |
+| Node.js | ≥ 20.9 | For frontend (Next.js 16 requires `>=20.9.0`) |
 | npm | ≥ 9.0 | |
 | Git | Any | Clone repo |
 | Ports | 8000, 3000 | Backend and frontend |
@@ -117,7 +117,7 @@ in amber. This banner is always visible in FIXTURE mode and cannot be dismissed.
 ## Option B — REAL Mode (Production Data)
 
 > [!WARNING]
-> REAL mode requires the INCOIS HYCOM raw NetCDF file (~9.85 GB). This file must be installed separately.
+> REAL mode requires the INCOIS HYCOM raw NetCDF file (~10.58 GB). This file must be installed separately.
 
 ### 1. Preflight check
 
@@ -140,7 +140,7 @@ Run: python scripts/setup-data.py
 
 ```bash
 python scripts/setup-data.py --check       # see what's needed
-python scripts/setup-data.py --download    # download (~9.85 GB, confirmation required)
+python scripts/setup-data.py --download    # download (~10.58 GB, confirmation required)
 python scripts/setup-data.py --process     # generate processed surface file
 ```
 
@@ -250,16 +250,16 @@ npx vitest run           # full Vitest suite
 
 **Real-production HYCOM runtime verification: NOT PERFORMED**
 
-Production data (`RSMC_hycom_20260908.nc`, ~9.85 GB) is not installed in the CI/CD environment. All runtime verification was performed in FIXTURE mode.
+Production data (`RSMC_hycom_20260908.nc`, ~10.58 GB) is not installed in the CI/CD environment. All runtime verification was performed in FIXTURE mode.
 
 ### Current deployment status
 
 | Target | Status | Blocker |
 |---|---|---|
 | **Local (FIXTURE mode)** | ✅ Fully supported | None |
-| **Local (REAL mode)** | ✅ Supported with data | Requires 9.85 GB HYCOM file |
+| **Local (REAL mode)** | ✅ Supported with data | Requires 10.58 GB HYCOM file |
 | **Docker (FIXTURE mode)** | ✅ Dockerfile provided | Build and run `backend/Dockerfile` |
-| **Railway (backend)** | ⚠️ Partial | FIXTURE mode works; REAL mode blocked by 9.85 GB dataset hosting |
+| **Railway (backend)** | ⚠️ Partial | FIXTURE mode works; REAL mode blocked by 10.58 GB dataset hosting |
 | **Vercel (frontend)** | ✅ Standard Next.js deploy | Set `NEXT_PUBLIC_API_URL` to backend URL |
 | **Vercel (backend)** | ❌ Not supported | Vercel serverless is incompatible with xarray/netCDF4 |
 

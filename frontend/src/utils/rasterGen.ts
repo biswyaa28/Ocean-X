@@ -1,8 +1,17 @@
 /**
  * OCEAN-X SIH26067 - Client-side raster generation utilities.
- * Generates scientific colormap Data URLs for spatial heatmap overlays
- * (SST / Salinity / TCHP) with canvas + ImageData buffer reuse and a
- * bounded cache keyed by layer/timestamp/grid-resolution.
+ * Generates scientific colormap images for spatial heatmap overlays
+ * (SST / Salinity / TCHP + HYCOM depth slices) with canvas + ImageData buffer
+ * reuse and a bounded cache keyed by layer/timestamp/grid-resolution.
+ *
+ * Phase 2B pipeline change (scientific output identical):
+ *   BEFORE  float grid → ImageData → canvas → canvas.toDataURL('image/png')
+ *           → Base64 Data URL string → Cesium image decode → WebGL texture
+ *   AFTER   float grid → ImageData → canvas → canvas.toBlob('image/png')
+ *           → Blob → URL.createObjectURL → Cesium image decode → WebGL texture
+ * The synchronous Base64 stringify is gone (encoding is async and the decoder
+ * reads the Blob directly). `canvas.toDataURL()` remains as a safe fallback
+ * when `toBlob`/object URLs are unavailable (e.g. jsdom in tests).
  */
 
 import { CLASSIC_PALETTE, samplePalette, ScientificPalette } from './scientificPalettes';
@@ -35,7 +44,168 @@ let rasterCtx: RasterGenContext | null = null;
 
 const MAX_CACHE_ENTRIES = 24;
 
-const dataUrlCache = new Map<string, string>();
+/**
+ * A canvas encoding result. Exactly one of `blob`/`dataUrl` is populated:
+ * `blob` on the Phase 2B object-URL path, `dataUrl` on the fallback path.
+ * Blobs stay alive in the bounded cache; object URLs are created (and
+ * released) per imagery layer, never cached.
+ */
+interface EncodedRaster {
+  blob: Blob | null;
+  dataUrl: string | null;
+}
+
+const rasterCache = new Map<string, EncodedRaster>();
+
+/**
+ * A Cesium-consumable raster image source. `url` is either a Blob object URL
+ * or a Data URL fallback — both are `string`, which is exactly what
+ * `SingleTileImageryProvider` accepts (`Resource | string`).
+ */
+export interface RasterImageSource {
+  /** Object URL (Blob path) or Data URL (fallback). '' when nothing was produced. */
+  url: string;
+  /** Which serialization path produced `url` (instrumentation). */
+  encoding: 'blob' | 'dataurl';
+  /** Releases the object URL. Idempotent; a no-op for Data URLs. */
+  release: () => void;
+  cacheHit: boolean;
+  /** Wall-clock ms for the whole call (paint + encode). */
+  generationMs: number;
+  /** Wall-clock ms spent encoding the canvas; 0 on a cache hit. */
+  serializationMs: number;
+}
+
+function emptyImageSource(): RasterImageSource {
+  return { url: '', encoding: 'dataurl', release: () => {}, cacheHit: false, generationMs: 0, serializationMs: 0 };
+}
+
+function now(): number {
+  return typeof performance !== 'undefined' ? performance.now() : 0;
+}
+
+/** Object URLs are only used when the environment really supports them. */
+function canUseObjectUrls(): boolean {
+  return typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
+}
+
+/**
+ * Encodes the prepared canvas. Prefers an asynchronous PNG Blob (no Base64
+ * string, no synchronous main-thread stringify); falls back to the previous
+ * `toDataURL()` Data URL path when `toBlob` or object URLs are unavailable.
+ */
+async function encodeCanvas(canvas: HTMLCanvasElement): Promise<EncodedRaster> {
+  if (canUseObjectUrls() && typeof canvas.toBlob === 'function') {
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((result) => resolve(result), 'image/png');
+      });
+      if (blob) return { blob, dataUrl: null };
+    } catch {
+      // fall through to the Data URL fallback
+    }
+  }
+  return { blob: null, dataUrl: canvas.toDataURL('image/png') };
+}
+
+/** Bounded LRU read (re-inserting the entry refreshes its recency). */
+function readCachedRaster(cacheKey: string): EncodedRaster | undefined {
+  const entry = rasterCache.get(cacheKey);
+  if (!entry) return undefined;
+  rasterCache.delete(cacheKey);
+  rasterCache.set(cacheKey, entry);
+  return entry;
+}
+
+/** Bounded LRU write; eviction just drops the cached Blob (garbage collected). */
+function writeCachedRaster(cacheKey: string, entry: EncodedRaster): void {
+  if (rasterCache.has(cacheKey)) rasterCache.delete(cacheKey);
+  rasterCache.set(cacheKey, entry);
+  while (rasterCache.size > MAX_CACHE_ENTRIES) {
+    const oldestKey = rasterCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    rasterCache.delete(oldestKey);
+  }
+}
+
+/** Turns a cached encoding into a fresh, independently releasable source. */
+function materializeSource(
+  encoded: EncodedRaster,
+  cacheHit: boolean,
+  generationMs: number,
+  serializationMs: number
+): RasterImageSource {
+  if (encoded.blob && canUseObjectUrls()) {
+    const objectUrl = URL.createObjectURL(encoded.blob);
+    let released = false;
+    return {
+      url: objectUrl,
+      encoding: 'blob',
+      release: () => {
+        if (released) return;
+        released = true;
+        URL.revokeObjectURL(objectUrl);
+      },
+      cacheHit,
+      generationMs,
+      serializationMs,
+    };
+  }
+  return {
+    url: encoded.dataUrl ?? '',
+    encoding: 'dataurl',
+    release: () => {},
+    cacheHit,
+    generationMs,
+    serializationMs,
+  };
+}
+
+/**
+ * Shared implementation: cache lookup, paint, encode, cache store.
+ * The paint step is fully synchronous (so the captured bitmap can never be
+ * clobbered by a concurrent generation reusing the shared canvas).
+ */
+async function generateImageSource(
+  cacheKey: string,
+  width: number,
+  height: number,
+  paint: (imgData: ImageData) => void
+): Promise<RasterImageSource> {
+  const t0 = now();
+
+  const cached = readCachedRaster(cacheKey);
+  if (cached) return materializeSource(cached, true, now() - t0, 0);
+
+  const rc = getRasterContext();
+  if (!rc || !rc.ctx) return emptyImageSource();
+
+  if (rc.canvas.width !== width || rc.canvas.height !== height) {
+    rc.canvas.width = width;
+    rc.canvas.height = height;
+  }
+
+  const imgData = getReusableImageData(rc.ctx, width, height);
+  paint(imgData);
+  rc.ctx.putImageData(imgData, 0, 0);
+
+  // Upscale to the 512x512 texture Cesium actually samples (high-quality
+  // smoothing preserved — byte-identical to the pre-2B Data URL pipeline).
+  let target: HTMLCanvasElement = rc.canvas;
+  if (rc.scaleCtx) {
+    rc.scaleCtx.clearRect(0, 0, 512, 512);
+    rc.scaleCtx.drawImage(rc.canvas, 0, 0, 512, 512);
+    target = rc.scaleCanvas;
+  }
+
+  const serializationT0 = now();
+  const encoded = await encodeCanvas(target);
+  const serializationMs = now() - serializationT0;
+
+  writeCachedRaster(cacheKey, encoded);
+
+  return materializeSource(encoded, false, now() - t0, serializationMs);
+}
 
 function getRasterContext(): RasterGenContext | null {
   if (typeof document === 'undefined') return null;
@@ -81,9 +251,17 @@ function getReusableImageData(ctx: CanvasRenderingContext2D, width: number, heig
   return rc.imgData;
 }
 
-/** A cell the surface ramp treats as no-data (surface semantics: 0 == masked). Exported for regression tests. */
+/**
+ * A cell with no measurement — masked land or outside the model domain.
+ *
+ * Only `null` / `undefined` / NaN count. A genuine `0` is a real reading
+ * (slack currents, TCHP = 0 over cool water, fresh water at 0 PSU) and must
+ * be coloured, not masked. Treating 0 as no-data was a workaround for the
+ * backend's old NaN→0 substitution; the backend now emits `null`, so that
+ * workaround is removed — otherwise real zeros vanish from the map.
+ */
 export function isSurfaceNoData(val: number | null | undefined): val is null | undefined {
-  return val === null || val === undefined || isNaN(val as number) || val === 0;
+  return val === null || val === undefined || isNaN(val as number);
 }
 
 /** A cell with no actual measurement (depth-slice semantics: only null/NaN is missing). */
@@ -93,8 +271,9 @@ export function isMissingDepthValue(val: number | null | undefined): val is null
 
 /**
  * Scientific colormap identical in output to the previous per-call generator.
- * Values -> RGBA with the INCOIS-style ramps. Invalid (null/NaN/0) cells are
- * fully transparent so provenance semantics ("no data" masking) are preserved.
+ * Values -> RGBA with the INCOIS-style ramps. Masked (null/NaN) cells are
+ * fully transparent so land renders as land, not as a zero-valued colour.
+ * A genuine 0 is coloured normally.
  */
 function paintGrid(
   imgData: ImageData,
@@ -161,66 +340,31 @@ function paintGrid(
 }
 
 /**
- * Generates a raster Data URL for the requested layer slice, reusing the
+ * Generates a raster image source for the requested layer slice, reusing the
  * persistent offscreen canvases and ImageData buffer. Results are cached
  * under `${layerType}_${timestamp}_${nLat}x${nLon}` so revisiting a loaded
- * timestamp/layer is a pure cache lookup.
+ * timestamp/layer is a pure cache lookup and only the cheap object URL is
+ * re-created for the new imagery layer.
  */
-export function generateLayerImageDataUrlCached(
+export function generateLayerImageSourceCached(
   layerType: RasterLayerType,
   latitudes: number[],
   longitudes: number[],
   values: (number | null)[][],
   timestamp?: string
-): { dataUrl: string; cacheHit: boolean; generationMs: number } {
-  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
-
+): Promise<RasterImageSource> {
   const nLat = latitudes.length;
   const nLon = longitudes.length;
-  if (!nLat || !nLon || !values) return { dataUrl: '', cacheHit: false, generationMs: 0 };
+  if (!nLat || !nLon || !values) return Promise.resolve(emptyImageSource());
 
   const cacheKey = `${layerType}_${timestamp || 'latest'}_${nLat}x${nLon}`;
-  const cached = dataUrlCache.get(cacheKey);
-  if (cached) {
-    // LRU refresh
-    dataUrlCache.delete(cacheKey);
-    dataUrlCache.set(cacheKey, cached);
-    return { dataUrl: cached, cacheHit: true, generationMs: performance.now() - t0 };
-  }
-
-  const rc = getRasterContext();
-  if (!rc || !rc.ctx) return { dataUrl: '', cacheHit: false, generationMs: 0 };
-
-  if (rc.canvas.width !== nLon || rc.canvas.height !== nLat) {
-    rc.canvas.width = nLon;
-    rc.canvas.height = nLat;
-  }
-
-  const imgData = getReusableImageData(rc.ctx, nLon, nLat);
-  paintGrid(imgData, layerType, latitudes, longitudes, values);
-  rc.ctx.putImageData(imgData, 0, 0);
-
-  let dataUrl: string;
-  if (rc.scaleCtx) {
-    rc.scaleCtx.clearRect(0, 0, 512, 512);
-    rc.scaleCtx.drawImage(rc.canvas, 0, 0, 512, 512);
-    dataUrl = rc.scaleCanvas.toDataURL();
-  } else {
-    dataUrl = rc.canvas.toDataURL();
-  }
-
-  // Bounded cache eviction (oldest inserted first)
-  if (dataUrlCache.size >= MAX_CACHE_ENTRIES) {
-    const oldestKey = dataUrlCache.keys().next().value;
-    if (oldestKey !== undefined) dataUrlCache.delete(oldestKey);
-  }
-  dataUrlCache.set(cacheKey, dataUrl);
-
-  return { dataUrl, cacheHit: false, generationMs: performance.now() - t0 };
+  return generateImageSource(cacheKey, nLon, nLat, (imgData) =>
+    paintGrid(imgData, layerType, latitudes, longitudes, values)
+  );
 }
 
 export function clearRasterCache(): void {
-  dataUrlCache.clear();
+  rasterCache.clear();
 }
 
 // ============================================================
@@ -324,14 +468,14 @@ export function paintDepthSliceGrid(
 }
 
 /**
- * Generates a raster Data URL for a HYCOM model depth slice.
+ * Generates a raster image source for a HYCOM model depth slice.
  * Reuses the persistent canvas/ImageData machinery and the bounded LRU
  * cache; the cache key includes variable + matched depth + timestamp (and
  * the full render configuration when provided) so a depth slice can never
  * collide with a surface raster, another level, or a differently styled
  * rendering of the same slice.
  */
-export function generateDepthSliceImageDataUrlCached(
+export function generateDepthSliceImageSourceCached(
   variable: string,
   matchedDepthM: number,
   latitudes: number[],
@@ -339,52 +483,17 @@ export function generateDepthSliceImageDataUrlCached(
   values: (number | null)[][],
   timestamp?: string,
   renderOptions?: DepthSliceRenderOptions
-): { dataUrl: string; cacheHit: boolean; generationMs: number } {
-  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
-
+): Promise<RasterImageSource> {
   const nLat = latitudes.length;
   const nLon = longitudes.length;
-  if (!nLat || !nLon || !values) return { dataUrl: '', cacheHit: false, generationMs: 0 };
+  if (!nLat || !nLon || !values) return Promise.resolve(emptyImageSource());
 
   let cacheKey = `depthslice_${variable}_${matchedDepthM}m_${timestamp || 'latest'}_${nLat}x${nLon}`;
   if (renderOptions) {
     cacheKey += `_${renderOptions.palette.id}_${renderOptions.rangeMin}_${renderOptions.rangeMax}_${renderOptions.scale}`;
   }
-  const cached = dataUrlCache.get(cacheKey);
-  if (cached) {
-    // LRU refresh
-    dataUrlCache.delete(cacheKey);
-    dataUrlCache.set(cacheKey, cached);
-    return { dataUrl: cached, cacheHit: true, generationMs: performance.now() - t0 };
-  }
 
-  const rc = getRasterContext();
-  if (!rc || !rc.ctx) return { dataUrl: '', cacheHit: false, generationMs: 0 };
-
-  if (rc.canvas.width !== nLon || rc.canvas.height !== nLat) {
-    rc.canvas.width = nLon;
-    rc.canvas.height = nLat;
-  }
-
-  const imgData = getReusableImageData(rc.ctx, nLon, nLat);
-  paintDepthSliceGrid(imgData, variable, latitudes, longitudes, values, renderOptions);
-  rc.ctx.putImageData(imgData, 0, 0);
-
-  let dataUrl: string;
-  if (rc.scaleCtx) {
-    rc.scaleCtx.clearRect(0, 0, 512, 512);
-    rc.scaleCtx.drawImage(rc.canvas, 0, 0, 512, 512);
-    dataUrl = rc.scaleCanvas.toDataURL();
-  } else {
-    dataUrl = rc.canvas.toDataURL();
-  }
-
-  // Bounded cache eviction (oldest inserted first)
-  if (dataUrlCache.size >= MAX_CACHE_ENTRIES) {
-    const oldestKey = dataUrlCache.keys().next().value;
-    if (oldestKey !== undefined) dataUrlCache.delete(oldestKey);
-  }
-  dataUrlCache.set(cacheKey, dataUrl);
-
-  return { dataUrl, cacheHit: false, generationMs: performance.now() - t0 };
+  return generateImageSource(cacheKey, nLon, nLat, (imgData) =>
+    paintDepthSliceGrid(imgData, variable, latitudes, longitudes, values, renderOptions)
+  );
 }

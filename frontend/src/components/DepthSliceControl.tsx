@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ChevronDown, Eye, EyeOff, Loader2, AlertCircle, Waves, RotateCcw } from 'lucide-react';
 import { DEPTH_SLICE_VARIABLES, DepthSlicePayload } from '../services/ApiProvider';
+import { modelDepthLabel, type ModelDepthAxis } from '../utils/modelDepthLabel';
 import {
   DepthSliceDisplaySettings,
   DepthSliceRenderConfig,
@@ -33,6 +34,12 @@ interface DepthSliceControlProps {
   metadata: DepthSlicePayload | null;
   datasetTimestamps: string[];
   availableDepthsM: number[] | null;
+  /**
+   * The time the slice will actually be requested at when the user has not
+   * picked one. Displayed as the current selection so the control never shows a
+   * time the request is not using.
+   */
+  defaultTimestamp?: string | undefined;
 }
 
 const DEPTH_PRESETS_M = [0, 10, 50, 100, 250, 500];
@@ -51,6 +58,7 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
   metadata,
   datasetTimestamps,
   availableDepthsM,
+  defaultTimestamp,
 }) => {
   const varMeta = DEPTH_SLICE_VARIABLES.find((v) => v.id === selection.variable);
   const variableLabel = varMeta ? varMeta.label : selection.variable;
@@ -63,6 +71,15 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
   const depthOptions = nativeDepths.includes(selection.depthM)
     ? nativeDepths
     : [...nativeDepths, selection.depthM].sort((a, b) => a - b);
+  // The subset file's own DEPTH labels, so a level can be shown as sampled AND
+  // as the file names it. They differ on the thermocline levels.
+  const depthAxis = useMemo<ModelDepthAxis>(
+    () => ({
+      modelDepths: metadata?.available_depths_m ?? null,
+      storedFileDepths: metadata?.stored_file_depths_m ?? null,
+    }),
+    [metadata?.available_depths_m, metadata?.stored_file_depths_m]
+  );
 
   const palettes = palettesForVariable(selection.variable);
 
@@ -157,7 +174,8 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 >
                   {depthOptions.map((d) => (
                     <option key={d} value={d} className="bg-[#080c14]">
-                      {d} m{nativeDepths.includes(d) ? '' : ' · requested (nearest native match)'}
+                      {modelDepthLabel(d, depthAxis)}
+                      {nativeDepths.includes(d) ? '' : ' · requested (nearest native match)'}
                     </option>
                   ))}
                 </select>
@@ -173,11 +191,14 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 <div className="relative">
                   <select
                     aria-label="Depth slice model timestamp"
-                    value={selection.timestamp ?? ''}
-                    onChange={(e) => onChange({ ...selection, timestamp: e.target.value || undefined })}
+                    value={selection.timestamp ?? defaultTimestamp ?? ''}
+                    onChange={(e) => onChange({ ...selection, timestamp: e.target.value || defaultTimestamp })}
                     className="w-full appearance-none bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-[10.5px] text-slate-100 focus:outline-none focus:border-indigo-400/60 pr-7"
                   >
-                    {datasetTimestamps.map((ts) => (
+                    {(defaultTimestamp && !datasetTimestamps.includes(defaultTimestamp)
+                      ? [defaultTimestamp, ...datasetTimestamps]
+                      : datasetTimestamps
+                    ).map((ts) => (
                       <option key={ts} value={ts} className="bg-[#080c14]">
                         {ts.replace('T', ' ').slice(0, 16)}
                       </option>
@@ -347,7 +368,9 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">MATCHED MODEL DEPTH</span>
-                  <span className="text-indigo-300 font-bold">{metadata.matched_depth_m} m</span>
+                  <span className="text-indigo-300 font-bold">
+                    {modelDepthLabel(metadata.matched_depth_m, depthAxis)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">TIMESTAMP</span>
@@ -396,6 +419,7 @@ export const DepthSliceControl: React.FC<DepthSliceControlProps> = ({
                 variableLabel={variableLabel}
                 isAutoRange={render.isAutoRange}
                 matchedDepthM={metadata.matched_depth_m}
+                depthAxis={depthAxis}
                 timestamp={metadata.timestamp}
               />
             )}

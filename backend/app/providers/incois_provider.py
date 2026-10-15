@@ -25,6 +25,14 @@ def _hycom_data_status(ds=None) -> str:
         except Exception:
             pass
     return 'REAL'
+from app.services.model_depth_axis import (
+    apply_model_depth_axis,
+    stored_file_depths_from_axis,
+)
+from app.services.model_time_matching import (
+    is_time_matched,
+    resolve_model_timestamp,
+)
 from app.models.schemas import (
     LayerDataResponse, LayerGridData, DepthSliceResponse, DepthSliceGridData,
     ScientificProvenance,
@@ -83,6 +91,14 @@ class DepthSliceVariableUnavailableError(DepthSliceError):
     """
 
 
+class LayerDataTimestampError(DepthSliceError):
+    """A surface-layer request carried a timestamp that cannot be read.
+
+    Distinct from a request for a time simply outside the dataset: an
+    unreadable one is a client error and is never answered with another day.
+    """
+
+
 class IncoisProvider:
     def __init__(
         self,
@@ -126,7 +142,9 @@ class IncoisProvider:
         """
         if self._depth_dataset is None and self._depth_nc_path is not None and self._depth_nc_path.exists():
             try:
-                self._depth_dataset = xr.open_dataset(self._depth_nc_path, engine="netcdf4", chunks={})
+                opened = xr.open_dataset(self._depth_nc_path, engine="netcdf4", chunks={})
+                # One depth axis for every consumer; see model_depth_axis.
+                self._depth_dataset, _rule = apply_model_depth_axis(opened)
             except Exception as e:
                 print(f"Error opening depth-aware INCOIS HYCOM NetCDF: {e}")
                 self._depth_dataset = None
@@ -397,6 +415,7 @@ class IncoisProvider:
             requested_depth_m=float(requested_depth_m),
             matched_depth_m=float(matched_depth),
             available_depths_m=depths,
+            stored_file_depths_m=stored_file_depths_from_axis(ds),
             missing_values=missing,
             bounds=bounds,
             grid=grid,
@@ -429,8 +448,35 @@ class IncoisProvider:
         if not timestamps:
             return None
 
-        # Resolve timestamp
-        selected_ts = timestamp if timestamp in timestamps else timestamps[0]
+        # Resolve the requested time against the model's own times. This is an
+        # EXPLICIT resolution, reported back as ``timestamp``: the response
+        # always states which day it holds. The previous behaviour — a raw
+        # string membership test that fell through to ``timestamps[0]`` — was
+        # a silent clamp: it answered 2020 replay requests with the first
+        # October 2026 slice, and it also missed requests that were in the
+        # dataset but written with a different ISO spelling.
+        selected_ts = resolve_model_timestamp(timestamp, timestamps)
+        if selected_ts is None:
+            if timestamp and str(timestamp).strip():
+                # A request we cannot read must never be answered with some
+                # other day: raise a client error instead.
+                raise LayerDataTimestampError(
+                    f"Invalid or unparseable timestamp: {timestamp}.",
+                    detail={
+                        "message": f"Invalid or unparseable timestamp: {timestamp}.",
+                        "requestedTimestamp": timestamp,
+                        "source": "INCOIS RSMC HYCOM",
+                    },
+                )
+            return None
+
+        # "Matched" here means: matches the time THIS REQUEST asked for. Whether
+        # that model time corresponds to the cyclone being replayed is a
+        # separate question, answered by /risk and by the UI badge.
+        resolved_time_matched = (
+            True if not (timestamp and str(timestamp).strip())
+            else is_time_matched(selected_ts, timestamp)
+        )
 
         # Subset time slice
         try:
@@ -451,12 +497,38 @@ class IncoisProvider:
 
         layer_name_lower = layer_name.lower()
 
-        if layer_name_lower == "currents":
-            u_arr = np.nan_to_num(ds_time["UVEL"].values[::stride, ::stride], nan=0.0)
-            v_arr = np.nan_to_num(ds_time["VVEL"].values[::stride, ::stride], nan=0.0)
+        def _grid_lists(arr: np.ndarray, decimals: int) -> tuple:
+            """Round a grid, keeping masked cells as None and counting coverage.
 
-            u_list = u_arr.round(3).tolist()
-            v_list = v_arr.round(3).tolist()
+            A masked cell (land, or a point outside the model domain) is NaN in
+            the source. It is carried through as ``None`` so it cannot be
+            mistaken for a genuine zero-valued measurement: previously
+            ``np.nan_to_num(..., nan=0.0)`` turned land into a physically
+            plausible 0 °C / 0 m/s / 0 KJ·cm⁻² reading.
+            """
+            out = []
+            valid = 0
+            missing = 0
+            for row in arr[::stride, ::stride]:
+                out_row: List[Optional[float]] = []
+                for raw in row:
+                    fv = float(raw)
+                    if not np.isfinite(fv):
+                        out_row.append(None)
+                        missing += 1
+                    else:
+                        out_row.append(round(fv, decimals))
+                        valid += 1
+                out.append(out_row)
+            return out, valid, missing
+
+        if layer_name_lower == "currents":
+            u_list, u_valid, u_missing = _grid_lists(
+                ds_time["UVEL"].values, 3
+            )
+            v_list, v_valid, v_missing = _grid_lists(
+                ds_time["VVEL"].values, 3
+            )
 
             _c_status = _hycom_data_status(ds)
             _c_source = "INCOIS HYCOM — SYNTHETIC FIXTURE" if _c_status == "SIMULATED" else "INCOIS HYCOM — REAL VECTOR FIELD"
@@ -465,8 +537,13 @@ class IncoisProvider:
                 source=_c_source,
                 layer_name="currents",
                 timestamp=selected_ts,
+                requestedTimestamp=timestamp,
+                timeMatched=resolved_time_matched,
                 units="m/s",
                 bounds=bounds,
+                # A vector cell is only usable when BOTH components are valid.
+                validCellCount=min(u_valid, v_valid),
+                missingCellCount=max(u_missing, v_missing),
                 grid=LayerGridData(
                     latitudes=lats,
                     longitudes=lons,
@@ -478,28 +555,37 @@ class IncoisProvider:
         elif layer_name_lower in ["sst", "temperature", "temp"]:
             var_name = "TEMP"
             units = "°C"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "salinity":
             var_name = "SALN"
             units = "PSU"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "tchp":
             var_name = "TCHP"
             units = "KJ/cm2"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "ssh":
             var_name = "SSH"
             units = "m"
+            decimals = 2
             source_label = "INCOIS RSMC HYCOM"
         elif layer_name_lower == "mld":
             var_name = "MLD"
             units = "m"
+            decimals = 1
             source_label = "INCOIS RSMC HYCOM"
         else:
             return None
 
-        val_arr = np.nan_to_num(ds_time[var_name].values[::stride, ::stride], nan=0.0)
-        val_list = val_arr.round(2).tolist()
+        if var_name not in ds_time:
+            return None
+
+        val_list, valid_count, missing_count = _grid_lists(
+            ds_time[var_name].values, decimals
+        )
 
         _l_status = _hycom_data_status(ds)
         return LayerDataResponse(
@@ -507,8 +593,12 @@ class IncoisProvider:
             source=source_label,
             layer_name=layer_name_lower,
             timestamp=selected_ts,
+            requestedTimestamp=timestamp,
+            timeMatched=resolved_time_matched,
             units=units,
             bounds=bounds,
+            validCellCount=valid_count,
+            missingCellCount=missing_count,
             grid=LayerGridData(
                 latitudes=lats,
                 longitudes=lons,
@@ -523,8 +613,14 @@ class IncoisProvider:
         if ds is None or not timestamps:
             return {
                 "status": "NO_REAL_MODEL_DATA",
-                "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
-                "message": "No real INCOIS HYCOM dataset loaded.",
+                # No dataset was read at all, so this is NOT a "real dataset
+                # with a bad timestamp" situation — say what actually happened.
+                "dataStatus": (
+                    "SIMULATED" if settings.DATA_MODE == 'FIXTURE'
+                    else "NOT CURRENTLY INTEGRATED"
+                ),
+                "dataMode": settings.DATA_MODE,
+                "message": "No INCOIS HYCOM dataset is installed at the configured path.",
                 "requestedTimestamp": timestamp or "",
                 "availableStart": "",
                 "availableEnd": "",
@@ -547,7 +643,11 @@ class IncoisProvider:
                 if target_dt < start_dt or target_dt > end_dt:
                     return {
                         "status": "NO_REAL_MODEL_DATA",
-                        "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                        "dataStatus": (
+                            "SIMULATED — TIMESTAMP UNAVAILABLE"
+                            if settings.DATA_MODE == 'FIXTURE'
+                            else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                        ),
                         "message": f"No real INCOIS HYCOM model data is available for timestamp {timestamp}.",
                         "requestedTimestamp": timestamp,
                         "availableStart": str(available_start),
@@ -558,7 +658,11 @@ class IncoisProvider:
             except Exception:
                 return {
                     "status": "NO_REAL_MODEL_DATA",
-                    "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                    "dataStatus": (
+                        "SIMULATED — TIMESTAMP UNAVAILABLE"
+                        if settings.DATA_MODE == 'FIXTURE'
+                        else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                    ),
                     "message": f"Invalid or unparseable timestamp: {timestamp}.",
                     "requestedTimestamp": timestamp,
                     "availableStart": str(available_start),
@@ -570,6 +674,17 @@ class IncoisProvider:
 
         try:
             pt = ds_sel.sel(LAT=lat, LON=lon, method="nearest")
+
+            # A point inspection reports the SEA SURFACE. Real RSMC HYCOM files
+            # carry a full DEPTH dimension, so after selecting LAT/LON the field
+            # is still an array along DEPTH; the surface level must be chosen
+            # explicitly. Selecting the SHALLOWEST level (rather than assuming
+            # index 0) keeps this correct whichever way DEPTH is ordered. On a
+            # depth-less processed surface file this is a no-op.
+            if "DEPTH" in pt.dims:
+                depth_values = np.atleast_1d(pt["DEPTH"].values)
+                pt = pt.isel(DEPTH=int(np.argmin(depth_values)))
+
             matched_lat = float(pt["LAT"].values)
             matched_lon = float(pt["LON"].values)
             matched_time = str(pt["TIME"].values)
@@ -595,8 +710,16 @@ class IncoisProvider:
 
             return {
                 "status": "OK",
-                "dataStatus": "REAL",
-                "source": "INCOIS RSMC HYCOM",
+                # Derived from the dataset actually opened, never hardcoded:
+                # FIXTURE files carry synthetic='true' so this resolves to
+                # SIMULATED even if DATA_MODE were somehow misconfigured.
+                "dataStatus": _hycom_data_status(ds_sel),
+                "dataMode": settings.DATA_MODE,
+                "source": (
+                    "INCOIS RSMC HYCOM (synthetic fixture)"
+                    if _hycom_data_status(ds_sel) == 'SIMULATED'
+                    else "INCOIS RSMC HYCOM"
+                ),
                 "timestamp": matched_time,
                 "latitude": matched_lat,
                 "longitude": matched_lon,
@@ -626,7 +749,11 @@ class IncoisProvider:
             print(f"Error inspecting point ({lat}, {lon}): {e}")
             return {
                 "status": "NO_REAL_MODEL_DATA",
-                "dataStatus": "REAL DATASET — TIMESTAMP UNAVAILABLE",
+                "dataStatus": (
+                    "SIMULATED — TIMESTAMP UNAVAILABLE"
+                    if settings.DATA_MODE == 'FIXTURE'
+                    else "REAL DATASET — TIMESTAMP UNAVAILABLE"
+                ),
                 "message": f"Error indexing point at lat={lat}, lon={lon}: {e}",
                 "requestedTimestamp": timestamp or "",
                 "availableStart": str(available_start),

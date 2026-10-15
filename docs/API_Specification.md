@@ -60,7 +60,6 @@ All routes are prefixed with `/api` (actual base path, not `/api/v1`).
 | `/api/datasets` | GET | Dataset metadata list |
 | `/api/cyclones` | GET | Cyclone tracks |
 | `/api/cyclones/inspect` | GET | Point/time cyclone inspection |
-| `/api/stations` | GET | Coastal monitoring stations |
 | `/api/hazards` | GET | Active hazards |
 | `/api/risk/{hazard_id}` | GET | Risk assessment |
 | `/api/timeseries` | GET | Available model timestamps |
@@ -95,19 +94,12 @@ Query parameters:
 
 Returns dataset metadata.
 
-## 5. Stations
+## 5. Stations — REMOVED
 
-### GET /stations
-
-Optional:
-
-- bbox
-- variable
-- status
-
-### GET /stations/{station_id}
-
-Returns station metadata and available measurements.
+The `/stations` endpoint was removed. It returned three hardcoded buoys with
+invented coordinates and measurements (one off the Saffir–Simpson scale), and
+no real station feed is connected. It is intentionally absent rather than
+mislabelled `SIMULATED`.
 
 ## 6. Observations
 
@@ -188,15 +180,19 @@ Parameters:
 
 Supported layer names are determined by the configured data adapters.
 
-Possible MVP layers:
+Actually served (all backed by real INCOIS HYCOM output):
 
 - currents
-- wind
-- sea_surface_temperature
-- wave_height
-- cyclone
-- stations
-- risk
+- sst
+- salinity
+- tchp
+- ssh
+- mld
+- argo
+
+Removed: `wind` (parametric model, no data) and `wave_height` (no data feed).
+Masked land cells are returned as `null`, never `0.0`, and each response
+reports `validCellCount` / `missingCellCount`.
 
 ## 11a. HYCOM Model Depth Slice (Phase 1A)
 

@@ -205,14 +205,29 @@ class TestLayerStatusCoherence:
             assert layers["argo"]["status"] == "REAL", \
                 "Argo layer must always report REAL status"
 
-    def test_wind_layer_always_simulated(self):
-        """Wind is always SIMULATED regardless of data mode."""
+    def test_permanently_fake_layers_are_not_served(self):
+        """Only real-dataset-backed layers are advertised.
+
+        The wind layer (a parametric model with no data behind it) and the fake
+        monitoring stations were removed rather than shipped labelled
+        SIMULATED: a permanently-fake layer is clutter, not information.
+        """
         from fastapi.testclient import TestClient
         from app.main import app
         client = TestClient(app)
         resp = client.get("/layers")
         layers = {l["id"]: l for l in resp.json()}
-        assert layers["wind"]["status"] == "SIMULATED"
+
+        assert "wind" not in layers, \
+            "the parametric wind layer must not be advertised"
+        assert "wave_height" not in layers, \
+            "the simulated wave layer must not be advertised"
+        assert "stations" not in layers, \
+            "the fake monitoring stations must not be advertised"
+
+        # The real HYCOM physical layers are present.
+        for layer_id in ("currents", "sst", "salinity", "tchp", "ssh", "mld"):
+            assert layer_id in layers, f"{layer_id} should be served"
 
     def test_real_mode_no_data_hycom_layers_not_real(self):
         """REAL mode with missing production files must not report REAL for HYCOM layers."""

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { CycloneTrackPoint, OceanMode } from '../types/oceanlens';
+import { formatModelDate, parseTimestampMs } from '../utils/modelTime';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 
 interface TimelineProps {
@@ -10,6 +11,12 @@ interface TimelineProps {
   onIndexChange: (index: number) => void;
   oceanMode?: OceanMode;
   isHistorical?: boolean;
+  /**
+   * Context for the step under the marker — the count of in-situ profiles that
+   * belong to it. In LIVE that is a window around the model time; in HISTORICAL
+   * REPLAY no observation matches a replay fix, so the note says so.
+   */
+  footerNote?: string | null;
 }
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -18,6 +25,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   onIndexChange,
   oceanMode = 'HISTORICAL',
   isHistorical = true,
+  footerNote = null,
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState<number>(1);
@@ -34,15 +42,17 @@ export const Timeline: React.FC<TimelineProps> = ({
     return () => clearInterval(interval);
   }, [isPlaying, currentIndex, track.length, speed, onIndexChange]);
 
+  // Read as UTC: `new Date(string)` treats a stamp with no zone designator as
+  // LOCAL time, which shifted the scrubber's readout by the viewer's offset.
   const formatShortTime = (iso?: string) => {
-    if (!iso) return 'UTC 00:00:00';
-    const date = new Date(iso);
-    if (isNaN(date.getTime())) return iso;
+    const ms = parseTimestampMs(iso);
+    if (ms === null) return iso ? iso : 'UTC 00:00:00';
+    const date = new Date(ms);
     const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
     const month = months[date.getUTCMonth()];
-    const d = date.getUTCDate();
+    const d = String(date.getUTCDate()).padStart(2, '0');
     const h = String(date.getUTCHours()).padStart(2, '0');
-    return `${d < 10 ? '0' + d : d} ${month} · ${h}:00 UTC`;
+    return `${d} ${month} · ${h}:00 UTC`;
   };
 
   const isHistMode = oceanMode === 'HISTORICAL' || isHistorical;
@@ -112,7 +122,7 @@ export const Timeline: React.FC<TimelineProps> = ({
                   key={pt.id || idx}
                   onClick={() => onIndexChange(idx)}
                   className="relative group cursor-pointer py-1"
-                  title={`${pt.timestamp} (${statusLabel})`}
+                  title={`${formatModelDate(pt.timestamp) ?? pt.timestamp} (${statusLabel})`}
                 >
                   <div
                     className={`transition-all duration-200 ${
@@ -127,12 +137,18 @@ export const Timeline: React.FC<TimelineProps> = ({
           </div>
 
           <div className="flex justify-between text-[8.5px] text-slate-500 font-mono mt-1.5 uppercase tracking-widest px-0.5">
-            <span>PAST TIMESTEPS</span>
+            <span>{oceanMode === 'LIVE' ? 'EARLIER MODEL STEPS' : 'PAST TIMESTEPS'}</span>
             <span className={isHistMode ? "text-amber-400 font-bold" : "text-cyan-400 font-bold"}>
               {statusLabel}
             </span>
             <span>{continuationLabel}</span>
           </div>
+
+          {footerNote && (
+            <div className="text-[8.5px] text-slate-400 font-mono uppercase tracking-widest">
+              {footerNote}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -20,7 +20,7 @@ https://www.incois.gov.in/site/services/osf.jsp
 Current OSF:
 https://www.incois.gov.in/oceanservices/osfforecast.jsp
 
-### Copernicus Marine Service
+### Copernicus Marine Service (NOT USED — evaluated, no adapter built)
 
 The Copernicus Marine Data Store provides global marine products. Current catalogue entries include physics analysis/forecast products with temperature, salinity, sea-surface height, velocity and wave-related products, plus biogeochemical products.
 
@@ -55,7 +55,8 @@ INCOIS OSF for Indian-ocean/bay-relevant ocean variables.
 
 ### Priority 3
 
-Copernicus Marine for broader ocean physics/biogeochemistry.
+Copernicus Marine is **not** integrated. All ocean model data comes from INCOIS
+RSMC HYCOM via the INCOIS THREDDS service.
 
 ### Priority 4
 

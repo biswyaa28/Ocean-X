@@ -1,9 +1,10 @@
 import { DataProvider } from './DataProvider';
+import { RISK_DISCLAIMER, RISK_HEURISTIC_WEIGHTS } from '../utils/risk';
 import {
   Cyclone,
+  RiskAssessment,
   CycloneTrackPoint,
   Hazard,
-  Station,
   GISLayer,
   KPIMetrics,
   DataStatus,
@@ -187,74 +188,7 @@ const DEMO_CYCLONE: Cyclone = {
   isHistorical: true,
 };
 
-const DEMO_STATIONS: Station[] = [
-  {
-    id: 'st-bd08',
-    name: 'INCOIS Ocean Buoy BD08',
-    latitude: 18.2,
-    longitude: 89.7,
-    region: 'East Bay of Bengal',
-    status: 'active',
-    type: 'buoy',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 30.2,
-      windSpeedKts: 48,
-      waveHeightM: 5.8,
-      pressureMb: 978,
-      salinityPsu: 33.4,
-    },
-  },
-  {
-    id: 'st-bd10',
-    name: 'INCOIS Ocean Buoy BD10',
-    latitude: 16.5,
-    longitude: 87.9,
-    region: 'Central Bay of Bengal',
-    status: 'active',
-    type: 'buoy',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 30.8,
-      windSpeedKts: 110,
-      waveHeightM: 9.4,
-      pressureMb: 942,
-      salinityPsu: 33.8,
-    },
-  },
-  {
-    id: 'st-paradip',
-    name: 'Paradeep Coastal Radar & Gauge',
-    latitude: 20.26,
-    longitude: 86.67,
-    region: 'Odisha Coast',
-    status: 'active',
-    type: 'coastal_radar',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 29.5,
-      windSpeedKts: 65,
-      waveHeightM: 4.2,
-      pressureMb: 975,
-    },
-  },
-  {
-    id: 'st-chennai',
-    name: 'Chennai Coastal Station',
-    latitude: 13.08,
-    longitude: 80.27,
-    region: 'Tamil Nadu Coast',
-    status: 'active',
-    type: 'tide_gauge',
-    dataStatus: 'SIMULATED',
-    currentMeasurements: {
-      sstC: 29.8,
-      windSpeedKts: 22,
-      waveHeightM: 2.1,
-      pressureMb: 1004,
-    },
-  },
-];
+
 
 const DEMO_LAYERS: GISLayer[] = [
   {
@@ -273,24 +207,6 @@ const DEMO_LAYERS: GISLayer[] = [
     status: 'SIMULATED',
     description: 'Surface current speed and flow direction (m/s)',
     unit: 'm/s',
-  },
-  {
-    id: 'wind',
-    name: 'Surface Wind Vectors',
-    category: 'physical',
-    active: true,
-    status: 'SIMULATED',
-    description: '10m surface wind speed and direction (knots)',
-    unit: 'kts',
-  },
-  {
-    id: 'wave_height',
-    name: 'Significant Wave Height',
-    category: 'physical',
-    active: true,
-    status: 'SIMULATED',
-    description: 'Significant wave height spatial grid (meters)',
-    unit: 'm',
   },
   {
     id: 'sst',
@@ -318,14 +234,6 @@ const DEMO_LAYERS: GISLayer[] = [
     status: 'SIMULATED',
     description: 'Ocean color / biogeochemical primary productivity',
     unit: 'mg/m³',
-  },
-  {
-    id: 'stations',
-    name: 'Monitoring Stations & Buoys',
-    category: 'infrastructure',
-    active: true,
-    status: 'SIMULATED',
-    description: 'INCOIS deep sea buoys and coastal radar stations',
   },
   {
     // Real Argo in-situ observation profiles (Phase 1D depth-profile drawer).
@@ -372,14 +280,21 @@ export class DemoProvider implements DataProvider {
         location: 'North-West Bay of Bengal / Sundarbans Coast',
         dataStatus: 'SIMULATED',
         riskAssessment: {
-          score: 92,
+          // Unvalidated demo heuristic. Same shape and same caveats as the
+          // backend so the fallback path cannot imply more authority than the
+          // live one.
+          status: 'OK',
+          unavailableReason: null,
+          heuristicDemoScore: 92,
           category: 'CRITICAL',
           modelType: 'prototype_rule_based',
-          affectedRegions: [
-            'West Bengal Coast (South 24 Parganas, East Midnapore)',
-            'Bangladesh Sundarbans Coast (Khulna, Barisal)',
-            'North Odisha Coast (Bhadrak, Balasore)',
-          ],
+          validated: false,
+          operationalUse: 'NOT FOR OPERATIONAL USE',
+          disclaimer: RISK_DISCLAIMER,
+          weights: RISK_HEURISTIC_WEIGHTS,
+          // Landfall-region prediction is not implemented; the demo scenario
+          // previously asserted specific coasts, which the heuristic cannot know.
+          affectedRegions: [],
           evidence: [
             {
               variable: 'Maximum Sustained Wind',
@@ -423,7 +338,7 @@ export class DemoProvider implements DataProvider {
               'Forward movement speed accelerating toward coastal impact within 18–24 hours',
             ],
             limitations:
-              'This is a prototype decision-support simulation based on demo rule sets. It does not replace official IMD or INCOIS warning bulletins.',
+              `${RISK_DISCLAIMER} Simulated input data. It does not replace official IMD or INCOIS warning bulletins. Affected-region prediction is not implemented, so no landfall geography is claimed.`,
             generatedAt: new Date().toISOString(),
           },
         },
@@ -431,13 +346,34 @@ export class DemoProvider implements DataProvider {
     ];
   }
 
-  async getHazardById(id: string): Promise<Hazard | null> {
-    const hazards = await this.getHazards();
-    return hazards.find((h) => h.id === id) || hazards[0];
+  async getRiskAssessment(
+    _cycloneId: string,
+    _index?: number
+  ): Promise<RiskAssessment> {
+    // The demo provider cannot score: it has no real TCHP/SST. Returning the
+    // same honest "unavailable" shape as the backend keeps the fallback path
+    // from implying an authority the demo data does not have.
+    return {
+      status: 'UNAVAILABLE',
+      unavailableReason:
+        'Backend unavailable and demo data carries no real model TCHP/SST, so no score was computed.',
+      heuristicDemoScore: null,
+      category: null,
+      modelType: 'prototype_rule_based',
+      validated: false,
+      operationalUse: 'NOT FOR OPERATIONAL USE',
+      disclaimer: RISK_DISCLAIMER,
+      weights: RISK_HEURISTIC_WEIGHTS,
+      evidence: [],
+      explanation: null,
+      affectedRegions: [],
+    };
   }
 
-  async getStations(): Promise<Station[]> {
-    return DEMO_STATIONS;
+  async getHazardById(id: string): Promise<Hazard | null> {
+    const hazards = await this.getHazards();
+    // Unknown ids return null rather than silently resolving to a different hazard.
+    return hazards.find((h) => h.id === id) ?? null;
   }
 
   async getLayers(): Promise<GISLayer[]> {
@@ -446,13 +382,15 @@ export class DemoProvider implements DataProvider {
 
   async getKPIMetrics(timestepIndex = 5): Promise<KPIMetrics> {
     const pt = DEMO_CYCLONE_TRACK[Math.min(timestepIndex, DEMO_CYCLONE_TRACK.length - 1)];
-    const isCritical = pt.maxWindKts > 115 || pt.distanceToCoastKm < 150;
-    const isHigh = pt.maxWindKts > 80;
+    const wind = pt.maxWindKts;
+    const dist = pt.distanceToCoastKm;
+    const isCritical = (wind !== null && wind > 115) || (dist !== null && dist < 150);
+    const isHigh = wind !== null && wind > 80;
 
     return {
       activeCyclones: 1,
-      maxWindKts: pt.maxWindKts,
-      maxWaveHeightM: Number((pt.maxWindKts * 0.075 + 2.1).toFixed(1)),
+      maxWindKts: wind,
+      maxWaveHeightM: wind === null ? null : Number((wind * 0.075 + 2.1).toFixed(1)),
       avgSSTC: 30.5,
       coastalRiskLevel: isCritical ? 'CRITICAL' : isHigh ? 'HIGH' : 'MODERATE',
       dataConfidencePct: 88,
@@ -473,11 +411,11 @@ export class DemoProvider implements DataProvider {
     return [];
   }
 
-  async getArgoProfileById(id: string): Promise<ArgoProfile | null> {
+  async getArgoProfileById(_id: string): Promise<ArgoProfile | null> {
     return null;
   }
 
-  async getArgoMatchup(profileId: string): Promise<ArgoMatchupResponse | null> {
+  async getArgoMatchup(_profileId: string): Promise<ArgoMatchupResponse | null> {
     return null;
   }
 

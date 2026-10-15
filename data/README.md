@@ -148,3 +148,232 @@ Run only the fixture-safe suite: `python -m pytest tests/ -m "not requires_real_
   not real observations. They must never be presented as scientific results
   or substituted for production data at runtime.
 - `backend/data/metadata/ibtracs.md` documents the IBTrACS variables and units.
+
+---
+
+## Archived INCOIS RSMC HYCOM model runs
+
+INCOIS publishes the RSMC HYCOM currents forecast **daily and deletes older
+runs** — only about five runs exist at any time. Anything not archived locally
+is gone. The backend therefore discovers installed runs by **glob**, never by a
+dated filename, and selects the run whose time window is closest to the
+observation being matched.
+
+### What gets archived
+
+Each published run is archived as a Bay-of-Bengal **NetCDFSubset** (NCSS) cut by
+the publisher's own service, named
+`backend/data/raw/ocean/currents/RSMC_hycom_<YYYYMMDD>_bob_subset.nc`:
+
+```bash
+python scripts/archive_hycom_runs.py            # every run currently published
+python scripts/archive_hycom_runs.py --list     # what is published, nothing else
+python scripts/archive_hycom_runs.py --force    # re-download even if present
+```
+
+Why a subset rather than the full file: the full run is ~10.58 GB and downloads
+at 1–1.5 MB/s (hours each), while the Bay-of-Bengal subset is ~380 MB and takes
+minutes. The subset keeps the run's genuine native depth axis, grid resolution,
+time steps and variable values, so every schema/integration test and every
+matchup exercises **real** INCOIS model output. It is not a simulation.
+
+Downloads are written to `*.nc.part` and renamed only on success, so an
+interrupted transfer can never be mistaken for an installed run.
+
+### Run structure
+
+Each run is a **7-day window of 6-hourly steps** covering
+`[runDate − 1 day 06Z, runDate + 6 days 00Z]` — 28 time steps, produced about two
+hours after the nominal cycle date. The first steps are analysis/nowcast and
+later steps are forecast with lead time up to ~7 days. Native depth levels are
+`0, 17.5, 52.5, 125, 275, 500 m` on a ~0.06° grid.
+
+### Time-gap guard
+
+Because several consecutive runs usually cover the same observation while
+differing by days of forecast lead, the matchup scores each installed run and
+takes the smallest `|time gap|` (tie-break: shortest forecast lead). It then
+classifies the remaining gap against two configurable thresholds
+(`OCEANX_MATCHUP_TIME_GAP_GOOD_H`, default 24 h; `OCEANX_MATCHUP_TIME_GAP_MAX_H`,
+default 72 h):
+
+| status | meaning |
+|---|---|
+| `good` | routine matchup, residuals reported |
+| `marginal` | residuals reported, disclosed as outside the routine window |
+| `too_large` | **profiles still shown, but no residual statistics at all** — a residual across that separation measures two different ocean states, not model error |
+
+### Matching Argo to the model window
+
+```bash
+cd backend && python scripts/process_argo_bob.py            # window from installed runs, +/- 1 day
+python scripts/process_argo_bob.py --offline                # curated fallback, no network
+```
+
+The script queries the official IFREMER GDAC ERDDAP server, groups level rows
+into profiles by `(platform_number, cycle_number)`, preserves the per-level Argo
+QC flags and the real-time/adjusted `data_mode`, and derives `depth_m` from
+pressure with the same TEOS-10/GSW conversion the matchup uses. Without this,
+Argo and model windows can drift a month apart and every residual is invalid.
+
+### Vertical levels: the published axis is 6, and it is complete
+
+Verified against the THREDDS server on 2026-10-09 for the newest run
+(`RSMC_hycom_20261009.nc`), through three independent endpoints:
+
+| source | what it reports |
+| --- | --- |
+| NCSS `dataset.xml` | `<axis name="DEPTH" type="float" shape="[6]">` |
+| OPeNDAP `.dds` | `Float32 DEPTH[DEPTH = 6]` and every 3D variable `[TIME=28][DEPTH=6][LAT][LON]` |
+| OPeNDAP `.das` | `DEPTH { positive="down"; point_spacing="uneven"; axis="Z"; standard_name="depth"; bounds="DEPTH_bnds" }` |
+| INCOIS product page | "Horizontal resolution and Vertical levels: 0.25x0.25 and **6 levels**" |
+
+So the 6 levels are the WHOLE designed vertical axis of this product, not a
+subset chosen by the archiver. The archiver sends `verticalStride=1` and no
+`depth` parameter, so it receives every level the server has.
+
+Depth values and layer bounds as served by NCSS:
+
+| level | depth (m) | layer bounds (m) | note |
+| --- | --- | --- | --- |
+| 0 | 0.0 | -5.0, 5.0 | surface layer |
+| 1 | 17.5 | 5.0, 30.0 | |
+| 2 | 52.5 | 30.0, 75.0 | |
+| 3 | 125.0 | 75.0, 175.0 | the level the bias diagnosis focused on |
+| 4 | 275.0 | 175.0, 375.0 | |
+| 5 | 500.0 | 375.0, 625.0 | deepest published |
+
+### NCSS rewrites DEPTH
+
+- **Raw OPeNDAP & HTTPServer files**: INCOIS's raw files publish `DEPTH = [0, 10, 50, 100, 250, 500]` with `DEPTH_bnds = [[-5, 5], [5, 30], [30, 75], [75, 175], [175, 375], [375, 625]]`.
+- **Bounds derivation**: The bounds in the raw file are derived from the raw `DEPTH` values (interior midpoints between neighbours and mirrored ends $0 \pm 5$ m and $500 \pm 125$ m; 12/12 elements match).
+- **NCSS behavior**: When Bay-of-Bengal subsets are retrieved via the THREDDS NetCDF Subset Service (NCSS), the server renames `DEPTH_bnds` to `DEPTH_bounds` and rewrites the coordinate `DEPTH` values to the cell midpoints `[0, 17.5, 52.5, 125, 275, 500]`.
+- **Pipeline depth axis**: `OCEANX_MODEL_DEPTH_AXIS` defaults to `native`. It detects when `DEPTH` equals its bounds midpoints, inverts the bounds to recover the producer's raw file levels `[0, 10, 50, 100, 250, 500]` (`rule="native_from_bounds"`), and falls back to stored `DEPTH` if bounds are absent or already raw (`rule="native_file"`). Legacy `ncss_file` (and deprecated alias `file`) remains available to read the stored NCSS midpoint coordinate directly.
+- **Open question**: Whether these six values represent layer centres or node depths in INCOIS's model formulation remains unconfirmed with INCOIS. The default native axis is not claimed to be physically proven correct; it matches the producer's raw file.
+
+**Two metadata caveats worth knowing before comparing with published figures:**
+
+1. The DEPTH values served by NCSS are the **layer midpoints**, which is what the NCSS
+   service publishes and what the archived subsets contain. The OPeNDAP
+   `.ascii?DEPTH` view of the same file reports `[0, 10, 50, 100, 250, 500]`
+   for the same 6 levels, while `DEPTH_bnds` reports exactly the bounds in the
+   table above. The two services therefore disagree on the *label* of each level
+   (e.g. index 3 is "100 m" on the OPeNDAP view and "125 m" on the NCSS view)
+   while agreeing on the bounds and on the data at each level index.
+2. `DEPTH` carries `standard_name="depth"` and `positive="down"` but **no
+   `units` attribute** (it is present but empty). Units are therefore metres
+   below the sea surface by inference from `standard_name`, not declared.
+
+### TCHP and MLD definitions (from the publisher)
+
+The INCOIS RSMC product page (`https://incois.gov.in/oceanservices/osf_gc_rsmc.jsp`)
+documents:
+
+- **TCHP**: "computed as the heat content between the sea surface and the 26°
+  isotherm."
+- **MLD**: "computed based on a temperature criterion wherein the MLD is
+  regarded as the depth at which the temperature drops to 0.8 °C from its
+  surface value (Kara et al. 2008)."
+
+The isotherm therefore matches the one `ocean_heat_metrics` uses. Two gaps remain
+in the published information, both recorded in the API response:
+
+- The page lists TCHP units as **J/m2**, while the file attribute says
+  **KJ/cm2**. These differ by 1e7. The observed values (~40-140) are consistent
+  with kJ/cm2, so the page's unit appears to be wrong and the file's is the
+  usable one. No conversion is applied; values are passed through as published.
+- The page states the isotherm but **not** the seawater density or specific heat
+  used, and the file publishes neither.
+
+### Depth-matching modes
+
+The default is `model_levels`: the comparison happens at the **model's own six
+depths** (`0, 17.5, 52.5, 125, 275, 500` m) and the float is interpolated onto
+each one. This inverts the previous approach, which interpolated the *model*
+onto all ~250 float depths. The reason is that the model's own vertical
+resolution is sparse, so interpolating it adds model interpolation error into
+every residual and makes the model look worse than it is. Comparing at the
+model's levels removes that term, and the residual then measures what a user of
+the model would actually see.
+
+| Mode | Pairs per profile | Residual includes model interpolation error? |
+| --- | --- | --- |
+| `model_levels` (default) | <= 6, one per model depth | No |
+| `float_levels` (legacy) | every float depth | Yes |
+| `native` | native levels within +/- 15 m | n/a |
+
+The old `interpolated` value is still accepted as an alias for `float_levels`.
+
+Float values are **never extrapolated**: a model depth above the shallowest or
+below the deepest float level is reported as `outside_float_range` rather than
+clamped or extended. A bracket is accepted only when the two float levels
+actually used are within the sampling-gap limit — 50 m above 150 m, 100 m below
+it — otherwise the level is reported as `float_sampling_too_coarse`. The gap is
+measured between the depths used, so a level whose value was rejected by QC
+cannot be silently bridged.
+
+### Adjusted variables
+
+Argo carries both raw and adjusted temperature/salinity per level. The
+ingestion records both, keyed by the file's `data_mode` (`R` raw, `A`
+adjusted). QC filtering stays per-basis: raw accepts flag `{1, 2}`, adjusted
+additionally accepts `{5}` (adjusted value deemed acceptable), and flag `8`
+(always suspect) is rejected either way. Each matchup row reports which basis
+its float value came from, so a mixed raw/adjusted region is visible in the
+response instead of hidden inside an average.
+
+### Regional summary
+
+`GET /api/argo/matchup/summary` aggregates every ingested profile at the model
+depth levels. Statistics are reduced **per profile and then per depth**, not
+pooled, so a finely sampled float cannot dominate the regional figure. Profiles
+that contribute nothing are counted with a reason (`time_gap_too_large`,
+`no_overlap_with_model_depth_range`, `no_pairs_after_qc_and_sampling_gap`,
+`float_sampling_too_coarse`, `model_data_unavailable`) rather than silently
+dropped.
+
+On the archived window (23 profiles, 2026-10-04/08, `gap=good` for all):
+
+| depth (m) | T n | T bias | T MAE | T RMSE | S n | S bias | S RMSE |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 17.5 | 18 | -0.212 | 0.276 | 0.376 | 18 | -0.160 | 0.770 |
+| 52.5 | 19 | +1.233 | 1.603 | 1.926 | 19 | -0.897 | 1.140 |
+| 125 | 19 | +3.936 | 3.971 | 4.623 | 19 | -0.355 | 0.424 |
+| 275 | 16 | +0.234 | 0.332 | 0.529 | 16 | -0.022 | 0.026 |
+| 500 | 16 | -0.113 | 0.192 | 0.236 | 16 | -0.019 | 0.022 |
+| **all** | **20** | **+1.110** | **1.183** | **1.423** | **20** | **-0.324** | **0.439** |
+
+Three profiles are excluded (2 never reach the model's depth range, 1 has no
+valid float levels after QC).
+
+The dominant signal is a warm model bias concentrated near 125 m — the strongest
+thermocline gradient, and the depth where linear interpolation between 52.5 m
+and 275 m is least representative of the real profile.
+
+#### Mode comparison on the same three floats
+
+Residual is `argo - model`, so a positive bias means the model is too cold.
+
+| float | pairs (model / float levels) | T bias model / float | T RMSE model / float |
+| --- | --- | --- | --- |
+| 1902373 | 5 / 258 | +0.751 / +1.277 | 1.999 / 2.421 |
+| 1902594 | 5 / 172 | -0.508 / +0.131 | 1.049 / 1.104 |
+| 1902681 | 5 / 220 | +2.241 / +3.130 | 3.810 / 4.032 |
+
+Interpolating the model onto every float depth inflates the apparent bias on all
+three, and for 1902594 it **flips its sign** — the 52.5 m/275 m interpolation
+error is larger than the signal being measured. This is the concrete reason
+`model_levels` is the default.
+
+### Offline / curated fallback
+
+If GDAC is unreachable the script falls back to a curated September 2026 profile
+set. Those profiles sit ~1 month from the archived model runs, so the time-gap
+guard correctly reports them as `too_large` and withholds residual statistics —
+that is the guard working, not a data failure.
+
+### Git
+
+Model archives and all `*.nc` / `*.part` / `*full-download-partial` files are
+excluded from Git. Only the small processed Argo JSON and metadata that the
+offline test suite needs are tracked.

@@ -364,6 +364,14 @@ describe('sampleFlowVelocity — real-grid aware sampling', () => {
     expect(sampleFlowVelocity(field, 5, 80).u).toBeCloseTo(0.1, 6);
     expect(sampleFlowVelocity(field, 7, 82).u).toBeCloseTo(0.9, 6);
   });
+
+  it('supports reusable out parameter to avoid per-sample allocations', () => {
+    const field = generateBayOfBengalFlowField('current');
+    const out = { u: 0, v: 0, speed: 0 };
+    const returned = sampleFlowVelocity(field, 15.0, 85.0, out);
+    expect(returned).toBe(out);
+    expect(out.speed).toBeGreaterThan(0);
+  });
 });
 
 describe('countValidCurrentCells', () => {

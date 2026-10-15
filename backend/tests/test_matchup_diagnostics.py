@@ -95,8 +95,44 @@ def test_non_finite_or_non_numeric_depths_are_not_counted(unavailable):
     assert result["repeatedNativeDepthMatchCount"] == 0
 
 
+def test_interpolation_flag_is_derived_from_the_rows_not_hardcoded():
+    native_only = build_matchup_diagnostics(
+        2,
+        [
+            {"depthM": 10.0, "matchedModelDepthM": 10.0, "method": "native"},
+            {"depthM": 50.0, "matchedModelDepthM": 50.0, "method": "native"},
+        ],
+    )
+    assert native_only["interpolationApplied"] is False
+    assert native_only["interpolatedLevelCount"] == 0
+    assert native_only["nativeLevelCount"] == 2
+
+    mixed = build_matchup_diagnostics(
+        3,
+        [
+            {"depthM": 10.0, "matchedModelDepthM": 10.0, "method": "native"},
+            {"depthM": 25.0, "matchedModelDepthM": 25.0, "method": "interpolated"},
+            {"depthM": 50.0, "matchedModelDepthM": 50.0, "method": "native"},
+        ],
+    )
+    assert mixed["interpolationApplied"] is True
+    assert mixed["interpolatedLevelCount"] == 1
+    assert mixed["nativeLevelCount"] == 2
+    # The split always accounts for every comparison row.
+    assert mixed["interpolatedLevelCount"] + mixed["nativeLevelCount"] == mixed["matchedObservationCount"]
+
+
+def test_rows_without_a_method_are_counted_as_non_interpolated():
+    result = build_matchup_diagnostics(1, [{"depthM": 0.0, "matchedModelDepthM": 0.0}])
+
+    assert result["interpolationApplied"] is False
+    assert result["nativeLevelCount"] == 1
+
+
 def test_no_interpolation_is_reported_and_no_quality_score_is_produced():
-    result = build_matchup_diagnostics(2, [{"depthM": 0.0, "matchedModelDepthM": 0.0}])
+    result = build_matchup_diagnostics(
+        2, [{"depthM": 0.0, "matchedModelDepthM": 0.0, "method": "native"}]
+    )
 
     assert result["interpolationApplied"] is False
     # The payload is counts/metadata only: no score, grade or verdict field.
@@ -108,5 +144,52 @@ def test_no_interpolation_is_reported_and_no_quality_score_is_produced():
         "deepestMatchedObservationDepthM",
         "deepestMatchedModelDepthM",
         "repeatedNativeDepthMatchCount",
+        "interpolatedLevelCount",
+        "nativeLevelCount",
         "interpolationApplied",
+        "missingQcLevelCount",
+        "timeDifferenceHours",
+        "timeGapStatus",
+        "matchedPercentageBasis",
+        "totalModelLevels",
+        "nearSurfaceSubstitutionCount",
     }
+
+
+def test_missing_qc_level_count_is_carried_through_from_the_profile():
+    """Absent QC flags stay lenient but must be disclosed, not hidden."""
+    rows = [{"depthM": 10.0, "matchedModelDepthM": 10.0, "method": "native"}]
+
+    assert build_matchup_diagnostics(9, rows, 4)["missingQcLevelCount"] == 4
+    # Default and nonsense values collapse to zero rather than leaking through.
+    assert build_matchup_diagnostics(9, rows)["missingQcLevelCount"] == 0
+    assert build_matchup_diagnostics(9, rows, -3)["missingQcLevelCount"] == 0
+    assert build_matchup_diagnostics(9, rows, None)["missingQcLevelCount"] == 0
+
+
+def test_model_level_basis_uses_levels_not_float_observations():
+    rows = [{"depthM": 0.0, "matchedModelDepthM": 0.0}] * 5
+    result = build_matchup_diagnostics(300, rows, total_model_levels=6)
+
+    assert result["matchedPercentageBasis"] == "model_levels"
+    assert result["matchedPercentage"] == pytest.approx(83.33)
+    assert result["unmatchedObservationCount"] == 1
+    assert result["totalModelLevels"] == 6
+    assert result["totalArgoObservations"] == 300
+
+
+def test_near_surface_rows_are_counted_apart_from_native():
+    rows = [
+        {"depthM": 0.0, "method": "float_native", "floatNearSurfaceDepthM": 3.0},
+        {"depthM": 10.0, "method": "float_native", "floatNearSurfaceDepthM": None},
+        {"depthM": 50.0, "method": "float_interpolated", "floatNearSurfaceDepthM": None},
+    ]
+    result = build_matchup_diagnostics(9, rows, total_model_levels=6)
+
+    assert result["nearSurfaceSubstitutionCount"] == 1
+    assert result["nativeLevelCount"] == 1
+    assert result["interpolatedLevelCount"] == 1
+    assert (
+        result["nativeLevelCount"] + result["interpolatedLevelCount"]
+        + result["nearSurfaceSubstitutionCount"] == result["matchedObservationCount"]
+    )

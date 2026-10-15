@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState } from 'react';
-import { GISLayer } from '../types/oceanlens';
+import { GISLayer, Cyclone } from '../types/oceanlens';
 import { Layers, ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
 
 interface LayerControlProps {
   layers: GISLayer[];
   onToggleLayer: (layerId: string) => void;
+  cyclone?: Cyclone | null;
 }
 
 interface LayerItemSpec {
@@ -17,10 +18,29 @@ interface LayerItemSpec {
   statusType: 'real' | 'derived' | 'simulated' | 'pending' | 'not_integrated';
 }
 
-export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLayer }) => {
+export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLayer, cyclone }) => {
   const [collapsed, setCollapsed] = useState(false);
 
   const getLiveStatus = (item: LayerItemSpec): Pick<LayerItemSpec, 'statusBadge' | 'statusType'> => {
+    if (item.id === 'cyclone') {
+      const cycloneLayer = layers.find((candidate) => candidate.id === 'cyclone');
+      if (cycloneLayer) {
+        if (cycloneLayer.status === 'REAL') {
+          return { statusBadge: 'REAL', statusType: 'real' };
+        }
+        if (cycloneLayer.status === 'SIMULATED') {
+          return { statusBadge: 'SIMULATED', statusType: 'simulated' };
+        }
+      }
+      if (cyclone && cyclone.track && cyclone.track.length > 0) {
+        const isReal = cyclone.dataStatus === 'REAL';
+        return {
+          statusBadge: isReal ? 'REAL' : 'SIMULATED',
+          statusType: isReal ? 'real' : 'simulated',
+        };
+      }
+    }
+
     const layer = layers.find((candidate) => candidate.id === item.id);
     if (!layer) {
       return { statusBadge: 'NOT CURRENTLY INTEGRATED', statusType: 'not_integrated' };
@@ -29,7 +49,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
       return { statusBadge: 'SIMULATED', statusType: 'simulated' };
     }
     if (layer.status === 'REAL SOURCE — INGESTION PENDING') {
-      return { statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' };
+      return { statusBadge: 'REAL · GDAC', statusType: 'real' };
     }
     if (layer.status === 'REAL') {
       return { statusBadge: 'REAL', statusType: 'real' };
@@ -44,7 +64,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
     {
       name: 'HAZARDS',
       items: [
-        { id: 'cyclone', name: 'Cyclone Track & Forecast', statusBadge: 'REAL / HISTORICAL', statusType: 'real' },
+        { id: 'cyclone', name: 'Cyclone Track & Forecast', statusBadge: 'REAL', statusType: 'real' },
         { id: 'risk_zones', name: 'Coastal Risk', statusBadge: 'DERIVED', statusType: 'derived' },
         { id: 'storm_surge', name: 'Storm Surge', unit: 'm', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
@@ -56,26 +76,49 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
         { id: 'sst', name: 'Sea Surface Temperature', unit: '°C', statusBadge: 'REAL', statusType: 'real' },
         { id: 'salinity', name: 'Sea Surface Salinity', unit: 'PSU', statusBadge: 'REAL', statusType: 'real' },
         { id: 'tchp', name: 'Tropical Cyclone Heat Potential', unit: 'kJ/cm²', statusBadge: 'REAL', statusType: 'real' },
-        { id: 'wave_height', name: 'Wave Height', unit: 'm', statusBadge: 'SIMULATED', statusType: 'simulated' },
+        { id: 'ssh', name: 'Sea Surface Height', unit: 'm', statusBadge: 'REAL', statusType: 'real' },
+        { id: 'mld', name: 'Mixed Layer Depth', unit: 'm', statusBadge: 'REAL', statusType: 'real' },
         { id: 'chlorophyll', name: 'Chlorophyll-a', unit: 'mg/m³', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
     },
     {
       name: 'ATMOSPHERE',
       items: [
-        { id: 'wind', name: 'Wind Vectors', unit: 'kts', statusBadge: 'SIMULATED', statusType: 'simulated' },
         { id: 'rainfall', name: 'Rainfall', unit: 'mm/h', statusBadge: 'NOT INTEGRATED', statusType: 'not_integrated' },
       ],
     },
     {
       name: 'OBSERVATIONS',
       items: [
-        { id: 'argo', name: 'Argo Observations', unit: 'IN-SITU', statusBadge: 'REAL SOURCE / PENDING', statusType: 'pending' },
-        { id: 'stations', name: 'Monitoring Stations', statusBadge: 'SIMULATED', statusType: 'simulated' },
-        { id: 'buoys', name: 'Buoys', statusBadge: 'SIMULATED', statusType: 'simulated' },
+        { id: 'argo', name: 'Argo Observations', unit: 'IN-SITU', statusBadge: 'REAL · GDAC', statusType: 'real' },
       ],
     },
   ];
+
+  const EMPTY_LAYER_IDS = new Set(['risk_zones', 'storm_surge', 'chlorophyll', 'rainfall']);
+
+  // The cyclone row is only offered when there IS a cyclone to show. LIVE
+  // OCEAN has none, and a row advertising one would be a storm claim the map
+  // does not make.
+  const hasCyclone =
+    layers.some((candidate) => candidate.id === 'cyclone') ||
+    Boolean(cyclone?.track && cyclone.track.length > 0);
+
+  const visibleCategories = categories
+    .map((cat) => ({
+      ...cat,
+      items: cat.items.filter((item) => {
+        if (item.id === 'cyclone' && !hasCyclone) {
+          return false;
+        }
+        const liveStatus = getLiveStatus(item);
+        if (EMPTY_LAYER_IDS.has(item.id) && liveStatus.statusType === 'not_integrated') {
+          return false;
+        }
+        return true;
+      }),
+    }))
+    .filter((cat) => cat.items.length > 0);
 
   const getIsActive = (id: string) => {
     const found = layers.find((l) => l.id === id);
@@ -129,7 +172,7 @@ export const LayerControl: React.FC<LayerControlProps> = ({ layers, onToggleLaye
 
         {/* Categories List with Internal Scrollbar & Safe Max Height (Requirement #2 & #3) */}
         <div className="space-y-3 max-h-[calc(100vh-420px)] overflow-y-auto custom-scrollbar pr-1">
-          {categories.map((cat) => (
+          {visibleCategories.map((cat) => (
             <div key={cat.name} className="space-y-1">
               <div className="text-[8px] font-bold text-slate-500 tracking-widest uppercase px-1 mb-1">
                 {cat.name}

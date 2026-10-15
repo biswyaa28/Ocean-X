@@ -1,10 +1,16 @@
-'use client';
+"use client";
 
-import React, { useEffect, useRef } from 'react';
-import * as Cesium from 'cesium';
-import { FlowParticle, EnvironmentalFlowField, CurrentFieldDataStatus } from '../types/flow';
-import { generateBayOfBengalFlowField, sampleFlowVelocity } from '../services/FlowFieldProvider';
-import { perfMonitor } from '../utils/perfMonitor';
+import React, { useEffect, useRef } from "react";
+import Cesium from "../lib/cesiumRuntime";
+// Type-only namespace import: fully erased at compile time, so Cesium is never bundled.
+import type * as CesiumTypes from 'cesium';
+import { EnvironmentalFlowField, CurrentFieldDataStatus } from "../types/flow";
+import {
+  generateBayOfBengalFlowField,
+  sampleFlowVelocity,
+  FlowVelocityResult,
+} from "../services/FlowFieldProvider";
+import { perfMonitor } from "../utils/perfMonitor";
 
 /**
  * Centralized particle configuration for OCEAN-X scientific flow simulation.
@@ -22,13 +28,121 @@ export const PARTICLE_CONFIG = {
   CAMERA_MOVE_MAX_TRAIL: 3,
 };
 
-interface CachedFlowParticle extends FlowParticle {
-  screenTrail: { x: number; y: number }[];
-  cameraVersion: number;
+const MAX_TRAIL_CAPACITY = 16;
+const NUM_SPEED_BUCKETS = 8;
+const NUM_ALPHA_BUCKETS = 4;
+const TOTAL_BUCKETS = NUM_SPEED_BUCKETS * NUM_ALPHA_BUCKETS; // 32
+const MAX_PARTICLES = Math.max(
+  PARTICLE_CONFIG.WIND_PARTICLES,
+  PARTICLE_CONFIG.CURRENT_PARTICLES
+);
+
+interface BucketStyle {
+  strokeStyle: string;
+  lineWidth: number;
+}
+
+// Precompute Wind bucket styles (8 speed buckets x 4 alpha levels)
+const WIND_BUCKET_STYLES: BucketStyle[] = [];
+for (let s = 0; s < NUM_SPEED_BUCKETS; s++) {
+  const speedRatio = (s + 0.5) / NUM_SPEED_BUCKETS;
+  const lineWidth = 1.0 + speedRatio * 1.4;
+  const r = Math.round(200 + 55 * speedRatio);
+  const g = Math.round(235 + 20 * speedRatio);
+  const b = 255;
+  for (let a = 0; a < NUM_ALPHA_BUCKETS; a++) {
+    const alphaVal = (a + 0.5) / NUM_ALPHA_BUCKETS;
+    const alpha = (alphaVal * 0.75).toFixed(2);
+    WIND_BUCKET_STYLES.push({
+      strokeStyle: `rgba(${r}, ${g}, ${b}, ${alpha})`,
+      lineWidth,
+    });
+  }
+}
+
+// Precompute Current bucket styles (8 speed buckets x 4 alpha levels)
+const CURRENT_BUCKET_STYLES: BucketStyle[] = [];
+for (let s = 0; s < NUM_SPEED_BUCKETS; s++) {
+  const speedRatio = (s + 0.5) / NUM_SPEED_BUCKETS;
+  const lineWidth = 1.4 + speedRatio * 1.4;
+  for (let a = 0; a < NUM_ALPHA_BUCKETS; a++) {
+    const alphaVal = (a + 0.5) / NUM_ALPHA_BUCKETS;
+    const alpha = (alphaVal * 0.65).toFixed(2);
+    CURRENT_BUCKET_STYLES.push({
+      strokeStyle: `rgba(20, 184, 166, ${alpha})`,
+      lineWidth,
+    });
+  }
+}
+
+interface ParticleBuffers {
+  capacity: number;
+  lat: Float32Array;
+  lon: Float32Array;
+  age: Float32Array;
+  maxAge: Float32Array;
+  speed: Float32Array;
+  cameraVersion: Uint32Array;
+  historyHead: Uint8Array;
+  historyLen: Uint8Array;
+  historyLat: Float32Array;
+  historyLon: Float32Array;
+  screenHead: Uint8Array;
+  screenLen: Uint8Array;
+  screenX: Float32Array;
+  screenY: Float32Array;
+}
+
+function allocateParticleBuffers(capacity: number): ParticleBuffers {
+  return {
+    capacity,
+    lat: new Float32Array(capacity),
+    lon: new Float32Array(capacity),
+    age: new Float32Array(capacity),
+    maxAge: new Float32Array(capacity),
+    speed: new Float32Array(capacity),
+    cameraVersion: new Uint32Array(capacity),
+    historyHead: new Uint8Array(capacity),
+    historyLen: new Uint8Array(capacity),
+    historyLat: new Float32Array(capacity * MAX_TRAIL_CAPACITY),
+    historyLon: new Float32Array(capacity * MAX_TRAIL_CAPACITY),
+    screenHead: new Uint8Array(capacity),
+    screenLen: new Uint8Array(capacity),
+    screenX: new Float32Array(capacity * MAX_TRAIL_CAPACITY),
+    screenY: new Float32Array(capacity * MAX_TRAIL_CAPACITY),
+  };
+}
+
+function initParticleState(
+  buffers: ParticleBuffers,
+  i: number,
+  bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number },
+  isWind: boolean
+) {
+  const lat = bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat);
+  const lon = bounds.minLon + Math.random() * (bounds.maxLon - bounds.minLon);
+  const maxAge = isWind ? 50 + Math.random() * 50 : 70 + Math.random() * 70;
+  const age = Math.floor(Math.random() * maxAge);
+
+  buffers.lat[i] = lat;
+  buffers.lon[i] = lon;
+  buffers.age[i] = age;
+  buffers.maxAge[i] = maxAge;
+  buffers.speed[i] = 0;
+  buffers.cameraVersion[i] = 0;
+
+  buffers.historyHead[i] = 0;
+  buffers.historyLen[i] = 1;
+  const base = i * MAX_TRAIL_CAPACITY;
+  buffers.historyLat[base] = lat;
+  buffers.historyLon[base] = lon;
+
+  buffers.screenHead[i] = 0;
+  buffers.screenLen[i] = 0;
 }
 
 interface FlowCanvasOverlayProps {
-  viewer: Cesium.Viewer | null;
+  viewer: CesiumTypes.Viewer | null;
   showWind: boolean;
   showCurrents: boolean;
   /**
@@ -50,11 +164,11 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
   showWind,
   showCurrents,
   currentField = null,
-  currentFieldStatus = 'SIMULATED',
+  currentFieldStatus = "SIMULATED",
   cycloneLat = 18.2,
   cycloneLon = 88.4,
   maxWindKts = 125,
-  timestamp = '2026-09-08T12:00:00Z',
+  timestamp = "2026-09-08T12:00:00Z",
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
@@ -62,19 +176,31 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
   const windFieldRef = useRef<EnvironmentalFlowField | null>(null);
   const currentFieldRef = useRef<EnvironmentalFlowField | null>(null);
 
-  // Bounds signature of the currently-seeded current field: particles are
-  // re-seeded ONLY when the active field's geographic bounds change.
-  const currentBoundsKeyRef = useRef<string>('');
+  // Bounds signature of the currently-seeded current field
+  const currentBoundsKeyRef = useRef<string>("");
 
-  const windParticlesRef = useRef<CachedFlowParticle[]>([]);
-  const currentParticlesRef = useRef<CachedFlowParticle[]>([]);
+  const windBuffersRef = useRef<ParticleBuffers>(
+    allocateParticleBuffers(PARTICLE_CONFIG.WIND_PARTICLES)
+  );
+  const currentBuffersRef = useRef<ParticleBuffers>(
+    allocateParticleBuffers(PARTICLE_CONFIG.CURRENT_PARTICLES)
+  );
+  const windInitializedRef = useRef(false);
+  const currentInitializedRef = useRef(false);
 
   // Camera interaction & projection cache invalidation tracking
   const isCameraMovingRef = useRef(false);
   const cameraVersionRef = useRef(1);
-  const lastCameraPositionRef = useRef<Cesium.Cartesian3 | null>(null);
+  const lastCameraPositionRef = useRef<CesiumTypes.Cartesian3 | null>(null);
 
   // 1. Hook Cesium camera events for adaptive workload during interaction
+  //
+  // Phase 2B note: this overlay owns its own requestAnimationFrame loop and
+  // draws into an independent 2D canvas, so it never needs a Cesium frame —
+  // and it must NOT call scene.requestRender() per frame (that would defeat
+  // requestRenderMode). Screen projection below uses the live camera through
+  // SceneTransforms, which is pure math and independent of Cesium rendering,
+  // so the particles stay correctly positioned while Cesium is idle.
   useEffect(() => {
     if (!viewer || viewer.isDestroyed()) return;
 
@@ -100,14 +226,10 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
   }, [viewer]);
 
   // 2. Generate/Update Environmental Flow Fields on prop/timeline change
-  // Real HYCOM UVEL/VVEL fields (Phase 1E) take priority for the current
-  // layer; the labelled synthetic field remains the intentional fallback
-  // when no real field is available. When the real field is UNAVAILABLE
-  // (backend up but no valid vectors), the current layer renders nothing.
   useEffect(() => {
     if (showWind) {
       windFieldRef.current = generateBayOfBengalFlowField(
-        'wind',
+        "wind",
         cycloneLat,
         cycloneLon,
         maxWindKts,
@@ -115,22 +237,18 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
       );
     } else {
       windFieldRef.current = null;
-      windParticlesRef.current = [];
+      windInitializedRef.current = false;
     }
 
     if (showCurrents) {
-      if (currentField && currentFieldStatus === 'REAL') {
-        // Real HYCOM field: use as-is (already normalized, values untouched).
+      if (currentField && currentFieldStatus === "REAL") {
         currentFieldRef.current = currentField;
-      } else if (currentFieldStatus === 'UNAVAILABLE') {
-        // Honest unavailable state: no current vectors are rendered at all —
-        // neither real nor synthetic. Missing regions stay missing.
+      } else if (currentFieldStatus === "UNAVAILABLE") {
         currentFieldRef.current = null;
-        currentParticlesRef.current = [];
+        currentInitializedRef.current = false;
       } else {
-        // SIMULATED fallback (existing intentional behaviour, visibly labelled).
         currentFieldRef.current = generateBayOfBengalFlowField(
-          'current',
+          "current",
           cycloneLat,
           cycloneLon,
           maxWindKts,
@@ -139,36 +257,20 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
       }
     } else {
       currentFieldRef.current = null;
-      currentParticlesRef.current = [];
+      currentInitializedRef.current = false;
     }
-  }, [showWind, showCurrents, currentField, currentFieldStatus, cycloneLat, cycloneLon, maxWindKts, timestamp]);
+  }, [
+    showWind,
+    showCurrents,
+    currentField,
+    currentFieldStatus,
+    cycloneLat,
+    cycloneLon,
+    maxWindKts,
+    timestamp,
+  ]);
 
-  // 3. Initialize Particles with Screen Projection Cache
-  const initParticle = (
-    bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number },
-    isWind: boolean
-  ): CachedFlowParticle => {
-    const lat = bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat);
-    const lon = bounds.minLon + Math.random() * (bounds.maxLon - bounds.minLon);
-    const maxAge = isWind ? 50 + Math.random() * 50 : 70 + Math.random() * 70;
-
-    return {
-      lat,
-      lon,
-      history: [{ lat, lon }],
-      screenTrail: [],
-      cameraVersion: 0,
-      age: Math.floor(Math.random() * maxAge),
-      maxAge,
-      speed: 0,
-    };
-  };
-
-  // 3b. Re-seed current particles when the ACTIVE field's spatial bounds
-  // change (synthetic Bay grid -> real HYCOM grid, or a different HYCOM
-  // geographic window). Equivalent fields (same bounds, new timestamp or
-  // depth) keep their particles: velocities update smoothly with no re-seed
-  // churn. Particles live in refs and the animation loop is untouched.
+  // 3. Re-seed current particles when active field spatial bounds change
   useEffect(() => {
     const field = currentFieldRef.current;
     if (!field) return;
@@ -176,29 +278,30 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
     const key = `${bounds.minLat}|${bounds.maxLat}|${bounds.minLon}|${bounds.maxLon}`;
     if (key === currentBoundsKeyRef.current) return;
     currentBoundsKeyRef.current = key;
-    const particles: CachedFlowParticle[] = [];
+
+    const buffers = currentBuffersRef.current;
     for (let i = 0; i < PARTICLE_CONFIG.CURRENT_PARTICLES; i++) {
-      particles.push(initParticle(bounds, false));
+      initParticleState(buffers, i, bounds, false);
     }
-    currentParticlesRef.current = particles;
+    currentInitializedRef.current = true;
   }, [currentField, currentFieldStatus, showCurrents]);
 
-  // 4. Main High-Performance Animation Loop with Coordinate Caching
+  // 4. Main High-Performance Animation Loop
   useEffect(() => {
     if (!showWind && !showCurrents) {
       if (canvasRef.current) {
-        const ctx = canvasRef.current.getContext('2d');
-        if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        const ctx = canvasRef.current.getContext("2d");
+        if (ctx)
+          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
       return;
     }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: true });
+    const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) return;
 
-    // Handle canvas resizing
     const updateCanvasSize = () => {
       if (!canvas) return;
       const width = canvas.parentElement?.clientWidth || window.innerWidth;
@@ -206,43 +309,51 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        cameraVersionRef.current++; // Invalidate screen cache on canvas resize
+        cameraVersionRef.current++;
       }
     };
     updateCanvasSize();
 
-    // Populate particles with configured budget
-    if (showWind && windFieldRef.current && windParticlesRef.current.length === 0) {
+    // Initialize particles once if needed
+    if (showWind && windFieldRef.current && !windInitializedRef.current) {
       const b = windFieldRef.current.bounds;
       const count = PARTICLE_CONFIG.WIND_PARTICLES;
-      const particles: CachedFlowParticle[] = [];
+      const buffers = windBuffersRef.current;
       for (let i = 0; i < count; i++) {
-        particles.push(initParticle(b, true));
+        initParticleState(buffers, i, b, true);
       }
-      windParticlesRef.current = particles;
+      windInitializedRef.current = true;
     }
 
-    if (showCurrents && currentFieldRef.current && currentParticlesRef.current.length === 0) {
+    if (showCurrents && currentFieldRef.current && !currentInitializedRef.current) {
       const b = currentFieldRef.current.bounds;
       const count = PARTICLE_CONFIG.CURRENT_PARTICLES;
-      const particles: CachedFlowParticle[] = [];
+      const buffers = currentBuffersRef.current;
       for (let i = 0; i < count; i++) {
-        particles.push(initParticle(b, false));
+        initParticleState(buffers, i, b, false);
       }
-      currentParticlesRef.current = particles;
+      currentInitializedRef.current = true;
     }
 
-    // Reusable Cartesian scratch object to avoid per-frame GC allocations
+    // Preallocated scratch variables for zero-allocation frame loop
     const scratchCartesian = new Cesium.Cartesian3();
+    const scratchPixel = new Cesium.Cartesian2();
+    const scratchVel1: FlowVelocityResult = { u: 0, v: 0, speed: 0 };
+    const scratchVel2: FlowVelocityResult = { u: 0, v: 0, speed: 0 };
+    const tempProjX = new Float32Array(MAX_TRAIL_CAPACITY);
+    const tempProjY = new Float32Array(MAX_TRAIL_CAPACITY);
+
+    const bucketCounts = new Int32Array(TOTAL_BUCKETS);
+    const bucketParticles = new Int32Array(TOTAL_BUCKETS * MAX_PARTICLES);
 
     const renderFrame = () => {
       const frameStartTime = performance.now();
       updateCanvasSize();
 
-      // Clear canvas with subtle trail fade for silky continuous streams
+      // Clear canvas with subtle trail fade
       ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.restore();
 
@@ -254,26 +365,41 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
       const scene = viewer.scene;
       const camera = viewer.camera;
 
-      // Invalidate the screen-space projection cache whenever the camera is
-      // actively moving (pan/zoom/rotate) or its world position changed since
-      // the last frame. During active motion every frame is re-projected — the
-      // reduced particle budget keeps that affordable — so trails never lag the
-      // globe. When the camera is static the cache stays valid (head-only work).
       const isCameraMoving = isCameraMovingRef.current;
       if (!lastCameraPositionRef.current) {
         lastCameraPositionRef.current = Cesium.Cartesian3.clone(camera.positionWC);
-      } else if (isCameraMoving || !Cesium.Cartesian3.equalsEpsilon(lastCameraPositionRef.current, camera.positionWC, 0.0, 1.0)) {
+      } else if (
+        isCameraMoving ||
+        !Cesium.Cartesian3.equalsEpsilon(
+          lastCameraPositionRef.current,
+          camera.positionWC,
+          0.0,
+          1.0
+        )
+      ) {
         Cesium.Cartesian3.clone(camera.positionWC, lastCameraPositionRef.current);
         cameraVersionRef.current++;
       }
 
       const currentCameraVersion = cameraVersionRef.current;
 
-      // Single projected coordinate converter using scratch cartesian
-      const projectToPixel = (lat: number, lon: number): { x: number; y: number } | null => {
+      const projectToPixel = (
+        lat: number,
+        lon: number
+      ): CesiumTypes.Cartesian2 | null => {
         try {
-          Cesium.Cartesian3.fromDegrees(lon, lat, 0, Cesium.Ellipsoid.WGS84, scratchCartesian);
-          const pixel = Cesium.SceneTransforms.worldToWindowCoordinates(scene, scratchCartesian);
+          Cesium.Cartesian3.fromDegrees(
+            lon,
+            lat,
+            0,
+            Cesium.Ellipsoid.WGS84,
+            scratchCartesian
+          );
+          const pixel = Cesium.SceneTransforms.worldToWindowCoordinates(
+            scene,
+            scratchCartesian,
+            scratchPixel
+          );
           if (
             pixel &&
             pixel.x >= -100 &&
@@ -281,7 +407,7 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
             pixel.y >= -100 &&
             pixel.y <= canvas.height + 100
           ) {
-            return { x: pixel.x, y: pixel.y };
+            return pixel;
           }
         } catch {
           return null;
@@ -291,90 +417,126 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
 
       let transformsSaved = 0;
       let totalActiveRendered = 0;
+      let totalStrokeCalls = 0;
 
-      // --- 1. RENDER WIND FLOW STREAMLINES ---
-      if (showWind && windFieldRef.current) {
+      const simStartTime = performance.now();
+
+      // --- 1. SIMULATE & DRAW WIND PARTICLES ---
+      if (showWind && windFieldRef.current && windInitializedRef.current) {
         const field = windFieldRef.current;
-        const particles = windParticlesRef.current;
-        // Adaptive budget: during fast camera motion, reduce active count & trail length
+        const buffers = windBuffersRef.current;
         const activeCount = isCameraMoving
-          ? Math.min(particles.length, PARTICLE_CONFIG.CAMERA_MOVE_WIND_PARTICLES)
-          : particles.length;
+          ? Math.min(PARTICLE_CONFIG.WIND_PARTICLES, PARTICLE_CONFIG.CAMERA_MOVE_WIND_PARTICLES)
+          : PARTICLE_CONFIG.WIND_PARTICLES;
         const maxTrailLength = isCameraMoving
           ? PARTICLE_CONFIG.CAMERA_MOVE_MAX_TRAIL
           : PARTICLE_CONFIG.WIND_MAX_TRAIL;
 
         totalActiveRendered += activeCount;
+        bucketCounts.fill(0);
 
         for (let i = 0; i < activeCount; i++) {
-          const p = particles[i];
+          sampleFlowVelocity(field, buffers.lat[i], buffers.lon[i], scratchVel1);
+          const speed = scratchVel1.speed;
+          buffers.speed[i] = speed;
 
-          // Sample velocity at particle position
-          const vel = sampleFlowVelocity(field, p.lat, p.lon);
-          p.speed = vel.speed;
-
-          // Push current location to history trail
-          p.history.unshift({ lat: p.lat, lon: p.lon });
-          if (p.history.length > maxTrailLength) {
-            p.history.pop();
+          const base = i * MAX_TRAIL_CAPACITY;
+          const hHead = buffers.historyHead[i];
+          const nextHHead = (hHead + 1) % MAX_TRAIL_CAPACITY;
+          buffers.historyLat[base + nextHHead] = buffers.lat[i];
+          buffers.historyLon[base + nextHHead] = buffers.lon[i];
+          buffers.historyHead[i] = nextHHead;
+          if (buffers.historyLen[i] < maxTrailLength) {
+            buffers.historyLen[i]++;
+          } else if (buffers.historyLen[i] > maxTrailLength) {
+            buffers.historyLen[i] = maxTrailLength;
           }
 
-          // RK2 Advection step for smooth curvature around cyclone eye
+          // RK2 Advection
           const scale = 0.00075;
-          const k1_lat = vel.v * scale;
-          const k1_lon = vel.u * scale;
+          const k1_lat = scratchVel1.v * scale;
+          const k1_lon = scratchVel1.u * scale;
 
-          const mid_lat = p.lat + k1_lat * 0.5;
-          const mid_lon = p.lon + k1_lon * 0.5;
-          const mid_vel = sampleFlowVelocity(field, mid_lat, mid_lon);
+          const mid_lat = buffers.lat[i] + k1_lat * 0.5;
+          const mid_lon = buffers.lon[i] + k1_lon * 0.5;
+          sampleFlowVelocity(field, mid_lat, mid_lon, scratchVel2);
 
-          p.lat += mid_vel.v * scale;
-          p.lon += mid_vel.u * scale;
-          p.age++;
+          buffers.lat[i] += scratchVel2.v * scale;
+          buffers.lon[i] += scratchVel2.u * scale;
+          buffers.age[i]++;
 
-          // Check boundary / lifetime respawn
           if (
-            p.age >= p.maxAge ||
-            p.lat < field.bounds.minLat ||
-            p.lat > field.bounds.maxLat ||
-            p.lon < field.bounds.minLon ||
-            p.lon > field.bounds.maxLon ||
-            vel.speed < 0.1
+            buffers.age[i] >= buffers.maxAge[i] ||
+            buffers.lat[i] < field.bounds.minLat ||
+            buffers.lat[i] > field.bounds.maxLat ||
+            buffers.lon[i] < field.bounds.minLon ||
+            buffers.lon[i] > field.bounds.maxLon ||
+            speed < 0.1
           ) {
-            particles[i] = initParticle(field.bounds, true);
+            initParticleState(buffers, i, field.bounds, true);
             continue;
           }
 
-          // Screen-space trail projection with caching
-          const newHeadScreen = projectToPixel(p.lat, p.lon);
-          if (!newHeadScreen) {
-            p.screenTrail = [];
-            continue;
-          }
-
-          if (p.cameraVersion === currentCameraVersion && p.screenTrail.length > 0) {
-            // Camera hasn't moved: reuse existing screen points and prepend new head
-            p.screenTrail.unshift(newHeadScreen);
-            if (p.screenTrail.length > maxTrailLength) {
-              p.screenTrail.pop();
+          // Screen coordinate projection with caching
+          if (
+            buffers.cameraVersion[i] === currentCameraVersion &&
+            buffers.screenLen[i] > 0
+          ) {
+            const headPixel = projectToPixel(buffers.lat[i], buffers.lon[i]);
+            if (!headPixel) {
+              buffers.screenLen[i] = 0;
+              continue;
             }
-            transformsSaved += Math.max(0, p.screenTrail.length - 1);
+            const sHead = buffers.screenHead[i];
+            const nextSHead = (sHead + 1) % MAX_TRAIL_CAPACITY;
+            buffers.screenX[base + nextSHead] = headPixel.x;
+            buffers.screenY[base + nextSHead] = headPixel.y;
+            buffers.screenHead[i] = nextSHead;
+            if (buffers.screenLen[i] < maxTrailLength) {
+              buffers.screenLen[i]++;
+            } else if (buffers.screenLen[i] > maxTrailLength) {
+              buffers.screenLen[i] = maxTrailLength;
+            }
+            transformsSaved += Math.max(0, buffers.screenLen[i] - 1);
           } else {
-            // Camera moved or new particle: re-project history
-            const pts: { x: number; y: number }[] = [newHeadScreen];
-            for (let k = 0; k < p.history.length && pts.length < maxTrailLength; k++) {
-              const pt = projectToPixel(p.history[k].lat, p.history[k].lon);
-              if (pt) pts.push(pt);
-              else break;
+            const headPixel = projectToPixel(buffers.lat[i], buffers.lon[i]);
+            if (!headPixel) {
+              buffers.screenLen[i] = 0;
+              continue;
             }
-            p.screenTrail = pts;
-            p.cameraVersion = currentCameraVersion;
+            tempProjX[0] = headPixel.x;
+            tempProjY[0] = headPixel.y;
+            let count = 1;
+
+            const curHHead = buffers.historyHead[i];
+            const hLen = Math.min(buffers.historyLen[i], maxTrailLength);
+
+            for (let k = 0; k < hLen && count < maxTrailLength; k++) {
+              const hIdx = (curHHead - k + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+              const pt = projectToPixel(
+                buffers.historyLat[base + hIdx],
+                buffers.historyLon[base + hIdx]
+              );
+              if (pt) {
+                tempProjX[count] = pt.x;
+                tempProjY[count] = pt.y;
+                count++;
+              } else {
+                break;
+              }
+            }
+
+            for (let j = 0; j < count; j++) {
+              buffers.screenX[base + j] = tempProjX[count - 1 - j];
+              buffers.screenY[base + j] = tempProjY[count - 1 - j];
+            }
+            buffers.screenHead[i] = count - 1;
+            buffers.screenLen[i] = count;
+            buffers.cameraVersion[i] = currentCameraVersion;
           }
 
-          const screenPoints = p.screenTrail;
-          if (screenPoints.length >= 2) {
-            // Particle lifecycle alpha fade curve
-            const alphaProgress = p.age / p.maxAge;
+          if (buffers.screenLen[i] >= 2) {
+            const alphaProgress = buffers.age[i] / buffers.maxAge[i];
             const alpha =
               alphaProgress < 0.15
                 ? alphaProgress / 0.15
@@ -382,98 +544,165 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
                 ? (1 - alphaProgress) / 0.15
                 : 1.0;
 
-            const speedRatio = Math.min(vel.speed / 35, 1.0);
-            ctx.lineWidth = 1.0 + speedRatio * 1.4;
+            const speedRatio = Math.min(speed / 35, 1.0);
+            const sBucket = Math.min(
+              NUM_SPEED_BUCKETS - 1,
+              Math.floor(speedRatio * NUM_SPEED_BUCKETS)
+            );
+            const aBucket = Math.min(
+              NUM_ALPHA_BUCKETS - 1,
+              Math.floor(alpha * NUM_ALPHA_BUCKETS)
+            );
+            const bIdx = sBucket * NUM_ALPHA_BUCKETS + aBucket;
 
-            const r = Math.round(200 + 55 * speedRatio);
-            const g = Math.round(235 + 20 * speedRatio);
-            const b = 255;
-
-            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(alpha * 0.75).toFixed(2)})`;
-            ctx.beginPath();
-            ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
-            for (let k = 1; k < screenPoints.length; k++) {
-              ctx.lineTo(screenPoints[k].x, screenPoints[k].y);
-            }
-            ctx.stroke();
+            const bCount = bucketCounts[bIdx]++;
+            bucketParticles[bIdx * MAX_PARTICLES + bCount] = i;
           }
+        }
+
+        // Draw batched wind buckets
+        for (let b = 0; b < TOTAL_BUCKETS; b++) {
+          const count = bucketCounts[b];
+          if (count === 0) continue;
+
+          const style = WIND_BUCKET_STYLES[b];
+          ctx.strokeStyle = style.strokeStyle;
+          ctx.lineWidth = style.lineWidth;
+          ctx.beginPath();
+
+          for (let c = 0; c < count; c++) {
+            const pIdx = bucketParticles[b * MAX_PARTICLES + c];
+            const sLen = buffers.screenLen[pIdx];
+            const base = pIdx * MAX_TRAIL_CAPACITY;
+            const sHead = buffers.screenHead[pIdx];
+
+            const idx0 = (sHead + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+            ctx.moveTo(buffers.screenX[base + idx0], buffers.screenY[base + idx0]);
+            for (let k = 1; k < sLen; k++) {
+              const idxK = (sHead - k + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+              ctx.lineTo(buffers.screenX[base + idxK], buffers.screenY[base + idxK]);
+            }
+          }
+
+          ctx.stroke();
+          totalStrokeCalls++;
         }
       }
 
-      // --- 2. RENDER OCEAN CURRENT FLOW STREAMLINES ---
-      if (showCurrents && currentFieldRef.current) {
+      // --- 2. SIMULATE & DRAW CURRENT PARTICLES ---
+      if (showCurrents && currentFieldRef.current && currentInitializedRef.current) {
         const field = currentFieldRef.current;
-        const particles = currentParticlesRef.current;
+        const buffers = currentBuffersRef.current;
         const activeCount = isCameraMoving
-          ? Math.min(particles.length, PARTICLE_CONFIG.CAMERA_MOVE_CURRENT_PARTICLES)
-          : particles.length;
+          ? Math.min(PARTICLE_CONFIG.CURRENT_PARTICLES, PARTICLE_CONFIG.CAMERA_MOVE_CURRENT_PARTICLES)
+          : PARTICLE_CONFIG.CURRENT_PARTICLES;
         const maxTrailLength = isCameraMoving
           ? PARTICLE_CONFIG.CAMERA_MOVE_MAX_TRAIL
           : PARTICLE_CONFIG.CURRENT_MAX_TRAIL;
 
         totalActiveRendered += activeCount;
+        bucketCounts.fill(0);
 
         for (let i = 0; i < activeCount; i++) {
-          const p = particles[i];
+          sampleFlowVelocity(field, buffers.lat[i], buffers.lon[i], scratchVel1);
+          const speed = scratchVel1.speed;
+          buffers.speed[i] = speed;
 
-          const vel = sampleFlowVelocity(field, p.lat, p.lon);
-          p.speed = vel.speed;
-
-          p.history.unshift({ lat: p.lat, lon: p.lon });
-          if (p.history.length > maxTrailLength) {
-            p.history.pop();
+          const base = i * MAX_TRAIL_CAPACITY;
+          const hHead = buffers.historyHead[i];
+          const nextHHead = (hHead + 1) % MAX_TRAIL_CAPACITY;
+          buffers.historyLat[base + nextHHead] = buffers.lat[i];
+          buffers.historyLon[base + nextHHead] = buffers.lon[i];
+          buffers.historyHead[i] = nextHHead;
+          if (buffers.historyLen[i] < maxTrailLength) {
+            buffers.historyLen[i]++;
+          } else if (buffers.historyLen[i] > maxTrailLength) {
+            buffers.historyLen[i] = maxTrailLength;
           }
 
           const scale = 0.0005;
-          const k1_lat = vel.v * scale;
-          const k1_lon = vel.u * scale;
+          const k1_lat = scratchVel1.v * scale;
+          const k1_lon = scratchVel1.u * scale;
 
-          const mid_lat = p.lat + k1_lat * 0.5;
-          const mid_lon = p.lon + k1_lon * 0.5;
-          const mid_vel = sampleFlowVelocity(field, mid_lat, mid_lon);
+          const mid_lat = buffers.lat[i] + k1_lat * 0.5;
+          const mid_lon = buffers.lon[i] + k1_lon * 0.5;
+          sampleFlowVelocity(field, mid_lat, mid_lon, scratchVel2);
 
-          p.lat += mid_vel.v * scale;
-          p.lon += mid_vel.u * scale;
-          p.age++;
+          buffers.lat[i] += scratchVel2.v * scale;
+          buffers.lon[i] += scratchVel2.u * scale;
+          buffers.age[i]++;
 
           if (
-            p.age >= p.maxAge ||
-            p.lat < field.bounds.minLat ||
-            p.lat > field.bounds.maxLat ||
-            p.lon < field.bounds.minLon ||
-            p.lon > field.bounds.maxLon ||
-            vel.speed < 0.04
+            buffers.age[i] >= buffers.maxAge[i] ||
+            buffers.lat[i] < field.bounds.minLat ||
+            buffers.lat[i] > field.bounds.maxLat ||
+            buffers.lon[i] < field.bounds.minLon ||
+            buffers.lon[i] > field.bounds.maxLon ||
+            speed < 0.04
           ) {
-            particles[i] = initParticle(field.bounds, false);
+            initParticleState(buffers, i, field.bounds, false);
             continue;
           }
 
-          const newHeadScreen = projectToPixel(p.lat, p.lon);
-          if (!newHeadScreen) {
-            p.screenTrail = [];
-            continue;
-          }
-
-          if (p.cameraVersion === currentCameraVersion && p.screenTrail.length > 0) {
-            p.screenTrail.unshift(newHeadScreen);
-            if (p.screenTrail.length > maxTrailLength) {
-              p.screenTrail.pop();
+          if (
+            buffers.cameraVersion[i] === currentCameraVersion &&
+            buffers.screenLen[i] > 0
+          ) {
+            const headPixel = projectToPixel(buffers.lat[i], buffers.lon[i]);
+            if (!headPixel) {
+              buffers.screenLen[i] = 0;
+              continue;
             }
-            transformsSaved += Math.max(0, p.screenTrail.length - 1);
+            const sHead = buffers.screenHead[i];
+            const nextSHead = (sHead + 1) % MAX_TRAIL_CAPACITY;
+            buffers.screenX[base + nextSHead] = headPixel.x;
+            buffers.screenY[base + nextSHead] = headPixel.y;
+            buffers.screenHead[i] = nextSHead;
+            if (buffers.screenLen[i] < maxTrailLength) {
+              buffers.screenLen[i]++;
+            } else if (buffers.screenLen[i] > maxTrailLength) {
+              buffers.screenLen[i] = maxTrailLength;
+            }
+            transformsSaved += Math.max(0, buffers.screenLen[i] - 1);
           } else {
-            const pts: { x: number; y: number }[] = [newHeadScreen];
-            for (let k = 0; k < p.history.length && pts.length < maxTrailLength; k++) {
-              const pt = projectToPixel(p.history[k].lat, p.history[k].lon);
-              if (pt) pts.push(pt);
-              else break;
+            const headPixel = projectToPixel(buffers.lat[i], buffers.lon[i]);
+            if (!headPixel) {
+              buffers.screenLen[i] = 0;
+              continue;
             }
-            p.screenTrail = pts;
-            p.cameraVersion = currentCameraVersion;
+            tempProjX[0] = headPixel.x;
+            tempProjY[0] = headPixel.y;
+            let count = 1;
+
+            const curHHead = buffers.historyHead[i];
+            const hLen = Math.min(buffers.historyLen[i], maxTrailLength);
+
+            for (let k = 0; k < hLen && count < maxTrailLength; k++) {
+              const hIdx = (curHHead - k + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+              const pt = projectToPixel(
+                buffers.historyLat[base + hIdx],
+                buffers.historyLon[base + hIdx]
+              );
+              if (pt) {
+                tempProjX[count] = pt.x;
+                tempProjY[count] = pt.y;
+                count++;
+              } else {
+                break;
+              }
+            }
+
+            for (let j = 0; j < count; j++) {
+              buffers.screenX[base + j] = tempProjX[count - 1 - j];
+              buffers.screenY[base + j] = tempProjY[count - 1 - j];
+            }
+            buffers.screenHead[i] = count - 1;
+            buffers.screenLen[i] = count;
+            buffers.cameraVersion[i] = currentCameraVersion;
           }
 
-          const screenPoints = p.screenTrail;
-          if (screenPoints.length >= 2) {
-            const alphaProgress = p.age / p.maxAge;
+          if (buffers.screenLen[i] >= 2) {
+            const alphaProgress = buffers.age[i] / buffers.maxAge[i];
             const alpha =
               alphaProgress < 0.15
                 ? alphaProgress / 0.15
@@ -481,27 +710,64 @@ export const FlowCanvasOverlay: React.FC<FlowCanvasOverlayProps> = ({
                 ? (1 - alphaProgress) / 0.15
                 : 0.9;
 
-            // Display-only color mapping: real HYCOM current magnitudes
-            // (typically 0.05-1.5 m/s) use a finer scale than the synthetic
-            // fallback (up to ~3 m/s) so real fields stay visually readable.
-            // This maps color only — the scientific values are untouched.
-            const speedReference = field.status === 'REAL' ? 1.5 : 3.0;
-            const speedRatio = Math.min(vel.speed / speedReference, 1.0);
-            ctx.lineWidth = 1.4 + speedRatio * 1.4;
+            const speedReference = field.status === "REAL" ? 1.5 : 3.0;
+            const speedRatio = Math.min(speed / speedReference, 1.0);
+            const sBucket = Math.min(
+              NUM_SPEED_BUCKETS - 1,
+              Math.floor(speedRatio * NUM_SPEED_BUCKETS)
+            );
+            const aBucket = Math.min(
+              NUM_ALPHA_BUCKETS - 1,
+              Math.floor(alpha * NUM_ALPHA_BUCKETS)
+            );
+            const bIdx = sBucket * NUM_ALPHA_BUCKETS + aBucket;
 
-            ctx.strokeStyle = `rgba(20, 184, 166, ${(alpha * 0.65).toFixed(2)})`;
-            ctx.beginPath();
-            ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
-            for (let k = 1; k < screenPoints.length; k++) {
-              ctx.lineTo(screenPoints[k].x, screenPoints[k].y);
-            }
-            ctx.stroke();
+            const bCount = bucketCounts[bIdx]++;
+            bucketParticles[bIdx * MAX_PARTICLES + bCount] = i;
           }
+        }
+
+        // Draw batched current buckets
+        for (let b = 0; b < TOTAL_BUCKETS; b++) {
+          const count = bucketCounts[b];
+          if (count === 0) continue;
+
+          const style = CURRENT_BUCKET_STYLES[b];
+          ctx.strokeStyle = style.strokeStyle;
+          ctx.lineWidth = style.lineWidth;
+          ctx.beginPath();
+
+          for (let c = 0; c < count; c++) {
+            const pIdx = bucketParticles[b * MAX_PARTICLES + c];
+            const sLen = buffers.screenLen[pIdx];
+            const base = pIdx * MAX_TRAIL_CAPACITY;
+            const sHead = buffers.screenHead[pIdx];
+
+            const idx0 = (sHead + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+            ctx.moveTo(buffers.screenX[base + idx0], buffers.screenY[base + idx0]);
+            for (let k = 1; k < sLen; k++) {
+              const idxK = (sHead - k + MAX_TRAIL_CAPACITY) % MAX_TRAIL_CAPACITY;
+              ctx.lineTo(buffers.screenX[base + idxK], buffers.screenY[base + idxK]);
+            }
+          }
+
+          ctx.stroke();
+          totalStrokeCalls++;
         }
       }
 
-      const frameDuration = performance.now() - frameStartTime;
-      perfMonitor.recordParticleFrame(frameDuration, totalActiveRendered, transformsSaved);
+      const frameEndTime = performance.now();
+      const frameDuration = frameEndTime - frameStartTime;
+      const simAndDrawDuration = frameEndTime - simStartTime;
+
+      perfMonitor.recordParticleFrame(
+        frameDuration,
+        totalActiveRendered,
+        transformsSaved,
+        simAndDrawDuration,
+        0,
+        totalStrokeCalls
+      );
 
       animationFrameIdRef.current = requestAnimationFrame(renderFrame);
     };
