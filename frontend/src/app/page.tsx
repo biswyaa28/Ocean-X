@@ -31,7 +31,7 @@ const FEATURES = [
     body: 'INCOIS HYCOM currents, temperature and salinity sit on the same Cesium globe as the ingested Argo floats. See where the water is measured and where the model places it.',
     source: 'INCOIS RSMC HYCOM',
     image: '/landing/globe.webp',
-    alt: 'OceanLens 3D globe with Argo floats and observation radii over the Bay of Bengal.',
+    alt: 'OceanLens globe showing the HYCOM sea-surface temperature field over the Bay of Bengal with 16 Argo float positions marked, and the inspector reporting 30.58 degrees Celsius at 18.22 N, 88.40 E.',
   },
   {
     title: 'Float vs model matchup',
@@ -42,10 +42,10 @@ const FEATURES = [
   },
   {
     title: 'Cyclone ocean heat',
-    body: 'Read the cyclone-track context alongside the ocean heat view shown in the dashboard. The panel keeps the track context separate from the float and model heat products.',
-    source: 'NOAA IBTrACS',
+    body: 'Tropical Cyclone Heat Potential from the same HYCOM run, with the colour scale taken from the real data bounds rather than a fixed range. The stamp on screen states the product, the run time and whether it is real or synthetic.',
+    source: 'INCOIS RSMC HYCOM',
     image: '/landing/cyclone-heat.webp',
-    alt: 'OceanLens cyclone tracks and ocean heat comparison view.',
+    alt: 'OceanLens globe showing the HYCOM tropical cyclone heat potential field over the Bay of Bengal, with Argo float positions marked and the inspector reporting 101.4 kilojoules per square centimetre at the surface.',
   },
 ];
 
