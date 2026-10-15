@@ -17,14 +17,39 @@ export default function FeatureLightbox({
   const [open, setOpen] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-      if (event.key === 'Tab') {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      // Focus stays inside the dialog, but it MOVES: the only focusable
+      // element is the Close button, so Tab wraps back onto it and
+      // Shift+Tab likewise. Preventing default unconditionally used to pin
+      // focus there and make the dialog a dead end for keyboard users.
+      const panel = panelRef.current;
+      const focusable = panel?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusable || focusable.length === 0) {
         event.preventDefault();
         closeRef.current?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -50,7 +75,7 @@ export default function FeatureLightbox({
       </button>
       {open ? (
         <div className="lightbox" role="dialog" aria-modal="true" aria-label={alt} onClick={() => setOpen(false)}>
-          <div className="lightbox__panel" onClick={(event) => event.stopPropagation()}>
+          <div ref={panelRef} className="lightbox__panel" onClick={(event) => event.stopPropagation()}>
             <button ref={closeRef} type="button" className="lightbox__close" onClick={() => setOpen(false)}>
               Close <span aria-hidden="true">×</span>
             </button>
