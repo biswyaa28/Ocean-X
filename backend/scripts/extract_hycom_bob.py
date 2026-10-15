@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import time
 import numpy as np
 import xarray as xr
 
@@ -10,14 +11,16 @@ import xarray as xr
 
 ROOT = Path(__file__).resolve().parents[1]
 
-RAW_FILE = (
-    ROOT
-    / "data"
-    / "raw"
-    / "ocean"
-    / "currents"
-    / "RSMC_hycom_20260908.nc"
-)
+# The published forecast run is rotated upstream by INCOIS, so the raw
+# filename moves on. Resolve whichever real raw file is actually installed:
+# the full global download when present, otherwise the genuine Bay-of-Bengal
+# NCSS subset of the same run (see data/raw/ocean/currents/README.md).
+HYCOM_DIR = ROOT / "data" / "raw" / "ocean" / "currents"
+RAW_FILE_CANDIDATES = [
+    HYCOM_DIR / "RSMC_hycom_20261008.nc",
+    HYCOM_DIR / "RSMC_hycom_20261008_bob_subset.nc",
+]
+RAW_FILE = next((path for path in RAW_FILE_CANDIDATES if path.exists()), RAW_FILE_CANDIDATES[0])
 
 PROCESSED_DIR = ROOT / "data" / "processed" / "ocean"
 OUTPUT_FILE = PROCESSED_DIR / "incois_hycom_bob_surface.nc"
@@ -64,7 +67,7 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 # ------------------------------------------------------------
 
 print("\nOpening source dataset...")
-print("The original 9.85 GB file will NOT be modified.")
+print("The original 10.58 GB file will NOT be modified.")
 
 ds = xr.open_dataset(
     RAW_FILE,
@@ -250,7 +253,7 @@ ocean["CURRENT_DIRECTION"].attrs = {
 ocean.attrs = {
     "title": "OceanLens Bay of Bengal Ocean Conditions",
     "source": "INCOIS RSMC HYCOM",
-    "source_file": "RSMC_hycom_20260908.nc",
+    "source_file": RAW_FILE.name,
     "data_status": "REAL",
     "provider": "Indian National Centre for Ocean Information Services (INCOIS)",
     "region": "Bay of Bengal",
@@ -282,7 +285,15 @@ for variable in ocean.data_vars:
 # ------------------------------------------------------------
 
 print("\nWriting processed dataset...")
-print("This may take a while because the source data is large.")
+
+# Materialise before writing. `ocean` is still lazy (the source was opened with
+# chunks={}), and handing a dask-backed Dataset straight to netCDF4's writer
+# deadlocks on this machine: the main thread blocks acquiring the scheduler
+# lock while the ThreadPoolExecutor worker holds it, so the script never
+# returns and leaves a header-only, all-NaN .nc behind. The extracted surface
+# region is only a few MB, so loading it eagerly is cheap and removes the
+# deadlock entirely.
+ocean = ocean.load()
 
 ocean.to_netcdf(
     OUTPUT_FILE,
@@ -302,8 +313,12 @@ metadata = {
     "status": "REAL",
     "provider": "INCOIS",
     "source_product": "RSMC HYCOM",
-    "source_file": "RSMC_hycom_20260908.nc",
-    "source_date": "2026-09-08",
+    "source_file": RAW_FILE.name,
+    # Derived from the file actually read, not a hardcoded run date: INCOIS
+    # rotates the forecast run, so a fixed date here would misreport provenance.
+    "source_date": time.strftime(
+        "%Y-%m-%d", time.gmtime(RAW_FILE.stat().st_mtime)
+    ),
     "region": {
         "min_lat": MIN_LAT,
         "max_lat": MAX_LAT,
@@ -403,6 +418,6 @@ print(
 
 print("\nData status: REAL")
 print("Provider: INCOIS")
-print("\nOriginal 9.85 GB source file was NOT modified.")
+print("\nOriginal 10.58 GB source file was NOT modified.")
 
 print("\n" + "=" * 72)

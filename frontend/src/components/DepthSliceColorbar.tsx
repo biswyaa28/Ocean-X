@@ -3,6 +3,7 @@
 import React from 'react';
 import { ScientificPalette, paletteCssGradient } from '../utils/scientificPalettes';
 import { DepthSliceScale } from '../utils/depthSliceViz';
+import { modelDepthLabel, type ModelDepthAxis } from '../utils/modelDepthLabel';
 
 /** Adaptive scientific-value formatting for colorbar tick labels. */
 export function formatColorbarValue(v: number): string {
@@ -21,6 +22,8 @@ interface DepthSliceColorbarProps {
   variableLabel: string;
   isAutoRange: boolean;
   matchedDepthM?: number;
+  /** Sampled axis vs the file's own DEPTH labels, for the matched-depth readout. */
+  depthAxis?: ModelDepthAxis;
   timestamp?: string;
 }
 
@@ -40,6 +43,7 @@ export const DepthSliceColorbar: React.FC<DepthSliceColorbarProps> = ({
   variableLabel,
   isAutoRange,
   matchedDepthM,
+  depthAxis,
   timestamp,
 }) => {
   // Mid tick: arithmetic mean on linear scale, geometric mean on log scale
@@ -96,7 +100,14 @@ export const DepthSliceColorbar: React.FC<DepthSliceColorbarProps> = ({
           {units} · {palette.label}
         </span>
         <span>
-          {matchedDepthM !== undefined && <span className="text-indigo-300 font-bold">{matchedDepthM} m · </span>}
+          {matchedDepthM !== undefined && (
+            <span
+              className="text-indigo-300 font-bold"
+              title="Depth sampled, and what this file calls the same level."
+            >
+              {modelDepthLabel(matchedDepthM, depthAxis)} ·{' '}
+            </span>
+          )}
           {timestamp && <span className="text-cyan-300">{formatTimestamp(timestamp)}</span>}
         </span>
       </div>

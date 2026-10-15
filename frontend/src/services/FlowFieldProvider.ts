@@ -9,7 +9,7 @@ export function generateBayOfBengalFlowField(
   type: 'wind' | 'current',
   cycloneLat: number = 18.2,
   cycloneLon: number = 88.4,
-  maxWindKts: number = 125,
+  maxWindKts?: number | null,
   timestampStr: string = '2026-09-08T12:00:00Z'
 ): EnvironmentalFlowField {
   const minLat = 5.0;
@@ -32,7 +32,11 @@ export function generateBayOfBengalFlowField(
   const vGrid: number[][] = [];
 
   const isWind = type === 'wind';
-  const maxVelocity = isWind ? maxWindKts * 0.514444 : 3.2; // Convert kts to m/s for wind, m/s for current
+  // Convert kts to m/s for wind, m/s for current. When no wind observation is
+  // available we fall back to a scale that simply makes particles invisible
+  // rather than inventing a 125 kt storm.
+  const windMs = maxWindKts === null || maxWindKts === undefined ? 0 : maxWindKts * 0.514444;
+  const maxVelocity = isWind ? windMs : 3.2;
 
   for (let i = 0; i < latitudes.length; i++) {
     const lat = latitudes[i];
@@ -248,11 +252,79 @@ export function countValidCurrentCells(field: EnvironmentalFlowField): number {
  *   speed 0, so particles crossing a gap respawn instead of being advected
  *   by fabricated values. Missing regions stay missing.
  */
+export interface FlowVelocityResult {
+  u: number;
+  v: number;
+  speed: number;
+}
+
+// Axis metadata for fast arithmetic indexing when axes are uniformly spaced.
+interface AxisMeta {
+  n: number;
+  ascending: boolean;
+  isUniform: boolean;
+  step: number;
+  invStep: number;
+  first: number;
+  last: number;
+}
+
+const axisMetaCache = new WeakMap<number[], AxisMeta>();
+
+function getAxisMeta(axis: number[]): AxisMeta {
+  let meta = axisMetaCache.get(axis);
+  if (meta) return meta;
+
+  const n = axis.length;
+  if (n < 2) {
+    meta = { n, ascending: true, isUniform: false, step: 0, invStep: 0, first: axis[0] ?? 0, last: axis[n - 1] ?? 0 };
+    axisMetaCache.set(axis, meta);
+    return meta;
+  }
+
+  const first = axis[0];
+  const last = axis[n - 1];
+  const ascending = last >= first;
+  const step = (last - first) / (n - 1);
+  const invStep = step !== 0 ? 1 / step : 0;
+
+  // Check if uniform within tolerance
+  let isUniform = step !== 0;
+  if (isUniform) {
+    const tol = 1e-4 * Math.abs(step);
+    for (let i = 1; i < n - 1; i++) {
+      const expected = first + i * step;
+      if (Math.abs(axis[i] - expected) > Math.max(tol, 1e-5)) {
+        isUniform = false;
+        break;
+      }
+    }
+  }
+
+  meta = { n, ascending, isUniform, step, invStep, first, last };
+  axisMetaCache.set(axis, meta);
+  return meta;
+}
+
+/**
+ * Bilinear sampling of vector field velocity (u, v) at any continuous (lat, lon) position.
+ *
+ * Handles both the uniform synthetic grid and real HYCOM grids:
+ * - O(1) arithmetic indexing for uniform grids (index = floor((coord - min) / step))
+ * - Binary search for non-uniform axes
+ * - Ascending & descending latitude axes (orientation preserved, never flipped)
+ * - Missing (NaN) cells: any bracketing cell without a real vector yields
+ *   speed 0, so particles crossing a gap respawn instead of being advected
+ *   by fabricated values. Missing regions stay missing.
+ * - Supports an optional `out` parameter to avoid per-sample allocations.
+ */
 export function sampleFlowVelocity(
   field: EnvironmentalFlowField,
   lat: number,
-  lon: number
-): { u: number; v: number; speed: number } {
+  lon: number,
+  out?: FlowVelocityResult
+): FlowVelocityResult {
+  const result: FlowVelocityResult = out || { u: 0, v: 0, speed: 0 };
   const { bounds, grid } = field;
 
   // Clamp to bounds
@@ -262,40 +334,136 @@ export function sampleFlowVelocity(
     lon < bounds.minLon ||
     lon > bounds.maxLon
   ) {
-    return { u: 0, v: 0, speed: 0 };
+    result.u = 0;
+    result.v = 0;
+    result.speed = 0;
+    return result;
   }
 
   const lats = grid.latitudes;
   const lons = grid.longitudes;
 
-  // Locate the bracketing cell on each axis. Works for ascending and
-  // descending axes alike (real HYCOM axes may be either) and for
-  // non-uniform spacings (the raw model grid is not regular).
-  const findBracket = (axis: number[], value: number): [number, number, number] | null => {
-    const n = axis.length;
-    if (n < 2) return null;
-    const ascending = axis[1] >= axis[0];
-    let lo = 0;
-    let hi = n - 1;
-    if (ascending ? value <= axis[0] : value >= axis[0]) return [0, 0, 0];
-    if (ascending ? value >= axis[n - 1] : value <= axis[n - 1]) return [n - 1, n - 1, 0];
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1;
-      const above = ascending ? axis[mid] <= value : axis[mid] >= value;
-      if (above) lo = mid;
-      else hi = mid;
+  const latMeta = getAxisMeta(lats);
+  const lonMeta = getAxisMeta(lons);
+
+  if (latMeta.n < 2 || lonMeta.n < 2) {
+    result.u = 0;
+    result.v = 0;
+    result.speed = 0;
+    return result;
+  }
+
+  // Latitude axis indexing
+  let i0 = 0;
+  let i1 = 0;
+  let fi = 0;
+
+  if (latMeta.isUniform) {
+    if (latMeta.ascending ? lat <= latMeta.first : lat >= latMeta.first) {
+      i0 = 0;
+      i1 = 0;
+      fi = 0;
+    } else if (latMeta.ascending ? lat >= latMeta.last : lat <= latMeta.last) {
+      i0 = latMeta.n - 1;
+      i1 = latMeta.n - 1;
+      fi = 0;
+    } else {
+      const fracTotal = (lat - latMeta.first) * latMeta.invStep;
+      const lo = Math.floor(fracTotal);
+      if (lo < 0) {
+        i0 = 0;
+        i1 = 0;
+        fi = 0;
+      } else if (lo >= latMeta.n - 1) {
+        i0 = latMeta.n - 1;
+        i1 = latMeta.n - 1;
+        fi = 0;
+      } else {
+        i0 = lo;
+        i1 = lo + 1;
+        fi = Math.min(Math.max(fracTotal - lo, 0), 1);
+      }
     }
-    const span = axis[hi] - axis[lo];
-    const frac = span !== 0 ? (value - axis[lo]) / span : 0;
-    return [lo, hi, Math.min(Math.max(frac, 0), 1)];
-  };
+  } else {
+    let lo = 0;
+    let hi = latMeta.n - 1;
+    if (latMeta.ascending ? lat <= latMeta.first : lat >= latMeta.first) {
+      i0 = 0;
+      i1 = 0;
+      fi = 0;
+    } else if (latMeta.ascending ? lat >= latMeta.last : lat <= latMeta.last) {
+      i0 = latMeta.n - 1;
+      i1 = latMeta.n - 1;
+      fi = 0;
+    } else {
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        const above = latMeta.ascending ? lats[mid] <= lat : lats[mid] >= lat;
+        if (above) lo = mid;
+        else hi = mid;
+      }
+      i0 = lo;
+      i1 = hi;
+      const span = lats[hi] - lats[lo];
+      fi = span !== 0 ? Math.min(Math.max((lat - lats[lo]) / span, 0), 1) : 0;
+    }
+  }
 
-  const latBracket = findBracket(lats, lat);
-  const lonBracket = findBracket(lons, lon);
-  if (!latBracket || !lonBracket) return { u: 0, v: 0, speed: 0 };
+  // Longitude axis indexing
+  let j0 = 0;
+  let j1 = 0;
+  let fj = 0;
 
-  const [i0, i1, fi] = latBracket;
-  const [j0, j1, fj] = lonBracket;
+  if (lonMeta.isUniform) {
+    if (lonMeta.ascending ? lon <= lonMeta.first : lon >= lonMeta.first) {
+      j0 = 0;
+      j1 = 0;
+      fj = 0;
+    } else if (lonMeta.ascending ? lon >= lonMeta.last : lon <= lonMeta.last) {
+      j0 = lonMeta.n - 1;
+      j1 = lonMeta.n - 1;
+      fj = 0;
+    } else {
+      const fracTotal = (lon - lonMeta.first) * lonMeta.invStep;
+      const lo = Math.floor(fracTotal);
+      if (lo < 0) {
+        j0 = 0;
+        j1 = 0;
+        fj = 0;
+      } else if (lo >= lonMeta.n - 1) {
+        j0 = lonMeta.n - 1;
+        j1 = lonMeta.n - 1;
+        fj = 0;
+      } else {
+        j0 = lo;
+        j1 = lo + 1;
+        fj = Math.min(Math.max(fracTotal - lo, 0), 1);
+      }
+    }
+  } else {
+    let lo = 0;
+    let hi = lonMeta.n - 1;
+    if (lonMeta.ascending ? lon <= lonMeta.first : lon >= lonMeta.first) {
+      j0 = 0;
+      j1 = 0;
+      fj = 0;
+    } else if (lonMeta.ascending ? lon >= lonMeta.last : lon <= lonMeta.last) {
+      j0 = lonMeta.n - 1;
+      j1 = lonMeta.n - 1;
+      fj = 0;
+    } else {
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        const above = lonMeta.ascending ? lons[mid] <= lon : lons[mid] >= lon;
+        if (above) lo = mid;
+        else hi = mid;
+      }
+      j0 = lo;
+      j1 = hi;
+      const span = lons[hi] - lons[lo];
+      fj = span !== 0 ? Math.min(Math.max((lon - lons[lo]) / span, 0), 1) : 0;
+    }
+  }
 
   const u00 = grid.u[i0][j0];
   const u10 = grid.u[i1][j0];
@@ -313,7 +481,10 @@ export function sampleFlowVelocity(
     !Number.isFinite(u00) || !Number.isFinite(u10) || !Number.isFinite(u01) || !Number.isFinite(u11) ||
     !Number.isFinite(v00) || !Number.isFinite(v10) || !Number.isFinite(v01) || !Number.isFinite(v11)
   ) {
-    return { u: 0, v: 0, speed: 0 };
+    result.u = 0;
+    result.v = 0;
+    result.speed = 0;
+    return result;
   }
 
   // Bilinear interpolation
@@ -331,5 +502,8 @@ export function sampleFlowVelocity(
 
   const speed = Math.sqrt(u * u + v * v);
 
-  return { u, v, speed };
+  result.u = u;
+  result.v = v;
+  result.speed = speed;
+  return result;
 }

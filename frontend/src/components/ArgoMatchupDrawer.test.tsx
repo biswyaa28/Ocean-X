@@ -6,6 +6,7 @@ import {
   obsPoint,
   makeArgoProfile,
   makeArgoMatchup,
+  makeInterpolatedArgoMatchup,
 } from '../test/fixtures/argoFixtures';
 
 /**
@@ -56,8 +57,8 @@ function deferred<T>() {
 
 const CLOSE = { onClose: () => {} };
 
-function renderDrawer(profile: ArgoProfile | null) {
-  return render(<ArgoMatchupDrawer profile={profile} {...CLOSE} />);
+function renderDrawer(profile: ArgoProfile | null, isDemo?: boolean) {
+  return render(<ArgoMatchupDrawer profile={profile} isDemo={isDemo} {...CLOSE} />);
 }
 
 beforeEach(() => {
@@ -87,7 +88,7 @@ describe('ArgoMatchupDrawer — opening an Argo profile', () => {
     expect(screen.getByText(/2026-09-08 03:15:00 UTC/i)).toBeInTheDocument();
     expect(screen.getByText(/argo-2902746-p042/i)).toBeInTheDocument();
     expect(screen.getByText(/INCOIS \/ Argo GDAC/i)).toBeInTheDocument();
-    expect(screen.getByText(/REAL SOURCE — INGESTION PENDING/i)).toBeInTheDocument();
+    expect(screen.getByText(/REAL · GDAC/i)).toBeInTheDocument();
   });
 
   it('requests the observations endpoint once per profile within a drawer session', async () => {
@@ -206,20 +207,30 @@ describe('ArgoMatchupDrawer — Profile tab visualization', () => {
 });
 
 describe('ArgoMatchupDrawer — honest provenance labeling', () => {
-  it('labels the visualization as an ARGO OBSERVATION PROFILE with source-provided depth', async () => {
+  it('labels the visualization as REAL IN-SITU OBSERVATION when derived from real API data', async () => {
     getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
     renderDrawer(makeArgoProfile());
     await screen.findByText(/ARGO OBSERVATION PROFILE/i);
 
     expect(screen.getByText(/ARGO OBSERVATION PROFILE/i)).toBeInTheDocument();
     expect(screen.getByText(/SOURCE-PROVIDED DEPTH/i)).toBeInTheDocument();
-    // Real in-situ observation identity (banner badge + provenance footer).
-    expect(screen.getAllByText(/DEMO PROFILE SNAPSHOT/i).length).toBeGreaterThan(0);
+    // Real in-situ observation identity (banner badge + provenance card).
+    expect(screen.getAllByText(/REAL IN-SITU OBSERVATION/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('REAL')).toBeInTheDocument();
     // Never mislabeled as model output, validation or prediction.
     expect(screen.queryByText(/MODEL PROFILE/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/VALIDATION/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/PREDICTION/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/HYCOM/i)).not.toBeInTheDocument();
+  });
+
+  it('labels the visualization as DEMO PROFILE SNAPSHOT and STATUS: DEMO when DemoProvider fallback is used', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    renderDrawer(makeArgoProfile(), true);
+    await screen.findByText(/ARGO OBSERVATION PROFILE/i);
+
+    expect(screen.getAllByText(/DEMO PROFILE SNAPSHOT/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('DEMO')).toBeInTheDocument();
   });
 });
 
@@ -586,12 +597,106 @@ describe('ArgoMatchupDrawer — Phase 2C matchup diagnostics', () => {
     expect(screen.getByText('50 m (native)')).toBeInTheDocument();
   });
 
-  it('reports no interpolation and no subjective quality grade', async () => {
+  it('reports the native-only matching disclosure and no subjective quality grade', async () => {
     await openMatchupTab(makeArgoMatchup());
 
     expect(screen.getByText('NONE')).toBeInTheDocument();
-    expect(screen.getByText(/No depth interpolation is applied/i)).toBeInTheDocument();
+    expect(screen.getByText(/matched to the nearest native HYCOM model depth/i)).toBeInTheDocument();
+    // In native mode the tolerance is the matching rule.
+    expect(screen.getByText(/Depth matching tolerance is ≤ 15 m/i)).toBeInTheDocument();
     expect(screen.queryByText(/EXCELLENT|QUALITY GRADE|MATCHUP SCORE|POOR MATCHUP/i)).not.toBeInTheDocument();
+  });
+
+  it('reports the interpolated matching disclosure and the interpolated/native split', async () => {
+    await openMatchupTab(makeInterpolatedArgoMatchup());
+
+    expect(screen.getByText('APPLIED')).toBeInTheDocument();
+    expect(screen.getByText(/linearly interpolated between the native HYCOM levels/i)).toBeInTheDocument();
+    // The split is stated, so the sample's dependence on interpolation is visible.
+    expect(
+      screen.getByText(/1 of 3 matched level\(s\) use an interpolated model value; 2 use a native level/i)
+    ).toBeInTheDocument();
+    // The tolerance only applies in native mode, so it is not claimed here.
+    expect(screen.queryByText(/Depth matching tolerance is ≤ 15 m/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/EXCELLENT|QUALITY GRADE|MATCHUP SCORE|POOR MATCHUP/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the depth-axis footnote when modelDepths and storedFileDepths differ', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 17.5, 52.5, 125, 275, 500],
+        modelDepthAxisRule: 'native',
+      })
+    );
+
+    const footnote = screen.getByTestId('matchup-depth-axis-footnote');
+    expect(footnote).toBeInTheDocument();
+    // The sampled axis is the headline; the file's own labels ride along, because
+    // a reader with the file open would otherwise think the depths are wrong.
+    expect(footnote.textContent).toContain('shown as sampled (0, 10, 50, 100, 250, 500 m)');
+    expect(footnote.textContent).toContain('0, 17.5, 52.5, 125, 275, 500 m');
+    expect(footnote.textContent).toContain('25 m apart');
+    expect(footnote.textContent).toContain('midpoint of its own bounds');
+    expect(footnote.textContent).toContain('Rule: native.');
+  });
+
+  it('states the depth uncertainty in the thermocline when the labels disagree', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 17.5, 52.5, 125, 275, 500],
+      })
+    );
+
+    const note = screen.getByTestId('matchup-depth-uncertainty-note');
+    expect(note.textContent).toContain('uncertain by up to 25 m');
+    expect(note.textContent).toContain('~0.07 °C per metre');
+  });
+
+  it('withholds the depth-uncertainty line when the file agrees with the axis', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50, 100, 250, 500],
+        storedFileDepths: [0, 10, 50, 100, 250, 500],
+      })
+    );
+
+    // Nothing is uncertain when the two depths agree, so nothing is claimed.
+    expect(screen.queryByTestId('matchup-depth-uncertainty-note')).toBeNull();
+  });
+
+  it('does not render the depth-axis footnote when depth fields are absent', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: undefined,
+        storedFileDepths: undefined,
+      })
+    );
+    expect(screen.queryByTestId('matchup-depth-axis-footnote')).not.toBeInTheDocument();
+  });
+
+  it('does not render the depth-axis footnote when modelDepths and storedFileDepths are identical', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        modelDepths: [0, 10, 50],
+        storedFileDepths: [0, 10, 50],
+      })
+    );
+    expect(screen.queryByTestId('matchup-depth-axis-footnote')).not.toBeInTheDocument();
+  });
+
+  it('displays the softened model_levels title noting pending INCOIS confirmation', async () => {
+    await openMatchupTab(
+      makeArgoMatchup({
+        matchMode: 'model_levels',
+      })
+    );
+    const badge = screen.getByTestId('matchup-badge-vertical');
+    expect(badge).toHaveAttribute(
+      'title',
+      expect.stringContaining('layer definition pending INCOIS confirmation')
+    );
   });
 
   it('shows variable valid-pair counts from Phase 2B statistics, not from chart points', async () => {
@@ -628,6 +733,11 @@ describe('ArgoMatchupDrawer — Phase 2C diagnostic honesty and regressions', ()
         statistics: { temperature: null, salinity: null },
         diagnostics: null,
         modelDepthSelection: '',
+        // Matching-method fields the backend never reported stay Unavailable
+        // rather than being assumed from a default.
+        depthSource: undefined,
+        matchMode: undefined,
+        spatialMode: undefined,
       })
     );
 
@@ -635,8 +745,9 @@ describe('ArgoMatchupDrawer — Phase 2C diagnostic honesty and regressions', ()
     expect(screen.queryByText('0 matched')).not.toBeInTheDocument();
     expect(screen.queryByText('0.00% matched')).not.toBeInTheDocument();
     // Every unavailable field renders as Unavailable instead of a fabricated
-    // value: 9 diagnostic rows + model-depth selection + 2 valid-pair rows.
-    expect(screen.getAllByText('Unavailable')).toHaveLength(12);
+    // value: 9 diagnostic rows + 2 interpolated/native rows + 3 matching-method
+    // rows + model-depth selection + 2 valid-pair rows.
+    expect(screen.getAllByText('Unavailable')).toHaveLength(17);
     // No limitation statement is supportable from an all-unavailable response.
     expect(screen.queryByText('LIMITATIONS')).not.toBeInTheDocument();
   });
@@ -682,7 +793,10 @@ describe('ArgoMatchupDrawer — Phase 2C diagnostic honesty and regressions', ()
           deepestMatchedObservationDepthM: 500,
           deepestMatchedModelDepthM: 500,
           repeatedNativeDepthMatchCount: 1,
+          interpolatedLevelCount: 0,
+          nativeLevelCount: 7,
           interpolationApplied: false,
+          missingQcLevelCount: 0,
         },
       })
     );
@@ -709,5 +823,238 @@ describe('ArgoMatchupDrawer — Phase 2C diagnostic honesty and regressions', ()
     expect(screen.queryByText('2 matched')).not.toBeInTheDocument();
     expect(screen.queryByText('66.67% matched')).not.toBeInTheDocument();
     expect(screen.getByText('7 matched')).toBeInTheDocument();
+  });
+});
+
+describe('ArgoMatchupDrawer — matching-method disclosure', () => {
+  it('shows badges for the depth basis, vertical and horizontal matching actually applied', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeInterpolatedArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+
+    expect(screen.getByTestId('matchup-badge-depth')).toHaveTextContent('PRESSURE→DEPTH · GSW (TEOS-10)');
+    expect(screen.getByTestId('matchup-badge-vertical')).toHaveTextContent(
+      'COMPARISON · FLOAT LEVELS'
+    );
+    expect(screen.getByTestId('matchup-badge-horizontal')).toHaveTextContent('HORIZONTAL · BILINEAR');
+
+    // The same values are repeated as explicit diagnostic rows.
+    expect(screen.getByText('DEPTH BASIS (ARGO)')).toBeInTheDocument();
+    expect(screen.getByText('VERTICAL MATCHING')).toBeInTheDocument();
+    expect(screen.getByText('HORIZONTAL MATCHING')).toBeInTheDocument();
+    expect(screen.getByText('INTERPOLATED LEVELS')).toBeInTheDocument();
+    expect(screen.getByText('NATIVE LEVELS')).toBeInTheDocument();
+  });
+
+  it('reports the native-only badges when the backend applied native matching', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+
+    expect(screen.getByTestId('matchup-badge-vertical')).toHaveTextContent(
+      'COMPARISON · NATIVE ONLY'
+    );
+    expect(screen.getByTestId('matchup-badge-horizontal')).toHaveTextContent('HORIZONTAL · NEAREST CELL');
+  });
+
+  it('marks each residual row with how its model value was obtained', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeInterpolatedArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/VERTICAL DEPTH \/ PARAMETER RESIDUALS/i);
+
+    // Two float-native rows and one float-interpolated row.
+    expect(screen.getAllByText('NAT')).toHaveLength(2);
+    expect(screen.getAllByText('INTP')).toHaveLength(1);
+  });
+});
+
+describe('ArgoMatchupDrawer — comparison mode toggle', () => {
+  it('defaults to model_levels and requests it from the backend', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeInterpolatedArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    const modelLevels = await screen.findByRole('button', { name: 'MODEL LEVELS' });
+    const native = screen.getByRole('button', { name: 'NATIVE ONLY' });
+    const floatLevels = screen.getByRole('button', { name: 'FLOAT LEVELS' });
+
+    expect(modelLevels).toHaveAttribute('aria-pressed', 'true');
+    expect(native).toHaveAttribute('aria-pressed', 'false');
+    expect(floatLevels).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() =>
+      expect(getArgoMatchup).toHaveBeenCalledWith(
+        'argo-2902746-p042',
+        expect.any(AbortSignal),
+        'model_levels'
+      )
+    );
+  });
+
+  it('offers all three modes and labels float_levels as including model interpolation error', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeInterpolatedArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    const floatLevels = await screen.findByRole('button', { name: 'FLOAT LEVELS' });
+    expect(
+      floatLevels.getAttribute('title')
+    ).toMatch(/includes model interpolation error/i);
+  });
+
+  it('refetches in native-only mode when the toggle is switched', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByRole('button', { name: 'MODEL LEVELS' });
+    await waitFor(() => expect(getArgoMatchup).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'NATIVE ONLY' }));
+
+    await waitFor(() => expect(getArgoMatchup).toHaveBeenCalledTimes(2));
+    expect(getArgoMatchup).toHaveBeenLastCalledWith(
+      'argo-2902746-p042',
+      expect.any(AbortSignal),
+      'native'
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'NATIVE ONLY' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+    );
+  });
+});
+
+describe('ArgoMatchupDrawer — QC flag disclosure', () => {
+  it('reports zero missing-QC levels and the variable basis on a clean profile', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeArgoMatchup());
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+
+    expect(screen.getByText('LEVELS WITHOUT QC FLAGS')).toBeInTheDocument();
+    // Two zero counts render as "0 levels" (interpolated and missing-QC; the
+    // native count is 2 for this fixture).
+    expect(screen.getAllByText('0 levels')).toHaveLength(2);
+    expect(screen.getByTestId('matchup-badge-qc')).toHaveTextContent('QC FLAGS PRESENT');
+    expect(screen.getByText('ARGO VARIABLE BASIS')).toBeInTheDocument();
+    expect(screen.getByText('RAW')).toBeInTheDocument();
+    expect(screen.getByText('ARGO DATA MODE')).toBeInTheDocument();
+  });
+
+  it('discloses levels accepted without a QC flag instead of hiding them', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(
+      makeArgoMatchup({
+        missingQcLevelCount: 4,
+        diagnostics: {
+          ...makeArgoMatchup().diagnostics!,
+          missingQcLevelCount: 4,
+        },
+      })
+    );
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+
+    expect(screen.getByText('4 levels')).toBeInTheDocument();
+    expect(screen.getByTestId('matchup-badge-qc')).toHaveTextContent('QC ABSENT · 4 LEVELS');
+    // The limitation is stated so the sample's provenance is not overstated.
+    expect(
+      screen.getByText(/carry no QC flag in the source/i)
+    ).toBeInTheDocument();
+  });
+
+  it('states the accepted QC flag policy, including the rejection of flag 8', async () => {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(
+      makeArgoMatchup({ qcFlagsUsed: { raw: [1, 2], adjusted: [1, 2, 5] } })
+    );
+    renderDrawer(makeArgoProfile());
+
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+
+    expect(
+      screen.getByTitle(/Flag 8 \(value interpolated between measurements\) is rejected/i)
+    ).toBeInTheDocument();
+  });
+});
+
+describe('ArgoMatchupDrawer — observation-model time gap', () => {
+  async function openWithGap(overrides: Parameters<typeof makeArgoMatchup>[0]) {
+    getArgoObservations.mockResolvedValue(makeArgoProfile().observations);
+    getArgoMatchup.mockResolvedValue(makeArgoMatchup(overrides));
+    renderDrawer(makeArgoProfile());
+    fireEvent.click(screen.getByTitle('Matchup tab'));
+    await screen.findByText(/MATCHED HYCOM MODEL LOCATION/i);
+  }
+
+  it('shows a green badge and residual statistics for a good gap', async () => {
+    await openWithGap({
+      timeGapStatus: 'good',
+      diagnostics: { ...makeArgoMatchup().diagnostics!, timeGapStatus: 'good' },
+    });
+
+    expect(screen.getByTestId('matchup-badge-timegap')).toHaveTextContent('TIME GAP · GOOD');
+    expect(screen.getByText('MATCHUP STATISTICS')).toBeInTheDocument();
+    expect(screen.queryByText(/TIME GAP TOO LARGE FOR A VALID COMPARISON/i)).not.toBeInTheDocument();
+  });
+
+  it('shows an amber badge and a disclosure for a marginal gap', async () => {
+    await openWithGap({
+      timeGapStatus: 'marginal',
+      diagnostics: { ...makeArgoMatchup().diagnostics!, timeGapStatus: 'marginal' },
+    });
+
+    expect(screen.getByTestId('matchup-badge-timegap')).toHaveTextContent('TIME GAP · MARGINAL');
+    // Statistics are still shown for a marginal gap, but the caveat is stated.
+    expect(screen.getByText('MATCHUP STATISTICS')).toBeInTheDocument();
+    expect(screen.getAllByText(/EXCEEDS 24 H/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows both profiles but NO residual statistics when the gap is too large', async () => {
+    await openWithGap({
+      timeGapStatus: 'too_large',
+      statisticsSuppressed: true,
+      timeGapReason:
+        'Time gap too large for a valid comparison: the observation and the nearest model '
+        + 'time differ by 698.75 h, beyond the 72 h limit.',
+      statistics: {
+        temperature: { n: 0, meanResidual: null, mae: null, rmse: null },
+        salinity: { n: 0, meanResidual: null, mae: null, rmse: null },
+      },
+      diagnostics: { ...makeArgoMatchup().diagnostics!, timeGapStatus: 'too_large' },
+    });
+
+    // The badge turns red and the message is shown.
+    expect(screen.getByTestId('matchup-badge-timegap')).toHaveTextContent('TIME GAP · TOO LARGE');
+    expect(screen.getAllByText(/TIME GAP TOO LARGE FOR A VALID COMPARISON/i).length).toBeGreaterThan(0);
+
+    // No residual statistics anywhere.
+    expect(screen.queryByText('MATCHUP STATISTICS')).not.toBeInTheDocument();
+    expect(screen.queryByText('0.4253')).not.toBeInTheDocument();
+    expect(screen.queryByText('0.0600')).not.toBeInTheDocument();
+
+    // ...but the profiles themselves are still returned and visible.
+    expect(screen.getByText('MATCHED HYCOM MODEL LOCATION')).toBeInTheDocument();
+    expect(screen.getByText(/BOTH PROFILES ARE STILL SHOWN ABOVE/i)).toBeInTheDocument();
+    expect(screen.getByText(/VERTICAL DEPTH \/ PARAMETER RESIDUALS/i)).toBeInTheDocument();
   });
 });

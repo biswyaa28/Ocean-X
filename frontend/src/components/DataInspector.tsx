@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { DataStatus, GISLayer } from '../types/oceanlens';
-import { Activity, AlertCircle, MousePointerClick } from 'lucide-react';
+import { formatModelDate } from '../utils/modelTime';
+import { Activity, AlertCircle, MousePointerClick, X } from 'lucide-react';
 
 export interface InspectionData {
   latitude: number;
@@ -30,17 +31,22 @@ export interface InspectionData {
   customValue?: string;
   customUnit?: string;
   cycloneName?: string;
-  maxWindKts?: number;
-  centralPressureMb?: number;
-  category?: string;
-  distanceToCoastKm?: number;
+  maxWindKts?: number | null;
+  centralPressureMb?: number | null;
+  category?: string | null;
+  distanceToCoastKm?: number | null;
   observationType?: string;
 }
 
 interface DataInspectorProps {
   activeLayer: GISLayer | null;
   inspection: InspectionData | null;
-  legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string } | null;
+  legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string; timestamp?: string } | null;
+  /**
+   * Clears the current inspection, returning the panel to its "INSPECTOR READY"
+   * state. The panel itself is a persistent instrument and is not dismissed.
+   * Optional so the component still renders when nothing wires it.
+   */
   onClose?: () => void;
 }
 
@@ -54,7 +60,7 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
 
   const layerId = activeLayer.id;
   const isNotIntegrated = ['storm_surge', 'chlorophyll', 'rainfall'].includes(layerId);
-  const isSimulated = activeLayer.status === 'SIMULATED' || ['wind', 'wave_height', 'stations', 'buoys'].includes(layerId);
+  const isSimulated = activeLayer.status === 'SIMULATED';
   const isDerived = layerId === 'risk_zones';
   const isPending = activeLayer.status === 'REAL SOURCE — INGESTION PENDING';
   const isTimestampUnavailable = inspection?.status === 'NO_REAL_MODEL_DATA' || inspection?.dataStatus === 'REAL DATASET — TIMESTAMP UNAVAILABLE';
@@ -84,16 +90,13 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
     badgeStyle = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
   }
 
-  // Format timestamp helper
+  // Format the timestamp of the data actually read. `new Date(string)` reads a
+  // stamp with no zone designator as LOCAL time, which would display a
+  // different date than the data belongs to.
   const formatTime = (ts?: string) => {
-    if (!ts) return 'N/A';
-    try {
-      const dt = new Date(ts);
-      if (isNaN(dt.getTime())) return ts;
-      return dt.toUTCString().replace('GMT', 'UTC');
-    } catch {
-      return ts;
-    }
+    const formatted = formatModelDate(ts);
+    if (formatted) return `${formatted.replace(' UTC', '')} UTC`;
+    return ts ? ts : 'N/A';
   };
 
   // Determine source label explicitly
@@ -141,7 +144,7 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
 
   return (
     <div className="fixed left-6 lg:left-80 bottom-24 z-20 font-mono text-xs select-none pointer-events-auto transition-all duration-300">
-      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 shadow-2xl w-72 sm:w-80 text-slate-100 font-sans space-y-3">
+      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 shadow-2xl w-72 sm:w-80 text-slate-100 font-sans space-y-3 max-h-[calc(100vh-17rem)] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/10 pb-2.5 font-mono gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -156,9 +159,22 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
             </div>
           </div>
 
-          <span className={`text-[8.5px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono shrink-0 max-w-[140px] truncate ${badgeStyle}`}>
-            {badgeText}
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className={`text-[8.5px] font-bold px-2 py-0.5 rounded-full border uppercase font-mono max-w-[140px] truncate ${badgeStyle}`}>
+              {badgeText}
+            </span>
+            {onClose && inspection && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Clear inspection"
+                title="Clear inspection"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-white/10 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Content Body based on Selection State */}
@@ -186,15 +202,15 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
               </div>
               <div className="text-right">
                 <div className="text-[8px] text-slate-400 uppercase">MAX SUSTAINED WIND</div>
-                <div className="text-cyan-300 font-bold mt-0.5">{inspection.maxWindKts} KTS</div>
+                <div className={`font-bold mt-0.5 ${inspection.maxWindKts === null || inspection.maxWindKts === undefined ? 'text-slate-500' : 'text-cyan-300'}`}>{inspection.maxWindKts === null || inspection.maxWindKts === undefined ? 'NOT OBSERVED' : `${inspection.maxWindKts} KTS`}</div>
               </div>
               <div>
                 <div className="text-[8px] text-slate-400 uppercase">CENTRAL PRESSURE</div>
-                <div className="text-slate-200 font-bold mt-0.5">{inspection.centralPressureMb} MB</div>
+                <div className={`font-bold mt-0.5 ${inspection.centralPressureMb === null || inspection.centralPressureMb === undefined ? 'text-slate-500' : 'text-slate-200'}`}>{inspection.centralPressureMb === null || inspection.centralPressureMb === undefined ? 'NOT OBSERVED' : `${inspection.centralPressureMb} MB`}</div>
               </div>
               <div className="text-right">
                 <div className="text-[8px] text-slate-400 uppercase">COASTAL DISTANCE</div>
-                <div className="text-amber-300 font-bold mt-0.5">{inspection.distanceToCoastKm} KM</div>
+                <div className={`font-bold mt-0.5 ${inspection.distanceToCoastKm === null || inspection.distanceToCoastKm === undefined ? 'text-slate-500' : 'text-amber-300'}`}>{inspection.distanceToCoastKm === null || inspection.distanceToCoastKm === undefined ? 'NOT OBSERVED' : `${inspection.distanceToCoastKm} KM`}</div>
               </div>
             </div>
           </div>
@@ -330,6 +346,15 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
               <span>DYNAMIC LEGEND ({legendBounds?.unit || activeLayer.unit || 'UNITS'})</span>
               <span className="text-slate-300 font-bold">
                 {isSimulated ? 'PARAMETRIC RANGE' : 'INCOIS REAL DATA BOUNDS'}
+              </span>
+            </div>
+            {/* The legend describes one grid, and the grid has a date. */}
+            <div className="flex justify-between text-slate-400 font-mono" data-testid="legend-data-date">
+              <span>DATA DATE:</span>
+              <span className="text-cyan-300 font-bold">
+                {legendBounds?.timestamp
+                  ? formatTime(legendBounds.timestamp)
+                  : 'NO DATE — LAYER NOT LOADED'}
               </span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-gradient-to-r from-blue-600 via-teal-400 to-rose-500 opacity-80" />

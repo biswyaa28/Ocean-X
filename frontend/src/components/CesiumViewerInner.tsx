@@ -1,9 +1,18 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import * as Cesium from 'cesium';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import Cesium from '../lib/cesiumRuntime';
+// Type-only namespace import: fully erased at compile time, so Cesium is never bundled.
+import type * as CesiumTypes from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import { Cyclone, Station, GISLayer, ArgoProfile, AstronomicalData } from '../types/oceanlens';
+import {
+  ArgoMatchupResponse,
+  Cyclone,
+  GISLayer,
+  ArgoProfile,
+  AstronomicalData,
+  type FlyToTarget,
+} from '../types/oceanlens';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
 import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
@@ -13,16 +22,61 @@ import {
 } from '../utils/depthSliceViz';
 import {
   DepthSliceRenderOptions,
-  generateLayerImageDataUrlCached,
-  generateDepthSliceImageDataUrlCached,
+  generateLayerImageSourceCached,
+  generateDepthSliceImageSourceCached,
 } from '../utils/rasterGen';
 import { perfMonitor } from '../utils/perfMonitor';
+import { observedRadii, cycloneEyeLabel } from '../utils/cycloneObservation';
+import { formatModelDate } from '../utils/modelTime';
+import { modelDepthLabel, type ModelDepthAxis } from '../utils/modelDepthLabel';
+import {
+  CLASSIC_PALETTE_ID,
+  getPaletteForVariable,
+  samplePalette,
+} from '../utils/scientificPalettes';
+import {
+  RIBBON_DEFAULT_EXAGGERATION,
+  ribbonDepthTicks,
+  ribbonHeightM,
+  ribbonModelTooltip,
+  ribbonPointTooltip,
+  type ArgoRibbonSceneData,
+  type RibbonModelMarker,
+  type RibbonPoint,
+  type RibbonVariable,
+} from '../utils/argoProfileRibbon';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
 }
 
-export function safeJulianDate(timestampStr: string): Cesium.JulianDate {
+/**
+ * Cesium types `LabelGraphics.show` and `.text` as `Property | boolean`, but at
+ * runtime the value is either a plain primitive (when assigned directly) or a
+ * `ConstantProperty` exposing getValue/setValue. Both shapes occur depending on
+ * how the entity was built, so both are handled here — structurally, rather than
+ * by casting to `any` and losing every type check around the call site.
+ */
+type CesiumProperty<T> = { getValue(): T | undefined; setValue(value: T): void };
+
+function readCesiumProperty<T>(owner: object, key: string): T | undefined {
+  const current = (owner as Record<string, unknown>)[key];
+  if (current && typeof (current as CesiumProperty<T>).getValue === 'function') {
+    return (current as CesiumProperty<T>).getValue();
+  }
+  return current as T | undefined;
+}
+
+function writeCesiumProperty<T>(owner: object, key: string, value: T): void {
+  const current = (owner as Record<string, unknown>)[key];
+  if (current && typeof (current as CesiumProperty<T>).setValue === 'function') {
+    (current as CesiumProperty<T>).setValue(value);
+    return;
+  }
+  (owner as Record<string, unknown>)[key] = value;
+}
+
+export function safeJulianDate(timestampStr: string): CesiumTypes.JulianDate {
   if (!timestampStr) return Cesium.JulianDate.now();
   try {
     let formatted = timestampStr.trim();
@@ -141,17 +195,33 @@ export function computeAstronomicalData(timestampStr: string, latDeg: number, lo
   };
 }
 
+/**
+ * Rendering constants for the selected-float profile ribbon.
+ *
+ * The ribbon's DEPTH is real: only the drawn HEIGHT is exaggerated, and the
+ * labels always carry the true depth. These numbers therefore describe how the
+ * ribbon is drawn, never what it measures.
+ */
+const RIBBON_WIDTH_PX = 5;
+/** Comfortable hover radius for the few-pixel-wide ribbon, in screen pixels. */
+const RIBBON_HOVER_RADIUS_PX = 16;
+/** Globe opacity while a ribbon is showing, so the sub-surface column is visible. */
+const RIBBON_GLOBE_ALPHA = 0.25;
+const RIBBON_CAMERA_PITCH_DEG = -38;
+/** Camera altitude floor: a few hundred km keeps a short profile legible. */
+const RIBBON_MIN_CAMERA_HEIGHT_M = 260_000;
+const RIBBON_CAMERA_SPAN_FACTOR = 2.2;
+
 interface CesiumViewerInnerProps {
   cyclone: Cyclone | null;
   currentTrackIndex: number;
-  stations: Station[];
   layers: GISLayer[];
   argoProfiles?: ArgoProfile[];
-  onSelectStation: (station: Station) => void;
+  selectedArgoProfile?: ArgoProfile | null;
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
-  targetLocation?: { lat: number; lon: number; height?: number } | null;
+  targetLocation?: FlyToTarget | null;
   timestamp?: string;
   depthSliceVisible?: boolean;
   depthSlicePayload?: DepthSlicePayload | null;
@@ -167,15 +237,30 @@ interface CesiumViewerInnerProps {
   currentFieldStatusReason?: string | null;
   /** Backend metadata for the current field (provenance chip). */
   currentFieldMetadata?: DepthSlicePayload | null;
+  /** Matchup of the selected float, used only to place and label model markers. */
+  argoRibbonMatchup?: ArgoMatchupResponse | null;
+  /**
+   * Precomputed ribbon for the selected float: the decimated measured levels,
+   * the model markers and why nothing is drawn if that is the case. Built by the
+   * page so the 3D scene and the control panel read the SAME numbers.
+   */
+  argoRibbon?: ArgoRibbonSceneData | null;
+  /** Measured quantity the ribbon is coloured by. */
+  ribbonVariable?: RibbonVariable;
+  /** Palette id for the ribbon's colour transfer function. */
+  ribbonPalette?: string;
+  /** Vertical exaggeration applied to DRAWN depth only. */
+  ribbonExaggeration?: number;
+  /** Incremented by the reset action to re-fly to the ribbon. */
+  ribbonResetToken?: number;
 }
 
 export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   cyclone,
   currentTrackIndex,
-  stations,
   layers,
   argoProfiles = [],
-  onSelectStation,
+  selectedArgoProfile = null,
   onSelectArgoProfile,
   onInspectPoint,
   onAstronomicalUpdate,
@@ -189,22 +274,48 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   currentFieldStatus = 'SIMULATED',
   currentFieldStatusReason = null,
   currentFieldMetadata = null,
+  argoRibbonMatchup = null,
+  argoRibbon = null,
+  ribbonVariable = 'temperature_c',
+  ribbonPalette = CLASSIC_PALETTE_ID,
+  ribbonExaggeration = RIBBON_DEFAULT_EXAGGERATION,
+  ribbonResetToken = 0,
 }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<Cesium.Viewer | null>(null);
-  const [viewerInstance, setViewerInstance] = useState<Cesium.Viewer | null>(null);
+  const viewerRef = useRef<CesiumTypes.Viewer | null>(null);
+  const [viewerInstance, setViewerInstance] = useState<CesiumTypes.Viewer | null>(null);
   const onInspectPointRef = useRef(onInspectPoint);
-  const onSelectStationRef = useRef(onSelectStation);
   const onSelectArgoProfileRef = useRef(onSelectArgoProfile);
-  const rasterLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const rasterLayerRef = useRef<CesiumTypes.ImageryLayer | null>(null);
   // Dedicated imagery layer for the HYCOM model depth slice (Phase 1B).
   // Fully separate from the surface rasterLayerRef so surface behavior and
   // depth-slice behavior never remove each other's layers.
-  const depthSliceLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const depthSliceLayerRef = useRef<CesiumTypes.ImageryLayer | null>(null);
+
+  // Phase 2B — on-demand rendering invalidation + raster resource lifecycle.
+  //
+  // `requestRenderRef` is the single explicit invalidation entry point used by
+  // every state change that mutates the Cesium scene but that Cesium does NOT
+  // detect by itself (in-place entity updates, imagery opacity, ...). It is
+  // deliberately NOT called from the particle overlay's animation loop.
+  const requestRenderRef = useRef<() => void>(() => {});
+  // Removes the scene.postRender frame listener (instrumentation).
+  const postRenderRemoveRef = useRef<(() => void) | null>(null);
+  // Releases the object URL backing each raster imagery layer. Held per layer
+  // so replacing/removing a layer frees its Blob URL exactly once.
+  const rasterSourceReleaseRef = useRef<(() => void) | null>(null);
+  const depthSliceSourceReleaseRef = useRef<(() => void) | null>(null);
+
+  const releaseRasterSource = useCallback(() => {
+    if (rasterSourceReleaseRef.current) {
+      rasterSourceReleaseRef.current();
+      rasterSourceReleaseRef.current = null;
+    }
+  }, []);
 
   // Persistent keyed entity registry: avoids destructive removeAll() churn.
-  const entityRegistryRef = useRef<Map<string, Cesium.Entity>>(new Map());
+  const entityRegistryRef = useRef<Map<string, CesiumTypes.Entity>>(new Map());
   // Signatures used to detect when a keyed entity's *structure* changes
   // (e.g. a different cyclone) and must be rebuilt rather than updated in place.
   const entitySigRef = useRef<Map<string, string>>(new Map());
@@ -214,13 +325,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     onInspectPointRef.current = onInspectPoint;
   }, [onInspectPoint]);
   useEffect(() => {
-    onSelectStationRef.current = onSelectStation;
-  }, [onSelectStation]);
-  useEffect(() => {
     onSelectArgoProfileRef.current = onSelectArgoProfile;
   }, [onSelectArgoProfile]);
 
-  // Dynamic Mouse Hover Tooltip State
+  // Dynamic Mouse Hover State (Tooltip + Float Label Focus)
+  const [hoveredProfileId, setHoveredProfileId] = useState<string | null>(null);
   const [hoverTooltip, setHoverTooltip] = useState<{
     visible: boolean;
     x: number;
@@ -228,8 +337,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     title: string;
     cycloneName?: string;
     category?: string;
-    maxWindKts?: number;
-    centralPressureMb?: number;
+    maxWindKts?: number | null;
+    centralPressureMb?: number | null;
     lat?: number;
     lon?: number;
     timestamp?: string;
@@ -244,11 +353,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
    * If the structure signature changes, the entity is rebuilt.
    */
   const acquireEntity = useCallback((
-    viewer: Cesium.Viewer,
+    viewer: CesiumTypes.Viewer,
     key: string,
     signature: string,
-    build: () => Cesium.Entity.ConstructorOptions
-  ): Cesium.Entity => {
+    build: () => CesiumTypes.Entity.ConstructorOptions
+  ): CesiumTypes.Entity => {
     const registry = entityRegistryRef.current;
     const sigs = entitySigRef.current;
     const existing = registry.get(key);
@@ -271,6 +380,13 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
 
+    // Captured once, up front, and reused by the teardown below. Neither ref is
+    // ever reassigned (both are mutated in place), so these stay the exact
+    // registries this viewer populated — reading .current during cleanup would
+    // only look as if it could hand back a different map.
+    const registry = entityRegistryRef.current;
+    const sigs = entitySigRef.current;
+
     Cesium.Ion.defaultAccessToken = process.env.NEXT_PUBLIC_CESIUM_TOKEN || '';
 
     try {
@@ -283,6 +399,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             credit: 'Esri World Imagery',
           })
         ),
+        // Phase 2B — on-demand rendering. Cesium now only draws a frame when
+        // something it can detect changed (camera, clock time, imagery/terrain
+        // tile arrivals, explicit scene.requestRender()). Application state
+        // changes that Cesium cannot detect are invalidated explicitly through
+        // requestRenderRef below — see the "render invalidation" notes.
+        //
+        // maximumRenderTimeChange is 0 s (Cesium's default too): ANY change of
+        // clock simulation time requests a frame, so the time-dependent scene
+        // (sun light, celestial bodies, atmosphere) still redraws whenever the
+        // timeline timestamp advances. The clock itself never animates —
+        // shouldAnimate is always false and currentTime is only ever assigned
+        // from the application timestamp — so a static clock requests zero idle
+        // frames.
+        requestRenderMode: true,
+        maximumRenderTimeChange: 0.0,
         baseLayerPicker: false,
         geocoder: false,
         homeButton: false,
@@ -293,6 +424,20 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         animation: false,
         navigationHelpButton: false,
         fullscreenButton: false,
+      });
+
+      // Phase 2B: single explicit invalidation entry point + real frame counter.
+      // scene.postRender only fires for frames Cesium actually drew, so the
+      // counter measures the idle/interaction render frequency directly.
+      requestRenderRef.current = () => {
+        const currentViewer = viewerRef.current;
+        if (currentViewer && !currentViewer.isDestroyed()) {
+          currentViewer.scene.requestRender();
+          perfMonitor.recordCesiumRenderRequest();
+        }
+      };
+      postRenderRemoveRef.current = viewer.scene.postRender.addEventListener(() => {
+        perfMonitor.recordCesiumFrame();
       });
 
       // Add Place Names & Geographic Labels Overlay (Requirement 2)
@@ -359,18 +504,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       viewerRef.current = viewer;
       setViewerInstance(viewer);
 
-      // Event Handler for Station/Argo Clicks, Inspection & Dynamic Canvas Tooltips
+      // Phase 2B: the scene properties above (lighting, atmosphere, sun/moon,
+      // fog, sky box, background) are applied outside Cesium's change tracking,
+      // so the first invalidation is explicit. Camera flyTo + tile arrivals
+      // keep rendering afterwards until the globe is fully drawn.
+      requestRenderRef.current();
+
+      // Event Handler for Argo Clicks, Inspection & Dynamic Canvas Tooltips
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
       // Click Handler
-      handler.setInputAction((click: { position: Cesium.Cartesian2 }) => {
+      handler.setInputAction((click: { position: CesiumTypes.Cartesian2 }) => {
         const pickedObject = viewer.scene.pick(click.position);
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
-          if (props.stationData) {
-            onSelectStationRef.current(props.stationData.getValue());
-            return;
-          } else if (props.argoData && onSelectArgoProfileRef.current) {
+          if (props.argoData && onSelectArgoProfileRef.current) {
             onSelectArgoProfileRef.current(props.argoData.getValue());
             return;
           }
@@ -391,13 +539,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         }
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-      // Mouse Move Handler for Dynamic Interactive Map Tooltips (Requirement 1)
-      handler.setInputAction((movement: { endPosition: Cesium.Cartesian2 }) => {
-        if (!movement.endPosition) {
-          setHoverTooltip(null);
-          return;
-        }
-        const pickedObject = viewer.scene.pick(movement.endPosition);
+      // Mouse Move Handler for Dynamic Interactive Map Tooltips with RAF Throttling (Phase 2A)
+      let pendingPickRaf: number | null = null;
+      let latestEndPosition: CesiumTypes.Cartesian2 | null = null;
+
+      const processHoverPick = () => {
+        pendingPickRaf = null;
+        if (!latestEndPosition || !viewer || viewer.isDestroyed()) return;
+
+        const endPosition = latestEndPosition;
+        perfMonitor.recordHoverPick();
+
+        const pickedObject = viewer.scene.pick(endPosition);
         if (Cesium.defined(pickedObject) && pickedObject.id && pickedObject.id.properties) {
           const props = pickedObject.id.properties;
           if (props.trackNodeData) {
@@ -407,11 +560,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
             setHoverTooltip({
               visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
+              x: endPosition.x,
+              y: endPosition.y,
               title: `TRACK NODE #${nodeIdx}`,
               cycloneName: cName,
-              category: node.category || 'Cyclonic Storm',
+              category: node.category ?? undefined,
               maxWindKts: node.maxWindKts,
               centralPressureMb: node.centralPressureMb,
               lat: node.latitude,
@@ -421,25 +574,13 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               dataStatus: 'HISTORICAL RECORD',
             });
             return;
-          } else if (props.stationData) {
-            const st = props.stationData.getValue();
-            setHoverTooltip({
-              visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
-              title: `STATION: ${st.name}`,
-              lat: st.latitude,
-              lon: st.longitude,
-              source: 'INCOIS Coastal Buoy Network',
-              dataStatus: st.dataStatus === 'SIMULATED' ? 'SIMULATED TELEMETRY' : `${st.dataStatus} TELEMETRY`,
-            });
-            return;
           } else if (props.argoData) {
             const argo = props.argoData.getValue();
+            setHoveredProfileId(argo.profile_id ? String(argo.profile_id) : String(argo.float_id));
             setHoverTooltip({
               visible: true,
-              x: movement.endPosition.x,
-              y: movement.endPosition.y,
+              x: endPosition.x,
+              y: endPosition.y,
               title: `ARGO FLOAT ${argo.float_id}`,
               lat: argo.latitude,
               lon: argo.longitude,
@@ -451,13 +592,46 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           }
         }
 
+        setHoveredProfileId(null);
         setHoverTooltip(null);
+      };
+
+      handler.setInputAction((movement: { endPosition: CesiumTypes.Cartesian2 }) => {
+        if (!movement.endPosition) {
+          if (pendingPickRaf !== null) {
+            cancelAnimationFrame(pendingPickRaf);
+            pendingPickRaf = null;
+          }
+          latestEndPosition = null;
+          setHoveredProfileId(null);
+          setHoverTooltip(null);
+          return;
+        }
+
+        latestEndPosition = movement.endPosition;
+        if (pendingPickRaf === null) {
+          pendingPickRaf = requestAnimationFrame(processHoverPick);
+        }
       }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
       return () => {
+        if (pendingPickRaf !== null) {
+          cancelAnimationFrame(pendingPickRaf);
+          pendingPickRaf = null;
+        }
         handler.destroy();
-        const registry = entityRegistryRef.current;
-        const sigs = entitySigRef.current;
+        // Phase 2B: stop the frame instrumentation and drop every raster
+        // object URL so nothing outlives the viewer.
+        if (postRenderRemoveRef.current) {
+          postRenderRemoveRef.current();
+          postRenderRemoveRef.current = null;
+        }
+        requestRenderRef.current = () => {};
+        releaseRasterSource();
+        if (depthSliceSourceReleaseRef.current) {
+          depthSliceSourceReleaseRef.current();
+          depthSliceSourceReleaseRef.current = null;
+        }
         if (viewerRef.current && !viewerRef.current.isDestroyed()) {
           viewerRef.current.destroy();
           viewerRef.current = null;
@@ -469,14 +643,14 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     } catch (err) {
       console.error('Cesium Globe initialization fallback:', err);
     }
-  }, []);
+  }, [releaseRasterSource]);
 
   // Handle Dynamic Camera FlyTo on Target Location Selection (including Sun & Moon targeting)
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || !targetLocation) return;
 
-    if ((targetLocation as { isSun?: boolean }).isSun && timestamp) {
+    if (targetLocation.isSun && timestamp) {
       const julianDate = safeJulianDate(timestamp);
       const sunPosIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
       const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
@@ -495,7 +669,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       return;
     }
 
-    if ((targetLocation as { isMoon?: boolean }).isMoon && timestamp) {
+    if (targetLocation.isMoon && timestamp) {
       const julianDate = safeJulianDate(timestamp);
       const moonPosIcrf = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(julianDate);
       const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
@@ -526,7 +700,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     });
   }, [targetLocation, timestamp]);
 
+  // Phase 2B — camera render invalidation.
+  //
+  // Camera movement / zoom / rotation needs no custom listener: Cesium's own
+  // render loop (Scene.render → View.checkForCameraUpdates) detects any camera
+  // change every frame and forces a frame, so interaction stays perfectly
+  // smooth with zero added listeners or throttling. The effects above only
+  // flyTo programmatically, which is camera movement too.
+  //
   // Synchronize Cesium JulianDate Clock with OceanLens Timeline Timestamp (Requirements 2, 3, 4)
+  //
+  // Phase 2B (requestRenderMode): the application clock NEVER animates
+  // (`shouldAnimate` is always false) — it is only ever set here from the
+  // timeline timestamp. Scientific time semantics are unchanged; the explicit
+  // requestRender below guarantees the time-dependent visuals (sun light,
+  // celestial bodies, atmosphere) are redrawn on every timeline change.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || !timestamp) return;
@@ -535,6 +723,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       const julianDate = safeJulianDate(timestamp);
       viewer.clock.currentTime = julianDate;
       viewer.clock.shouldAnimate = false;
+      requestRenderRef.current();
     } catch (err) {
       console.error('Error synchronizing Cesium JulianDate clock:', err);
     }
@@ -578,7 +767,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     // 1. CYCLONE STORM VISUAL ANCHOR
     if (cyclone && showCycloneLayer) {
-      const positions: Cesium.Cartesian3[] = [];
+      const positions: CesiumTypes.Cartesian3[] = [];
       const trackPoints = cyclone.track;
 
       trackPoints.forEach((pt) => {
@@ -624,7 +813,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           })
         );
         // In-place update of positions on timeline scrub
-        (histEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue(historyPositions);
+        (histEntity.polyline?.positions as CesiumTypes.ConstantProperty | undefined)?.setValue(historyPositions);
         histEntity.show = true;
         activeKeys.add('cyclone-track-historical');
       }
@@ -656,14 +845,14 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
         // In-place style update for the "current" highlight
         if (nodeEntity.point) {
-          (nodeEntity.point.pixelSize as Cesium.ConstantProperty).setValue(isCurrent ? 12 : 7);
-          (nodeEntity.point.color as Cesium.ConstantProperty).setValue(
+          (nodeEntity.point.pixelSize as CesiumTypes.ConstantProperty).setValue(isCurrent ? 12 : 7);
+          (nodeEntity.point.color as CesiumTypes.ConstantProperty).setValue(
             isCurrent ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.85)
           );
-          (nodeEntity.point.outlineColor as Cesium.ConstantProperty).setValue(
+          (nodeEntity.point.outlineColor as CesiumTypes.ConstantProperty).setValue(
             isCurrent ? Cesium.Color.fromCssColorString('#f43f5e') : Cesium.Color.BLACK
           );
-          (nodeEntity.point.outlineWidth as Cesium.ConstantProperty).setValue(isCurrent ? 3 : 1.5);
+          (nodeEntity.point.outlineWidth as CesiumTypes.ConstantProperty).setValue(isCurrent ? 3 : 1.5);
         }
         nodeEntity.show = true;
         activeKeys.add(key);
@@ -712,7 +901,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (sunEntity.position as Cesium.ConstantPositionProperty).setValue(sunSpacePos);
+          (sunEntity.position as CesiumTypes.ConstantPositionProperty).setValue(sunSpacePos);
           sunEntity.show = true;
           activeKeys.add('celestial-sun');
 
@@ -734,7 +923,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (rayEntity.polyline?.positions as Cesium.ConstantProperty | undefined)?.setValue([sunSpacePos, earthSurfacePoint]);
+          (rayEntity.polyline?.positions as CesiumTypes.ConstantProperty | undefined)?.setValue([sunSpacePos, earthSurfacePoint]);
           rayEntity.show = true;
           activeKeys.add('celestial-sun-rays');
         }
@@ -776,7 +965,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               },
             })
           );
-          (moonEntity.position as Cesium.ConstantPositionProperty).setValue(moonSpacePos);
+          (moonEntity.position as CesiumTypes.ConstantPositionProperty).setValue(moonSpacePos);
           moonEntity.show = true;
           activeKeys.add('celestial-moon');
         }
@@ -807,56 +996,65 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
-        (eyeEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        (eyeEntity.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
         eyeEntity.show = true;
         activeKeys.add('cyclone-eye-core');
 
-        // Inner Core Wind Radius Ring (50kt Concentric Ring)
-        const ring50 = acquireEntity(
-          viewer,
-          'cyclone-ring-50kt',
-          `r50|${cyclone.id}|${cyclone.windRadius.r50ktsKm}`,
-          () => ({
-            name: 'Inner Core Intensity Ring (50kt)',
-            position: eyePos,
-            ellipse: {
-              semiMajorAxis: cyclone.windRadius.r50ktsKm * 1000,
-              semiMinorAxis: cyclone.windRadius.r50ktsKm * 1000,
-              material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
-              outline: true,
-              outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
-              outlineWidth: 1.5,
-            },
-          })
-        );
-        (ring50.position as Cesium.ConstantPositionProperty).setValue(eyePos);
-        ring50.show = true;
-        activeKeys.add('cyclone-ring-50kt');
+        // Wind-radius rings are drawn ONLY from observed quadrant radii. IBTrACS
+        // reports them for a minority of track points, so a null radius means
+        // "not observed" and we draw nothing rather than inventing a ring size.
+        const r50 = observedRadii(cyclone.windRadius).r50ktsKm;
+        if (r50 !== null) {
+          const ring50 = acquireEntity(
+            viewer,
+            'cyclone-ring-50kt',
+            `r50|${cyclone.id}|${r50}`,
+            () => ({
+              name: 'Inner Core Intensity Ring (50kt, observed)',
+              position: eyePos,
+              ellipse: {
+                semiMajorAxis: r50 * 1000,
+                semiMinorAxis: r50 * 1000,
+                material: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.12),
+                outline: true,
+                outlineColor: Cesium.Color.fromCssColorString('#f43f5e').withAlpha(0.75),
+                outlineWidth: 1.5,
+              },
+            })
+          );
+          (ring50.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
+          ring50.show = true;
+          activeKeys.add('cyclone-ring-50kt');
+        }
 
-        // Outer Wind Radius Ring (34kt Concentric Ring)
-        const ring34 = acquireEntity(
-          viewer,
-          'cyclone-ring-34kt',
-          `r34|${cyclone.id}|${cyclone.windRadius.r34ktsKm}`,
-          () => ({
-            name: 'Outer Wind Intensity Ring (34kt)',
-            position: eyePos,
-            ellipse: {
-              semiMajorAxis: cyclone.windRadius.r34ktsKm * 1000,
-              semiMinorAxis: cyclone.windRadius.r34ktsKm * 1000,
-              material: Cesium.Color.TEAL.withAlpha(0.06),
-              outline: true,
-              outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
-              outlineWidth: 1.0,
-            },
-          })
-        );
-        (ring34.position as Cesium.ConstantPositionProperty).setValue(eyePos);
-        ring34.show = true;
-        activeKeys.add('cyclone-ring-34kt');
+        const r34 = observedRadii(cyclone.windRadius).r34ktsKm;
+        if (r34 !== null) {
+          const ring34 = acquireEntity(
+            viewer,
+            'cyclone-ring-34kt',
+            `r34|${cyclone.id}|${r34}`,
+            () => ({
+              name: 'Outer Wind Intensity Ring (34kt, observed)',
+              position: eyePos,
+              ellipse: {
+                semiMajorAxis: r34 * 1000,
+                semiMinorAxis: r34 * 1000,
+                material: Cesium.Color.TEAL.withAlpha(0.06),
+                outline: true,
+                outlineColor: Cesium.Color.TEAL.withAlpha(0.5),
+                outlineWidth: 1.0,
+              },
+            })
+          );
+          (ring34.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
+          ring34.show = true;
+          activeKeys.add('cyclone-ring-34kt');
+        }
 
-        // Directional Movement Vector Indicator Tag Pin
-        const eyeLabelText = `EYE OF STORM: ${cyclone.name}\n${activePt.category.toUpperCase()} · ${activePt.maxWindKts} KT`;
+        // Directional Movement Vector Indicator Tag Pin.
+        // Category and wind are nullable: a missing observation must read as
+        // "not observed" rather than "null KT" or a crash on .toUpperCase().
+        const eyeLabelText = cycloneEyeLabel(cyclone.name, activePt);
         const pinEntity = acquireEntity(
           viewer,
           'cyclone-eye-pin',
@@ -879,9 +1077,9 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
-        (pinEntity.position as Cesium.ConstantPositionProperty).setValue(eyePos);
+        (pinEntity.position as CesiumTypes.ConstantPositionProperty).setValue(eyePos);
         if (pinEntity.label?.text) {
-          (pinEntity.label.text as Cesium.ConstantProperty).setValue(eyeLabelText);
+          (pinEntity.label.text as CesiumTypes.ConstantProperty).setValue(eyeLabelText);
         }
         pinEntity.show = true;
         activeKeys.add('cyclone-eye-pin');
@@ -937,55 +1135,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       activeKeys.add('risk-sundarbans-sector');
     }
 
-    // 3. MONITORING STATIONS
-    if (isLayerActive('stations')) {
-      stations.forEach((st) => {
-        const haloKey = `station-halo-${st.id}`;
-        const haloEntity = acquireEntity(
-          viewer,
-          haloKey,
-          `halo|${st.id}|${st.latitude}|${st.longitude}`,
-          () => ({
-            name: `${st.name} Outer Halo`,
-            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-            ellipse: {
-              semiMajorAxis: 18000,
-              semiMinorAxis: 18000,
-              material: Cesium.Color.WHITE.withAlpha(0.04),
-              outline: true,
-              outlineColor: Cesium.Color.WHITE.withAlpha(0.4),
-              outlineWidth: 1.0,
-            },
-          })
-        );
-        haloEntity.show = true;
-        activeKeys.add(haloKey);
-
-        const pointKey = `station-${st.id}`;
-        const pointEntity = acquireEntity(
-          viewer,
-          pointKey,
-          `station|${st.id}|${st.latitude}|${st.longitude}`,
-          () => ({
-            name: st.name,
-            position: Cesium.Cartesian3.fromDegrees(st.longitude, st.latitude),
-            point: {
-              pixelSize: 6,
-              color: Cesium.Color.WHITE,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 1.5,
-            },
-            properties: {
-              stationData: st,
-            },
-          })
-        );
-        pointEntity.show = true;
-        activeKeys.add(pointKey);
-      });
-    }
-
-    // 4. REAL ARGO OBSERVATIONS LAYER
+    // 3. REAL ARGO OBSERVATIONS LAYER
     if (isLayerActive('argo') && argoProfiles) {
       argoProfiles.forEach((p) => {
         const haloKey = `argo-halo-${p.profile_id}`;
@@ -1009,6 +1159,18 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         haloEntity.show = true;
         activeKeys.add(haloKey);
 
+        const isSelected = Boolean(
+          selectedArgoProfile &&
+            (selectedArgoProfile.profile_id === p.profile_id ||
+              selectedArgoProfile.float_id === p.float_id)
+        );
+        const isHovered = Boolean(
+          hoveredProfileId &&
+            (hoveredProfileId === p.profile_id ||
+              hoveredProfileId === String(p.float_id))
+        );
+        const showLabel = isSelected || isHovered;
+
         const pointKey = `argo-${p.profile_id}`;
         const pointEntity = acquireEntity(
           viewer,
@@ -1024,7 +1186,8 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               outlineWidth: 2,
             },
             label: {
-              text: `ARGO FLOAT ${p.float_id}\nREAL SOURCE • INGESTION PENDING`,
+              show: showLabel,
+              text: `ARGO FLOAT ${p.float_id}\nREAL · GDAC`,
               font: '9px IBM Plex Mono, monospace',
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               outlineWidth: 2,
@@ -1041,6 +1204,13 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             },
           })
         );
+        if (pointEntity.label) {
+          writeCesiumProperty(pointEntity.label, 'show', showLabel);
+          if (pointEntity.label.text) {
+            const labelText = `ARGO FLOAT ${p.float_id}\nREAL · GDAC`;
+            writeCesiumProperty(pointEntity.label, 'text', labelText);
+          }
+        }
         pointEntity.show = true;
         activeKeys.add(pointKey);
       });
@@ -1056,11 +1226,65 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     perfMonitor.setEntityCount(registry.size);
     perfMonitor.recordTimelineUpdate(performance.now() - t0);
-  }, [cyclone, currentTrackIndex, stations, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
+
+    // Phase 2B (requestRenderMode): entity *in-place* updates (position,
+    // visibility, pixel size, label text, ...) are NOT scene-invalidating
+    // events in Cesium — EntityCollection.collectionChanged does not request a
+    // frame — so cyclone geometry, track nodes, Sun/Moon and Argo
+    // entity changes all invalidate here explicitly. (Add/remove of the entities
+    // themselves and camera movement are auto-detected by Cesium.)
+    requestRenderRef.current();
+    // hoveredProfileId and selectedArgoProfile are read above only to give a
+    // freshly created entity the right initial label visibility. They are
+    // deliberately NOT dependencies: the effect below ("Dynamically toggle Argo
+    // float text label visibility on hover / selection") keeps them correct on
+    // change without rebuilding entities. Listing them here would re-run the
+    // entire scene pass on every mouse move over a float.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cyclone, currentTrackIndex, layers, argoProfiles, timestamp, isLayerActive, acquireEntity]);
+
+  // Dynamically toggle Argo float text label visibility on hover / selection
+  // without rebuilding the entity or re-running the full scene pass.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const registry = entityRegistryRef.current;
+    let changed = false;
+
+    argoProfiles.forEach((p) => {
+      const pointKey = `argo-${p.profile_id}`;
+      const pointEntity = registry.get(pointKey);
+      if (pointEntity && pointEntity.label) {
+        const isSelected = Boolean(
+          selectedArgoProfile &&
+            (selectedArgoProfile.profile_id === p.profile_id ||
+              selectedArgoProfile.float_id === p.float_id)
+        );
+        const isHovered = Boolean(
+          hoveredProfileId &&
+            (hoveredProfileId === p.profile_id ||
+              hoveredProfileId === String(p.float_id))
+        );
+        const shouldShow = isSelected || isHovered;
+
+        const currentShow = readCesiumProperty<boolean>(pointEntity.label, 'show');
+
+        if (currentShow !== shouldShow) {
+          writeCesiumProperty(pointEntity.label, 'show', shouldShow);
+          changed = true;
+        }
+      }
+    });
+
+    if (changed) {
+      requestRenderRef.current();
+    }
+  }, [hoveredProfileId, selectedArgoProfile, argoProfiles]);
 
   // Dynamic Spatial Raster Heatmap Overlay (SST / Salinity / TCHP)
-  // Fetches layer slices with abort-based cancellation and reuses cached
-  // raster Data URLs for already-loaded timestamp/layer combinations.
+  // Phase 2B: raster encoding is now asynchronous (PNG Blob → object URL), so
+  // superseded generations are discarded instead of briefly flashing, and the
+  // layer's object URL is released on every replace/unmount.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
@@ -1070,12 +1294,30 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const showTCHP = isLayerActive('tchp');
 
     const abortController = new AbortController();
+    let active = true;
 
     if (!showSST && !showSaln && !showTCHP) {
       if (rasterLayerRef.current) {
         viewer.imageryLayers.remove(rasterLayerRef.current);
         rasterLayerRef.current = null;
+        requestRenderRef.current();
       }
+      releaseRasterSource();
+      return () => {
+        abortController.abort();
+      };
+    }
+
+    // A model layer is only drawn at a time it can be labelled with. Without
+    // one there is nothing to draw yet, and requesting without it would fetch
+    // the grid for the backend's default time instead.
+    if (!timestamp) {
+      if (rasterLayerRef.current) {
+        viewer.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
+        requestRenderRef.current();
+      }
+      releaseRasterSource();
       return () => {
         abortController.abort();
       };
@@ -1083,35 +1325,34 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
 
     const targetLayer: 'sst' | 'salinity' | 'tchp' = showSST ? 'sst' : showSaln ? 'salinity' : 'tchp';
 
-    let active = true;
-
     async function loadRasterOverlay() {
-      const fetchT0 = performance.now();
       let data: Awaited<ReturnType<typeof apiProvider.getLayerData>> = null;
       try {
+        // Shared with the legend bounds fetch in page.tsx: one request, one grid.
         data = await apiProvider.getLayerData(targetLayer, timestamp, 3, abortController.signal);
       } catch {
         return; // aborted or failed
       }
-      if (!active || !data || !data.grid || !data.grid.values || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (!active || !data || !data.grid || !data.grid.values) return;
 
-      const { dataUrl, cacheHit, generationMs } = generateLayerImageDataUrlCached(
+      // Cache hit ⇒ pure lookup; miss ⇒ paint + one async PNG encode.
+      const source = await generateLayerImageSourceCached(
         targetLayer,
         data.grid.latitudes,
         data.grid.longitudes,
         data.grid.values,
         data.timestamp
       );
+      perfMonitor.recordRasterGen(source.generationMs, source.cacheHit);
+      perfMonitor.recordRasterSerialization(source.serializationMs, source.encoding);
 
-      perfMonitor.recordRasterGen(
-        cacheHit ? generationMs : (performance.now() - fetchT0),
-        cacheHit
-      );
-
-      if (!dataUrl || !active) return;
+      if (!active || !source.url || !viewerRef.current || viewerRef.current.isDestroyed()) {
+        source.release();
+        return;
+      }
 
       const provider = new Cesium.SingleTileImageryProvider({
-        url: dataUrl,
+        url: source.url,
         rectangle: Cesium.Rectangle.fromDegrees(
           data.bounds.minLon,
           data.bounds.minLat,
@@ -1122,14 +1363,26 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         tileHeight: 512,
       });
 
-      if (!active || !viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (!active || !viewerRef.current || viewerRef.current.isDestroyed()) {
+        source.release();
+        return;
+      }
 
+      // Atomic replace: remove the previous layer, free its object URL, then add
+      // the new one. The base imagery and the depth-slice layer are untouched.
       if (rasterLayerRef.current) {
         viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
+        rasterLayerRef.current = null;
       }
+      releaseRasterSource();
 
       rasterLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
       rasterLayerRef.current.alpha = 0.65;
+      rasterSourceReleaseRef.current = source.release;
+
+      // Phase 2B: imagery layer add/remove is auto-invalidating in Cesium, but
+      // the alpha assignment above is not — invalidate explicitly.
+      requestRenderRef.current();
     }
 
     loadRasterOverlay();
@@ -1140,9 +1393,11 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       if (viewerRef.current && !viewerRef.current.isDestroyed() && rasterLayerRef.current) {
         viewerRef.current.imageryLayers.remove(rasterLayerRef.current);
         rasterLayerRef.current = null;
+        requestRenderRef.current();
       }
+      releaseRasterSource();
     };
-  }, [layers, timestamp, isLayerActive]);
+  }, [layers, timestamp, isLayerActive, releaseRasterSource]);
 
 
   // ============================================================
@@ -1162,8 +1417,14 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const viewer = viewerRef.current;
     if (viewer && !viewer.isDestroyed() && depthSliceLayerRef.current) {
       viewer.imageryLayers.remove(depthSliceLayerRef.current);
+      requestRenderRef.current();
     }
     depthSliceLayerRef.current = null;
+    // Phase 2B: the imagery layer owned this raster's object URL — free it.
+    if (depthSliceSourceReleaseRef.current) {
+      depthSliceSourceReleaseRef.current();
+      depthSliceSourceReleaseRef.current = null;
+    }
   }, []);
 
   // Latest opacity for layer (re)creation without re-adding on change.
@@ -1175,6 +1436,9 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     depthSliceOpacityRef.current = depthSliceOpacity;
     if (depthSliceLayerRef.current) {
       depthSliceLayerRef.current.alpha = depthSliceOpacity;
+      // ImageryLayer.alpha is not a scene-invalidating change under
+      // requestRenderMode — request the frame explicitly.
+      requestRenderRef.current();
     }
   }, [depthSliceOpacity]);
 
@@ -1210,39 +1474,63 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         }
       : undefined;
 
-    const { dataUrl, cacheHit, generationMs } = generateDepthSliceImageDataUrlCached(
-      payload.variable,
-      payload.matched_depth_m,
-      payload.grid.latitudes,
-      payload.grid.longitudes,
-      values,
-      payload.timestamp,
-      renderOptions
-    );
+    // Phase 2B: encoding is asynchronous, so a generation that is superseded
+    // (rapid depth/variable/palette/timestamp changes, slice hidden, unmount)
+    // must NOT add its layer afterwards. This is what prevents a stale slice
+    // from reappearing or lingering underneath the active one.
+    let superseded = false;
 
-    perfMonitor.recordRasterGen(generationMs, cacheHit);
+    (async () => {
+      const sliceLatitudes = payload.grid.latitudes;
+      const sliceLongitudes = payload.grid.longitudes;
 
-    if (!dataUrl) return;
+      const source = await generateDepthSliceImageSourceCached(
+        payload.variable,
+        payload.matched_depth_m,
+        sliceLatitudes,
+        sliceLongitudes,
+        values,
+        payload.timestamp,
+        renderOptions
+      );
 
-    const provider = new Cesium.SingleTileImageryProvider({
-      url: dataUrl,
-      rectangle: Cesium.Rectangle.fromDegrees(
-        payload.bounds.minLon,
-        payload.bounds.minLat,
-        payload.bounds.maxLon,
-        payload.bounds.maxLat
-      ),
-      tileWidth: 512,
-      tileHeight: 512,
-    });
+      perfMonitor.recordRasterGen(source.generationMs, source.cacheHit);
+      perfMonitor.recordRasterSerialization(source.serializationMs, source.encoding);
 
-    if (!viewerRef.current || viewerRef.current.isDestroyed()) return;
+      if (superseded || !source.url) {
+        source.release();
+        return;
+      }
+      const currentViewer = viewerRef.current;
+      if (!currentViewer || currentViewer.isDestroyed()) {
+        source.release();
+        return;
+      }
 
-    // Atomic replace: remove the previous slice before adding the new one so
-    // old imagery never lingers underneath and layers never accumulate.
-    removeDepthSliceLayer();
-    depthSliceLayerRef.current = viewerRef.current.imageryLayers.addImageryProvider(provider);
-    depthSliceLayerRef.current.alpha = depthSliceOpacityRef.current;
+      const provider = new Cesium.SingleTileImageryProvider({
+        url: source.url,
+        rectangle: Cesium.Rectangle.fromDegrees(
+          payload.bounds.minLon,
+          payload.bounds.minLat,
+          payload.bounds.maxLon,
+          payload.bounds.maxLat
+        ),
+        tileWidth: 512,
+        tileHeight: 512,
+      });
+
+      // Atomic replace: remove the previous slice (and free its object URL)
+      // before adding the new one so old imagery never lingers underneath.
+      removeDepthSliceLayer();
+      depthSliceLayerRef.current = currentViewer.imageryLayers.addImageryProvider(provider);
+      depthSliceLayerRef.current.alpha = depthSliceOpacityRef.current;
+      depthSliceSourceReleaseRef.current = source.release;
+      requestRenderRef.current();
+    })();
+
+    return () => {
+      superseded = true;
+    };
   }, [depthSliceVisible, depthSlicePayload, depthSliceRender, removeDepthSliceLayer]);
 
   // Unmount cleanup: the depth-slice imagery layer dies with the viewer, but
@@ -1254,13 +1542,324 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
   }, []);
 
 
-  const showWind = isLayerActive('wind');
+  // The parametric wind layer was removed; only real currents are drawn.
+  const showWind = false;
   const showCurrents = isLayerActive('currents');
   const activePt = cyclone?.track[Math.min(currentTrackIndex, (cyclone?.track.length || 1) - 1)];
+
+  // ============================================================
+  // Selected float: vertical profile ribbon (additive)
+  //
+  // The whole feature is ONE effect with ONE cleanup, so selecting floats in a
+  // row cannot leave a ribbon, a marker or a globe setting behind.
+  //
+  // The ribbon is a PolylineCollection (one primitive per segment) rather than
+  // one entity per segment: ~100 polylines in one collection costs far less than
+  // 100 entities. Markers and depth ticks stay real entities so they keep labels
+  // and pick metadata. Total scene entities added: at most 6 + 6.
+  // ============================================================
+  /** Sampled axis vs the file's own labels, used to annotate model markers. */
+  const ribbonDepthAxis = useMemo<ModelDepthAxis | undefined>(
+    () =>
+      argoRibbonMatchup
+        ? {
+            modelDepths: argoRibbonMatchup.modelDepths,
+            storedFileDepths: argoRibbonMatchup.storedFileDepths,
+          }
+        : undefined,
+    [argoRibbonMatchup]
+  );
+
+  const [ribbonHover, setRibbonHover] = useState<string | null>(null);
+  const ribbonTeardownRef = useRef<(() => void) | null>(null);
+  const ribbonFlownProfileIdRef = useRef<string | null>(null);
+
+  const ribbonPaletteDefinition = useMemo(
+    () =>
+      getPaletteForVariable(
+        ribbonVariable === 'temperature_c' ? 'temperature' : 'salinity',
+        ribbonPalette
+      ),
+    [ribbonVariable, ribbonPalette]
+  );
+
+  // modelDepthLabel already appends "(file label N m)" when the file's own DEPTH
+  // disagrees with the sampled depth, so the marker's resolved file label is the
+  // only thing left to reconcile.
+  const markerDepthLabel = useCallback(
+    (depthM: number): string => modelDepthLabel(depthM, ribbonDepthAxis),
+    [ribbonDepthAxis]
+  );
+
+  useEffect(() => {
+    // Always tear the previous ribbon down first, so a changed variable,
+    // exaggeration, palette or profile can never stack a second one on top.
+    if (ribbonTeardownRef.current) {
+      ribbonTeardownRef.current();
+      ribbonTeardownRef.current = null;
+    }
+
+    const viewer = viewerRef.current;
+    const profile = selectedArgoProfile;
+    const data = argoRibbon;
+    if (!viewer || viewer.isDestroyed() || !profile || !data) return;
+    if (data.profile.points.length < 2) return;
+
+    const lat = profile.latitude;
+    const lon = profile.longitude;
+
+    // --- subsurface visibility ------------------------------------------------
+    // The ribbon hangs below the sea surface, so the globe above it has to be
+    // see-through. Previous settings are captured and restored exactly, so
+    // deselecting a float returns the scene to how the user had it.
+    const globe = viewer.scene.globe;
+    const previousTranslucency = {
+      enabled: globe.translucency.enabled,
+      frontFaceAlpha: globe.translucency.frontFaceAlpha,
+      backFaceAlpha: globe.translucency.backFaceAlpha,
+    };
+    globe.translucency.enabled = true;
+    globe.translucency.frontFaceAlpha = RIBBON_GLOBE_ALPHA;
+    globe.translucency.backFaceAlpha = RIBBON_GLOBE_ALPHA;
+
+    const positionAt = (depthM: number): CesiumTypes.Cartesian3 =>
+      Cesium.Cartesian3.fromDegrees(lon, lat, -ribbonHeightM(depthM, ribbonExaggeration));
+
+    // --- ribbon ---------------------------------------------------------------
+    // ONE primitive for the whole column, not one per segment:
+    //  - a single primitive with depth testing OFF is what makes a sub-surface
+    //    line visible through the globe. Neither PolylineGraphics nor
+    //    PolylineCollection expose a way to disable the depth test, so the
+    //    column is built as raw geometry with its own appearance.
+    //  - one primitive also keeps the entity/primitive count flat, which matters
+    //    because every extra scene object costs a frame.
+    const ribbonPositions = data.profile.points.map((point) => positionAt(point.depthM));
+    const ribbonColors = data.profile.points.map((point) => {
+      const { r, g, b } = samplePalette(ribbonPaletteDefinition, point.t);
+      return Cesium.Color.fromBytes(r, g, b, 255);
+    });
+    const ribbonPrimitive = viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: new Cesium.GeometryInstance({
+          geometry: new Cesium.PolylineGeometry({
+            positions: ribbonPositions,
+            width: RIBBON_WIDTH_PX,
+            // Straight segments: the ribbon must follow the measured levels, not
+            // curve between them.
+            arcType: Cesium.ArcType.NONE,
+            // Must be the APPEARANCE's own vertex format. Pairing the geometry
+            // with a different appearance's constant compiles, builds, and then
+            // silently renders one flat colour instead of the measured gradient.
+            vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
+            colors: ribbonColors,
+          }),
+        }),
+        appearance: new Cesium.PolylineColorAppearance({
+          // Per-vertex colours are interpolated along the polyline by this
+          // appearance, so the column reads as a continuous gradient between
+          // measured levels. PerInstanceColorAppearance is the documented
+          // general-purpose appearance but renders this geometry as nothing.
+          translucent: true,
+          renderState: {
+            depthTest: { enabled: false },
+          },
+        }),
+        asynchronous: false,
+      })
+    );
+
+    // --- depth ticks ----------------------------------------------------------
+    const createdEntities: CesiumTypes.Entity[] = [];
+    for (const tickM of ribbonDepthTicks(data.profile.maxDepthM)) {
+      createdEntities.push(
+        viewer.entities.add({
+          id: `argo-ribbon-tick-${profile.profile_id}-${tickM}`,
+          position: positionAt(tickM),
+          point: {
+            pixelSize: 4,
+            color: Cesium.Color.fromCssColorString('#7dd3fc').withAlpha(0.9),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: `${tickM} m`,
+            font: '9px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            fillColor: Cesium.Color.fromCssColorString('#bae6fd'),
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#080c14').withAlpha(0.85),
+            backgroundPadding: new Cesium.Cartesian2(4, 3),
+            // Depth ticks sit to the LEFT of the ribbon; the model markers and
+            // their labels sit to the right, so the two never overlap.
+            pixelOffset: new Cesium.Cartesian2(-52, -10),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        })
+      );
+    }
+
+    // --- model markers --------------------------------------------------------
+    for (const marker of data.markers) {
+      const { r, g, b } = samplePalette(ribbonPaletteDefinition, marker.t);
+      createdEntities.push(
+        viewer.entities.add({
+          id: `argo-ribbon-model-${profile.profile_id}-${marker.depthM}`,
+          position: positionAt(marker.depthM),
+          point: {
+            pixelSize: 11,
+            color: Cesium.Color.fromBytes(r, g, b, 255),
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: modelDepthLabel(marker.depthM, ribbonDepthAxis),
+            font: '8px IBM Plex Mono, monospace',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            outlineColor: Cesium.Color.BLACK,
+            fillColor: Cesium.Color.WHITE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString('#7c2d12').withAlpha(0.92),
+            backgroundPadding: new Cesium.Cartesian2(4, 3),
+            // Offset beside the ribbon so float and model never overlap.
+            pixelOffset: new Cesium.Cartesian2(52, 0),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          properties: { ribbonModelMarker: marker },
+        })
+      );
+    }
+
+    // --- hover ----------------------------------------------------------------
+    // A SECOND handler on the same canvas, deliberately not merged into the
+    // existing one: the ribbon owns its own tooltip state, so hovering it can
+    // never clear the cyclone/float tooltip and vice versa. Only one can be
+    // non-null at a time because they pick different objects.
+    const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    hoverHandler.setInputAction((movement: { endPosition: CesiumTypes.Cartesian2 }) => {
+      if (!movement?.endPosition) return;
+      // Cesium's pick payload is a union; this handler only needs the entity
+      // `properties` bag or a primitive's `id` position, so it is narrowed to
+      // exactly those two shapes rather than the full typed union.
+      const picked = viewer.scene.pick(movement.endPosition) as
+        | { id?: { properties?: unknown }; primitive?: unknown }
+        | undefined;
+      const entityProperties = (picked?.id as { properties?: unknown } | undefined)?.properties as
+        | { ribbonModelMarker?: { getValue?: () => unknown } }
+        | undefined;
+      const marker = entityProperties?.ribbonModelMarker?.getValue?.() as
+        | RibbonModelMarker
+        | undefined;
+      if (marker) {
+        setRibbonHover(ribbonModelTooltip(marker, ribbonVariable, markerDepthLabel));
+        return;
+      }
+      setRibbonHover(null);
+
+      // The ribbon is ONE primitive spanning every segment, so a 3D pick on it
+      // names no vertex, and the line is only a few pixels wide. Instead every
+      // measured level is projected to the screen and the nearest one within
+      // RIBBON_HOVER_RADIUS_PX is named. That uses only public Cesium API, gives
+      // the line a comfortable hover target, and still quotes a real measured
+      // level rather than an interpolated depth.
+      let nearest: RibbonPoint | null = null;
+      let nearestDistance = RIBBON_HOVER_RADIUS_PX;
+      for (const point of data.profile.points) {
+        const window = Cesium.SceneTransforms.worldToWindowCoordinates(
+          viewer.scene,
+          positionAt(point.depthM)
+        );
+        if (!window) continue;
+        const distance = Math.hypot(
+          window.x - movement.endPosition.x,
+          window.y - movement.endPosition.y
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = point;
+        }
+      }
+      if (nearest) setRibbonHover(ribbonPointTooltip(nearest, ribbonVariable));
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    // --- camera ---------------------------------------------------------------
+    // Only on a genuinely new selection, or an explicit reset: never on an
+    // unrelated re-render, which would yank the camera out from under the user.
+    if (ribbonFlownProfileIdRef.current !== profile.profile_id || ribbonResetToken > 0) {
+      // Frame the WHOLE column, not a point on it. A plain flyTo aimed at the
+      // surface position puts the sub-surface column below the viewport at any
+      // useful tilt, so the column is bounded by a sphere instead and the
+      // camera backs off far enough to hold both ends.
+      const columnM = ribbonHeightM(data.profile.maxDepthM ?? 0, ribbonExaggeration);
+      const columnSphere = Cesium.BoundingSphere.fromPoints([
+        positionAt(data.profile.minDepthM ?? 0),
+        positionAt(data.profile.maxDepthM ?? 0),
+      ]);
+      viewer.camera.flyToBoundingSphere(columnSphere, {
+        offset: new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(0.0),
+          Cesium.Math.toRadians(RIBBON_CAMERA_PITCH_DEG),
+          Math.max(RIBBON_MIN_CAMERA_HEIGHT_M, columnM * RIBBON_CAMERA_SPAN_FACTOR)
+        ),
+        duration: 1.4,
+      });
+      ribbonFlownProfileIdRef.current = profile.profile_id;
+    }
+
+    requestRenderRef.current();
+
+    // --- teardown -------------------------------------------------------------
+    ribbonTeardownRef.current = () => {
+      hoverHandler.destroy();
+      viewer.scene.primitives.remove(ribbonPrimitive);
+      createdEntities.forEach((entity) => viewer.entities.remove(entity));
+      globe.translucency.enabled = previousTranslucency.enabled;
+      globe.translucency.frontFaceAlpha = previousTranslucency.frontFaceAlpha;
+      globe.translucency.backFaceAlpha = previousTranslucency.backFaceAlpha;
+      requestRenderRef.current();
+    };
+  }, [
+    selectedArgoProfile,
+    argoRibbon,
+    argoRibbonMatchup,
+    ribbonPaletteDefinition,
+    ribbonVariable,
+    ribbonExaggeration,
+    ribbonResetToken,
+    markerDepthLabel,
+    ribbonDepthAxis,
+  ]);
+
+  // Release on unmount, independent of the effect above.
+  useEffect(
+    () => () => {
+      ribbonTeardownRef.current?.();
+      ribbonTeardownRef.current = null;
+    },
+    []
+  );
 
   return (
     <div className="w-full h-full absolute inset-0 bg-[#05070a] relative">
       <div ref={containerRef} className="w-full h-full absolute inset-0 bg-[#05070a]" />
+
+      {/*
+        Profile ribbon readout. Kept separate from the map tooltip above and
+        pinned to the ribbon's own readout, so hovering the water column cannot
+        clear a cyclone or float tooltip and vice versa.
+      */}
+      {ribbonHover && (
+        <div
+          data-testid="ribbon-hover-readout"
+          className="absolute bottom-8 left-1/2 -translate-x-1/2 z-40 pointer-events-none font-mono text-[10px] px-3 py-1.5 rounded-lg bg-[#080c14]/95 border border-amber-400/40 text-amber-100 whitespace-nowrap"
+        >
+          {ribbonHover}
+        </div>
+      )}
 
       {/* Dynamic Map Hover Tooltip Overlay (Requirement 1) */}
       {hoverTooltip && hoverTooltip.visible && (
@@ -1283,16 +1882,30 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
                   <span className="text-rose-400 font-bold">{hoverTooltip.category}</span>
                 </div>
               )}
-              {hoverTooltip.maxWindKts !== undefined && (
+              {hoverTooltip.maxWindKts !== undefined && hoverTooltip.maxWindKts !== null ? (
                 <div className="text-right">
                   <span className="text-[8px] text-slate-400 block uppercase">MAX WIND</span>
                   <span className="text-cyan-300 font-bold">{hoverTooltip.maxWindKts} KTS</span>
                 </div>
+              ) : (
+                <div className="text-right">
+                  <span className="text-[8px] text-slate-400 block uppercase">MAX WIND</span>
+                  <span className="text-slate-500 font-bold" title="WMO_WIND and NEWDELHI_WIND both blank for this point">
+                    NOT OBSERVED
+                  </span>
+                </div>
               )}
-              {hoverTooltip.centralPressureMb !== undefined && (
+              {hoverTooltip.centralPressureMb !== undefined && hoverTooltip.centralPressureMb !== null ? (
                 <div>
                   <span className="text-[8px] text-slate-400 block uppercase">PRESSURE</span>
                   <span className="text-slate-200 font-bold">{hoverTooltip.centralPressureMb} MB</span>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-[8px] text-slate-400 block uppercase">PRESSURE</span>
+                  <span className="text-slate-500 font-bold" title="WMO_PRES and NEWDELHI_PRES both blank for this point">
+                    NOT OBSERVED
+                  </span>
                 </div>
               )}
               {hoverTooltip.lat !== undefined && hoverTooltip.lon !== undefined && (
@@ -1328,8 +1941,10 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         currentFieldStatus={currentFieldStatus}
         cycloneLat={activePt?.latitude || 18.2}
         cycloneLon={activePt?.longitude || 88.4}
-        maxWindKts={activePt?.maxWindKts || 125}
-        timestamp={activePt?.timestamp || '2026-09-08T12:00:00Z'}
+        maxWindKts={activePt?.maxWindKts ?? undefined}
+        // The ocean-data time, not a cyclone fix: this field is generated for
+        // the model layer that is actually on screen.
+        timestamp={timestamp || undefined}
       />
 
       {/* Section 11 & Section 7 Compact Data Context Legends (Corrected Source Label) */}
@@ -1372,18 +1987,32 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
               {currentFieldStatus !== 'UNAVAILABLE' && (
                 <>
                   <span className="text-slate-500">│</span>
-                  <span className="text-slate-300">
-                    {currentFieldStatus === 'REAL' && currentFieldMetadata
-                      ? `${(currentFieldMetadata.timestamp || '').replace('T', ' ').slice(0, 16)}`
-                      : (currentField?.timestamp || '').replace('T', ' ').slice(0, 16)}
-                  </span>
+                  {currentFieldStatus === 'REAL' && currentFieldMetadata ? (
+                    // Real field: the model time the vectors actually come from.
+                    <span className="text-slate-300">
+                      {formatModelDate(currentFieldMetadata.timestamp)?.replace(' UTC', '') ?? 'UNKNOWN DATE'}
+                    </span>
+                  ) : (
+                    // Analytical fallback: it has no real date of its own, so it
+                    // must not borrow the track point's.
+                    <span className="text-amber-300" title="This is an analytical fallback field. It is not model output, so it has no real model date.">
+                      NO REAL DATA DATE
+                    </span>
+                  )}
                   <span className="text-slate-500">│</span>
                   {currentFieldStatus === 'REAL' && currentFieldMetadata ? (
                     currentFieldMetadata.matched_depth_m === 0 ? (
                       <span className="text-cyan-300 font-semibold">SURFACE (0 m)</span>
                     ) : (
-                      <span className="text-cyan-300 font-semibold" title={`Requested ${currentFieldMetadata.requested_depth_m} m — nearest native model level`}>
-                        {currentFieldMetadata.matched_depth_m} m MODEL LEVEL
+                      <span
+                        className="text-cyan-300 font-semibold"
+                        title={`Requested ${currentFieldMetadata.requested_depth_m} m — nearest native model level`}
+                      >
+                        {modelDepthLabel(currentFieldMetadata.matched_depth_m, {
+                          modelDepths: currentFieldMetadata.available_depths_m,
+                          storedFileDepths: currentFieldMetadata.stored_file_depths_m,
+                        })}{' '}
+                        MODEL LEVEL
                       </span>
                     )
                   ) : (
@@ -1416,7 +2045,21 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
             <span className="text-slate-500">│</span>
             <span className="text-slate-200 font-semibold">{depthSlicePayload.variable.toUpperCase()}</span>
             <span className="text-slate-500">│</span>
-            <span className="text-indigo-300 font-bold">{depthSlicePayload.matched_depth_m} m MODEL LEVEL</span>
+            <span
+              className="text-indigo-300 font-bold"
+              title="Depth the slice was actually sampled at, and what this file calls the same level."
+            >
+              {modelDepthLabel(depthSlicePayload.matched_depth_m, {
+                modelDepths: depthSlicePayload.available_depths_m,
+                storedFileDepths: depthSlicePayload.stored_file_depths_m,
+              })}{' '}
+              MODEL LEVEL
+            </span>
+            <span className="text-slate-500">│</span>
+            {/* The model time this slice actually holds. */}
+            <span className="text-slate-200 font-semibold" title={`HYCOM model time of this slice: ${depthSlicePayload.timestamp}`}>
+              {formatModelDate(depthSlicePayload.timestamp)?.replace(' UTC', '') ?? 'UNKNOWN DATE'}
+            </span>
             <span className="text-slate-500">│</span>
             <span className="text-slate-300">{depthSlicePayload.units}</span>
             {depthSliceRender && (

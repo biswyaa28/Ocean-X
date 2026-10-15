@@ -1,806 +1,139 @@
-'use client';
-
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { apiProvider, DepthSlicePayload } from '../services/ApiProvider';
-import { demoProvider } from '../services/DemoProvider';
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import DashboardPreview from '../components/landing/DashboardPreview';
+import DeferredLiveStats from '../components/landing/DeferredLiveStats';
+import DeferredOceanCanvas from '../components/landing/DeferredOceanCanvas';
+import Reveal from '../components/landing/Reveal';
+import FeatureLightbox from '../components/landing/FeatureLightbox';
 import {
-  Cyclone,
-  Hazard,
-  Station,
-  GISLayer,
-  KPIMetrics,
-  AppMode,
-  OceanMode,
-  DataStatus,
-  DataModeType,
-  ArgoProfile,
-  CycloneTrackPoint,
-  AstronomicalData,
-} from '../types/oceanlens';
+  PROJECT_EVENT,
+  PROJECT_NAME,
+  PROJECT_REPOSITORY_URL,
+  PROJECT_TEAM,
+  PROJECT_TAGLINE,
+} from '../constants/project';
 
-import { Header } from '../components/Header';
-import { LayerControl } from '../components/LayerControl';
-import { DepthSliceControl, DepthSliceSelection } from '../components/DepthSliceControl';
-import { ToolRail, ActiveRightTool } from '../components/ToolRail';
-import { Timeline } from '../components/Timeline';
-import { IntelligencePanel } from '../components/IntelligencePanel';
-import { StationModal } from '../components/StationModal';
-import { CesiumGlobe } from '../components/CesiumGlobe';
-import { ArgoMatchupDrawer } from '../components/ArgoMatchupDrawer';
-import { DataInspector, InspectionData } from '../components/DataInspector';
+export const metadata: Metadata = {
+  title: `${PROJECT_NAME} — 3D ocean model & Argo visualization, Bay of Bengal`,
+  description: PROJECT_TAGLINE,
+  openGraph: {
+    title: `${PROJECT_NAME} — Bay of Bengal Geospatial Intelligence`,
+    description: PROJECT_TAGLINE,
+    type: 'website',
+    siteName: PROJECT_NAME,
+    images: [{ url: '/landing/hero.webp', width: 1800, height: 1013, alt: `${PROJECT_NAME} 3D ocean globe showing Argo float positions over the Bay of Bengal` }],
+  },
+};
 
-import { calculateRiskForPoint } from '../utils/risk';
-import {
-  DEFAULT_DEPTH_SLICE_DISPLAY,
-  DepthSliceDisplaySettings,
-  resolveDepthSliceRender,
-} from '../utils/depthSliceViz';
-import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
-import { normalizeHycomCurrentField } from '../services/FlowFieldProvider';
-
-const DEMO_TRACK_TIMESTEPS: CycloneTrackPoint[] = [
-  { id: 'demo-ts-0', timestamp: '2026-09-07T06:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-1', timestamp: '2026-09-08T12:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-2', timestamp: '2026-09-09T18:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-3', timestamp: '2026-09-11T00:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-4', timestamp: '2026-09-12T06:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
-  { id: 'demo-ts-5', timestamp: '2026-09-14T00:00:00', latitude: 18.2, longitude: 88.4, maxWindKts: 0, centralPressureMb: 1012, category: 'Depression', status: 'OBSERVATION', distanceToCoastKm: 300, stormSpeedKts: 0, stormDirDeg: 0 },
+const FEATURES = [
+  {
+    title: '3D globe: model + Argo together',
+    body: 'INCOIS HYCOM currents, temperature and salinity sit on the same Cesium globe as the ingested Argo floats. See where the water is measured and where the model places it.',
+    source: 'INCOIS RSMC HYCOM',
+    image: '/landing/globe.webp',
+    alt: 'OceanLens globe showing the HYCOM sea-surface temperature field over the Bay of Bengal with 16 Argo float positions marked, and the inspector reporting 30.58 degrees Celsius at 18.22 N, 88.40 E.',
+  },
+  {
+    title: 'Float vs model matchup',
+    body: 'Open a float and compare its QC-passed profile against the model at the model’s own depth levels, per variable, with the residual convention stated rather than implied.',
+    source: 'Argo GDAC',
+    image: '/landing/matchup.webp',
+    alt: 'OceanLens profile ribbon comparing a selected Argo float with HYCOM levels.',
+  },
+  {
+    title: 'Cyclone ocean heat',
+    body: 'Tropical Cyclone Heat Potential from the same HYCOM run, with the colour scale taken from the real data bounds rather than a fixed range. The stamp on screen states the product, the run time and whether it is real or synthetic.',
+    source: 'INCOIS RSMC HYCOM',
+    image: '/landing/cyclone-heat.webp',
+    alt: 'OceanLens globe showing the HYCOM tropical cyclone heat potential field over the Bay of Bengal, with Argo float positions marked and the inspector reporting 101.4 kilojoules per square centimetre at the surface.',
+  },
 ];
 
-export default function Home() {
-  const [mode, setMode] = useState<AppMode>('OPERATIONS');
-  // Global Ocean Mode Single Source of Truth (Requirement #1)
-  const [oceanMode, setOceanMode] = useState<OceanMode>('HISTORICAL');
-  const [dataStatus, setDataStatus] = useState<DataStatus>('SIMULATED');
-  const [backendConnected, setBackendConnected] = useState(false);
-  // Phase 3: explicit data mode state
-  const [dataMode, setDataMode] = useState<DataModeType>('REAL');
-  const [datasetSynthetic, setDatasetSynthetic] = useState(false);
-  const [datasetLoaded, setDatasetLoaded] = useState(false);
+const STEPS = [
+  { title: 'Sources', body: 'INCOIS RSMC HYCOM, Argo GDAC and NOAA IBTrACS provide the model, profiles and cyclone tracks.' },
+  { title: 'FastAPI', body: 'The service aligns time and space, matches float levels to model levels, and computes residual statistics.' },
+  { title: 'CesiumJS', body: 'A browser globe renders the model, floats and matchups without loading the dashboard engine on this page.' },
+];
 
-  // Single unified active tool state for all right-side tools
-  const [activeRightTool, setActiveRightTool] = useState<ActiveRightTool>('storm');
+function FlowIcon({ index }: { index: number }) {
+  if (index === 0) return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16c3-8 13-8 16 0M5 11h14M7 7h10M12 4v16" /></svg>;
+  if (index === 1) return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h10v14H7zM4 9h3M17 9h3M4 15h3M17 15h3M10 9h4M10 13h4" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16" /></svg>;
+}
 
-  const [cyclone, setCyclone] = useState<Cyclone | null>(null);
-  const [stations, setStations] = useState<Station[]>([]);
-  const [layers, setLayers] = useState<GISLayer[]>([]);
-  const [argoProfiles, setArgoProfiles] = useState<ArgoProfile[]>([]);
-  const [selectedArgoProfile, setSelectedArgoProfile] = useState<ArgoProfile | null>(null);
-
-  const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(5);
-  const [selectedStation, setSelectedStation] = useState<Station | null>(null);
-  const [targetLocation, setTargetLocation] = useState<{ lat: number; lon: number; height?: number } | null>(null);
-
-  // Inspection Data State & Dynamic Legend Bounds
-  const [inspectedCoords, setInspectedCoords] = useState<{ lat: number; lon: number } | null>({ lat: 18.2247, lon: 88.4000 });
-  const [inspectionData, setInspectionData] = useState<InspectionData | null>(null);
-  const [legendBounds, setLegendBounds] = useState<{ min: number; mid: number; max: number; unit: string; layerName: string } | null>(null);
-  const [astroData, setAstroData] = useState<AstronomicalData | null>(null);
-
-  // HYCOM model depth slice (Phase 1B/1C) — separate from surface layers.
-  // Single source of truth for the scientific visualization:
-  // - depthSliceSelection: data coordinates (variable/depth/timestamp) —
-  //   changes trigger a (abortable) backend fetch
-  // - depthSliceDisplay: display-only settings (palette/range/scale/
-  //   opacity) — changes NEVER refetch or modify scientific data
-  const [depthSliceVisible, setDepthSliceVisible] = useState(false);
-  const [depthSliceSelection, setDepthSliceSelection] = useState<DepthSliceSelection>({
-    variable: 'temperature',
-    depthM: 50,
-  });
-  const [depthSliceDisplay, setDepthSliceDisplay] = useState<DepthSliceDisplaySettings>({
-    ...DEFAULT_DEPTH_SLICE_DISPLAY,
-  });
-  const [depthSliceMetadata, setDepthSliceMetadata] = useState<DepthSlicePayload | null>(null);
-  const [depthSliceLoading, setDepthSliceLoading] = useState(false);
-  const [depthSliceUnavailable, setDepthSliceUnavailable] = useState<string | null>(null);
-  const [datasetTimestamps, setDatasetTimestamps] = useState<string[]>([]);
-
-  // ============================================================
-  // Real HYCOM current field (Phase 1E) — UVEL/VVEL particles.
-  //
-  // The current field reuses the scientific depth control: when the model
-  // depth-slice instrument is active AND its variable is `currents`, the
-  // flow particles follow that instrument's depth/timestamp selection.
-  // Otherwise the field is surface (0 m) at the timeline timestamp.
-  //
-  // Status machine (drives the visible provenance):
-  // - REAL: payload normalized into a valid field (real UVEL/VVEL vectors)
-  // - SIMULATED: no real payload (backend down / unavailable / malformed) —
-  //   the existing labelled synthetic fallback renders
-  // - UNAVAILABLE: backend answered with a structurally valid payload that
-  //   contains NO valid vectors (e.g. all cells missing at that depth/time)
-  //
-  // Rapid selection changes abort obsolete requests; the newest wins.
-  // ============================================================
-  const [currentField, setCurrentField] = useState<EnvironmentalFlowField | null>(null);
-  const [currentFieldStatus, setCurrentFieldStatus] = useState<CurrentFieldDataStatus>('SIMULATED');
-  const [currentFieldStatusReason, setCurrentFieldStatusReason] = useState<string | null>(null);
-  const [currentFieldMetadata, setCurrentFieldMetadata] = useState<DepthSlicePayload | null>(null);
-
-  // Initial Load from DataProvider
-  useEffect(() => {
-    async function loadData() {
-      console.log('[OceanLens App] Initializing data loading from ApiProvider...');
-      const status = await apiProvider.getDataStatus();
-      const provider = status.backendConnected ? apiProvider : demoProvider;
-
-      if (status.backendConnected) {
-        console.log('%c[OceanLens App] CONNECTED TO REAL API BACKEND', 'color: #10b981; font-weight: bold;');
-      } else {
-        console.warn('[OceanLens App] BACKEND UNREACHABLE — USING DEMO FALLBACK');
-      }
-
-      const cyclones = await provider.getCyclones();
-      const st = await provider.getStations();
-      const ly = await provider.getLayers();
-      const argos = await provider.getArgoProfiles();
-
-      if (cyclones.length > 0) {
-        setCyclone(cyclones[0]);
-        setCurrentTrackIndex(cyclones[0].currentTrackIndex);
-      }
-      setStations(st);
-      setLayers(ly);
-      setArgoProfiles(argos);
-      setDataStatus(status.mode);
-      setBackendConnected(status.backendConnected);
-      // Phase 3: propagate data mode
-      setDataMode(status.dataMode ?? 'REAL');
-      setDatasetSynthetic(status.datasetSynthetic ?? false);
-      setDatasetLoaded(status.datasetLoaded ?? false);
-
-      console.log('%c[OCEANLENS DATA]', 'color: #06b6d4; font-weight: bold;', {
-        provider: status.backendConnected ? 'API / REAL BACKEND' : 'DEMO FALLBACK',
-        apiBase: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api',
-        cycloneSource: cyclones[0]?.sourceAttribution || 'Demo Track',
-        currentSource: status.backendConnected ? 'INCOIS RSMC HYCOM (UVEL/VVEL, per-status in legend)' : 'Simulated Vector Field',
-        timelineSource: 'NOAA IBTrACS Track Timestamp',
-        riskSource: status.backendConnected ? 'Backend Risk Engine (0-39 LOW, 40-64 ELEVATED, 65-84 HIGH, 85-100 CRITICAL)' : 'Demo Risk Rules'
-      });
-    }
-
-    loadData();
-  }, []);
-
-  // Dataset time steps for the depth-slice picker (same source as /observations)
-  useEffect(() => {
-    let cancelled = false;
-    async function loadTimestamps() {
-      try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api'}/observations`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && Array.isArray(data.available_timestamps)) {
-          setDatasetTimestamps(data.available_timestamps);
-        }
-      } catch {
-        // Backend unreachable: picker stays empty; slice requests still work
-        // (backend defaults to the first available model time).
-      }
-    }
-    if (backendConnected) loadTimestamps();
-    return () => {
-      cancelled = true;
-    };
-  }, [backendConnected]);
-
-  // Mode-dependent track and point resolution (Requirement #1 & #11)
-  const liveAuthoritative = backendConnected && dataStatus === 'REAL' && dataMode === 'REAL' && !datasetSynthetic && datasetLoaded;
-  const activeTrack: CycloneTrackPoint[] = oceanMode === 'LIVE'
-    ? (liveAuthoritative ? (cyclone?.track || []) : [])
-    : (cyclone?.track || DEMO_TRACK_TIMESTEPS);
-
-  const currentPoint = activeTrack[Math.min(currentTrackIndex, activeTrack.length - 1)] || activeTrack[0];
-
-  const metrics = useMemo<KPIMetrics | null>(() => {
-    if (oceanMode === 'LIVE') return null;
-
-    if (!cyclone || !currentPoint) return null;
-
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint);
-
-    return {
-      activeCyclones: oceanMode === 'HISTORICAL' ? 0 : 1,
-      maxWindKts: currentPoint.maxWindKts,
-      maxWaveHeightM: Number((currentPoint.maxWindKts * 0.075 + 2.1).toFixed(1)),
-      avgSSTC: 30.5,
-      coastalRiskLevel: riskAssessment.category,
-      dataConfidencePct: oceanMode === 'SCENARIO' ? 75 : 92,
-      forecastConfidencePct: currentPoint.forecastConfidencePct || 92,
-    };
-  }, [cyclone, currentPoint, oceanMode, liveAuthoritative]);
-
-  // Memoized callbacks: stable references prevent cascading re-renders of the
-  // memoized CesiumGlobe subtree on unrelated top-level state changes.
-  const handleOceanModeChange = useCallback((newMode: OceanMode) => {
-    setOceanMode(newMode);
-    setCurrentTrackIndex(0);
-    if (newMode === 'LIVE') {
-      setLayers((prev) =>
-        prev.map((l) => {
-          if (l.id === 'sst') return { ...l, active: true };
-          if (['salinity', 'currents', 'tchp'].includes(l.id)) return { ...l, active: false };
-          return l;
-        })
-      );
-      setInspectedCoords({ lat: 18.2247, lon: 88.4000 });
-    } else {
-      setInspectedCoords(null);
-      setInspectionData(null);
-    }
-  }, []);
-
-  const handleToggleLayer = useCallback((layerId: string) => {
-    setLayers((prev) => {
-      const isScientific = ['sst', 'salinity', 'currents', 'tchp'].includes(layerId);
-      const currentlyActive = prev.find((l) => l.id === layerId)?.active ?? false;
-      const targetState = !currentlyActive;
-
-      return prev.map((l) => {
-        if (l.id === layerId) {
-          return { ...l, active: targetState };
-        }
-        // If enabling a scientific ocean layer, deactivate other scientific ocean layers
-        if (targetState && isScientific && ['sst', 'salinity', 'currents', 'tchp'].includes(l.id)) {
-          return { ...l, active: false };
-        }
-        return l;
-      });
-    });
-  }, []);
-
-  const handleInspectPoint = useCallback((lat: number, lon: number) => {
-    setInspectedCoords({ lat, lon });
-  }, []);
-
-  const handleSelectStation = useCallback((station: Station | null) => {
-    setSelectedStation(station);
-  }, []);
-
-  const handleSelectArgoProfile = useCallback((profile: ArgoProfile | null) => {
-    setSelectedArgoProfile(profile);
-  }, []);
-
-  const activeLayer = layers.find((l) => l.active) || null;
-
-  const hazard = useMemo<Hazard | null>(() => {
-    if (oceanMode === 'LIVE' || !cyclone || !currentPoint) return null;
-    const riskAssessment = calculateRiskForPoint(cyclone.name, currentPoint);
-    return {
-      id: `hazard-${cyclone.id}`,
-      title: `Cyclonic Warning: ${cyclone.name}`,
-      type: 'cyclone',
-      severity: riskAssessment.category,
-      location: cyclone.basin,
-      dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : cyclone.dataStatus,
-      riskAssessment,
-    };
-  }, [cyclone, currentPoint, oceanMode]);
-
-  // Fetch Dynamic Legend Bounds from API (Requirement #16)
-  // Aborts in-flight layer queries on rapid layer/timeline toggling.
-  useEffect(() => {
-    const abortController = new AbortController();
-
-    async function fetchLayerLegend() {
-      if (!activeLayer || !['sst', 'salinity', 'currents', 'tchp'].includes(activeLayer.id)) {
-        setLegendBounds(null);
-        return;
-      }
-      try {
-        const data = await apiProvider.getLayerData(activeLayer.id, currentPoint?.timestamp, 3, abortController.signal);
-        if (abortController.signal.aborted) return;
-        if (data && data.grid && (data.grid.values || data.grid.u)) {
-          let vals: number[] = [];
-          if (data.grid.values) {
-            vals = data.grid.values
-              .flat()
-              .filter((v): v is number => v !== null && v !== undefined && !isNaN(v) && v !== 0);
-          } else if (data.grid.u && data.grid.v) {
-            const uFlat = data.grid.u.flat();
-            const vFlat = data.grid.v.flat();
-            for (let i = 0; i < uFlat.length; i++) {
-              const u = uFlat[i], v = vFlat[i];
-              if (u !== null && v !== null && !isNaN(u) && !isNaN(v)) {
-                vals.push(Math.sqrt(u * u + v * v));
-              }
-            }
-          }
-          if (vals.length > 0) {
-            const min = Math.min(...vals);
-            const max = Math.max(...vals);
-            const mid = (min + max) / 2;
-            setLegendBounds({
-              min,
-              mid,
-              max,
-              unit: data.units || activeLayer.unit || '',
-              layerName: activeLayer.name,
-            });
-            return;
-          }
-        }
-        if (!abortController.signal.aborted) setLegendBounds(null);
-      } catch {
-        // Aborted or failed: leave previous legend state intact
-      }
-    }
-
-    fetchLayerLegend();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [activeLayer?.id, currentPoint?.timestamp, activeLayer]);
-
-  // HYCOM model depth slice fetch (Phase 1B). Aborts in-flight requests on
-  // rapid depth/variable/timestamp changes; the latest selection wins.
-  useEffect(() => {
-    if (!depthSliceVisible) {
-      void Promise.resolve().then(() => {
-        setDepthSliceMetadata(null);
-        setDepthSliceLoading(false);
-        setDepthSliceUnavailable(null);
-      });
-      return;
-    }
-
-    const abortController = new AbortController();
-    const { signal } = abortController;
-    let settled = false;
-
-    const settle = (loading: boolean, unavailable: string | null) => {
-      if (settled || signal.aborted) return;
-      settled = true;
-      setDepthSliceLoading(loading);
-      setDepthSliceUnavailable(unavailable);
-    };
-
-    // Kick off async in a microtask so the effect body itself stays
-    // side-effect free (no synchronous setState cascade).
-    const started = Promise.resolve().then(() => {
-      if (signal.aborted) return;
-      setDepthSliceMetadata(null);
-      setDepthSliceLoading(true);
-      setDepthSliceUnavailable(null);
-      return apiProvider.getDepthSlice(
-        depthSliceSelection.variable,
-        depthSliceSelection.depthM,
-        depthSliceSelection.timestamp,
-        3,
-        signal
-      );
-    });
-
-    started
-      .then((payload) => {
-        if (signal.aborted) return; // stale request: latest selection wins
-        if (payload) {
-          setDepthSliceMetadata(payload);
-          settle(false, null);
-        } else {
-          // Backend unreachable, dataset missing (503) or invalid selection.
-          // Never fall back to synthetic depth data.
-          setDepthSliceMetadata(null);
-          settle(false, 'Real INCOIS HYCOM depth data could not be loaded for this selection. The depth-resolved HYCOM dataset may not be installed on the server.');
-        }
-      })
-      .catch(() => {
-        if (signal.aborted) return; // aborts stay silent
-        settle(false, 'Depth slice request failed.');
-      });
-
-    return () => {
-      abortController.abort();
-    };
-  }, [depthSliceVisible, depthSliceSelection]);
-
-  // ============================================================
-  // Real current-field fetch (Phase 1E).
-  //
-  // Reuses the Phase 1A depth-slice endpoint (variable=currents) through
-  // apiProvider.getRealCurrentFieldPayload. Requests are abortable and the
-  // newest selection wins; the response is normalized (never relabelled)
-  // into the particle renderer's field structure.
-  // ============================================================
-  const currentsLayerActive = layers.some((l) => l.id === 'currents' && l.active);
-  const currentFlowFollowsSlice =
-    depthSliceVisible && depthSliceSelection.variable === 'currents';
-
-  // Data coordinates of the current field request:
-  // - following the depth-slice instrument: its depth + timestamp
-  // - otherwise: surface (0 m) at the timeline timestamp
-  const currentFlowDepthM = currentFlowFollowsSlice ? depthSliceSelection.depthM : 0;
-  const currentFlowTimestamp = currentFlowFollowsSlice
-    ? depthSliceSelection.timestamp
-    : currentPoint?.timestamp;
-
-  useEffect(() => {
-    if (!currentsLayerActive) {
-      void Promise.resolve().then(() => {
-        setCurrentField(null);
-        setCurrentFieldMetadata(null);
-        setCurrentFieldStatus('SIMULATED');
-        setCurrentFieldStatusReason(null);
-      });
-      return;
-    }
-
-    const abortController = new AbortController();
-    const { signal } = abortController;
-    let settled = false;
-
-    const settle = (status: CurrentFieldDataStatus, reason: string | null) => {
-      if (settled || signal.aborted) return;
-      settled = true;
-      setCurrentFieldStatus(status);
-      setCurrentFieldStatusReason(reason);
-    };
-
-    const started = Promise.resolve().then(() => {
-      if (signal.aborted) return null;
-      setCurrentField(null);
-      setCurrentFieldMetadata(null);
-      setCurrentFieldStatus('UNAVAILABLE');
-      setCurrentFieldStatusReason('Loading real HYCOM UVEL/VVEL for this selection.');
-      return apiProvider.getRealCurrentFieldPayload(
-        currentFlowDepthM,
-        currentFlowTimestamp,
-        3,
-        signal
-      );
-    });
-
-    started
-      .then((payload) => {
-        if (signal.aborted) return; // stale request: latest selection wins
-
-        if (payload) {
-          const field = normalizeHycomCurrentField(payload);
-          if (field) {
-            // Real UVEL/VVEL vectors at the matched native model depth.
-            setCurrentField(field);
-            setCurrentFieldMetadata(payload);
-            setCurrentFieldStatusReason(field.statusReason || null);
-            settle('REAL', field.statusReason || null);
-            return;
-          }
-          // Structurally valid payload with zero usable vectors: honest
-          // unavailable — never synthetic vectors relabelled as real.
-          setCurrentField(null);
-          setCurrentFieldMetadata(payload);
-          settle(
-            'UNAVAILABLE',
-            'HYCOM returned no valid UVEL/VVEL vectors for this depth/timestamp.'
-          );
-          return;
-        }
-
-        // No payload (backend unreachable / dataset absent / 503 / error):
-        // the existing intentional SIMULATED fallback, visibly labelled.
-        setCurrentField(null);
-        setCurrentFieldMetadata(null);
-        settle(
-          'SIMULATED',
-          'Real HYCOM UVEL/VVEL unavailable for this selection — analytical fallback field.'
-        );
-      })
-      .catch(() => {
-        if (signal.aborted) return;
-        setCurrentField(null);
-        setCurrentFieldMetadata(null);
-        settle('SIMULATED', 'Current-field request failed — analytical fallback field.');
-      });
-
-    return () => {
-      abortController.abort();
-    };
-  }, [currentsLayerActive, currentFlowDepthM, currentFlowTimestamp]);
-
-  // ============================================================
-  // Phase 1C scientific visualization resolution (pure, memoized)
-  // ============================================================
-  // The render configuration derives from the fetched payload + the
-  // display settings. Memoized on exactly the render-relevant fields so
-  // opacity-only changes reuse the same object (no raster/legend churn).
-  // A requested log scale that cannot be honored (zero/negative data or
-  // range) resolves to LINEAR here — the control surfaces the reason.
-  const {
-    paletteId: dsPaletteId,
-    min: dsMin,
-    max: dsMax,
-    scale: dsScale,
-  } = depthSliceDisplay;
-  const depthSliceRender = useMemo(
-    () => resolveDepthSliceRender(depthSliceMetadata, { paletteId: dsPaletteId, min: dsMin, max: dsMax, scale: dsScale }),
-    [depthSliceMetadata, dsPaletteId, dsMin, dsMax, dsScale]
-  );
-
-  // Variable changes alter the scientific meaning of the display settings
-  // (units, palette, range): reset them to that variable's defaults,
-  // preserving only the pure-UI opacity preference. Handled at selection
-  // time (not in an effect) so no cascading renders can occur. Deliberately
-  // not memoized: it must read the current selection, and it is not a
-  // CesiumGlobe prop so the memoized globe subtree is unaffected.
-  const handleDepthSliceSelectionChange = (next: DepthSliceSelection) => {
-    if (next.variable !== depthSliceSelection.variable) {
-      setDepthSliceDisplay((d) => ({ ...DEFAULT_DEPTH_SLICE_DISPLAY, opacity: d.opacity }));
-    }
-    setDepthSliceSelection(next);
-  };
-
-  // Stable display-settings callbacks (prevent cascading re-renders of the
-  // memoized Cesium subtree).
-  const handleDepthSliceDisplayChange = useCallback((next: DepthSliceDisplaySettings) => {
-    setDepthSliceDisplay(next);
-  }, []);
-  const handleResetDepthSliceDisplay = useCallback(() => {
-    setDepthSliceDisplay({ ...DEFAULT_DEPTH_SLICE_DISPLAY });
-  }, []);
-
-  // Map Click Inspector Dispatcher (Requirement #5, #7, #8)
-  // Aborts in-flight inspection queries when the user clicks another point
-  // or moves the timeline, so only the latest response reaches the UI.
-  useEffect(() => {
-    const abortController = new AbortController();
-    const { signal } = abortController;
-
-    async function inspectMapPoint() {
-      if (!inspectedCoords) return;
-      const layerId = activeLayer?.id || 'cyclone';
-      const ts = currentPoint?.timestamp;
-
-      if (layerId === 'cyclone' && oceanMode !== 'LIVE') {
-        const cRes = await apiProvider.inspectCyclone(inspectedCoords.lat, inspectedCoords.lon, ts, cyclone?.id, signal);
-        if (signal.aborted) return;
-        if (cRes) {
-          setInspectionData({
-            latitude: cRes.latitude ?? inspectedCoords.lat,
-            longitude: cRes.longitude ?? inspectedCoords.lon,
-            timestamp: cRes.timestamp || ts || '',
-            cycloneName: cRes.cycloneName || cyclone?.name || 'AMPHAN',
-            maxWindKts: cRes.maxWindKts ?? currentPoint?.maxWindKts,
-            centralPressureMb: cRes.centralPressureMb ?? currentPoint?.centralPressureMb,
-            category: cRes.category || currentPoint?.category,
-            distanceToCoastKm: cRes.distanceToCoastKm ?? currentPoint?.distanceToCoastKm,
-            observationType: oceanMode === 'SCENARIO' ? 'SIMULATED SCENARIO' : (cRes.observationType || 'HISTORICAL OBSERVATION'),
-            dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'REAL',
-            source: oceanMode === 'SCENARIO' ? 'Disaster Response Simulation Model' : 'NOAA IBTrACS v04r01',
-          });
-        } else if (currentPoint) {
-          setInspectionData({
-            latitude: currentPoint.latitude,
-            longitude: currentPoint.longitude,
-            timestamp: currentPoint.timestamp,
-            cycloneName: cyclone?.name || 'AMPHAN',
-            maxWindKts: currentPoint.maxWindKts,
-            centralPressureMb: currentPoint.centralPressureMb,
-            category: currentPoint.category,
-            distanceToCoastKm: currentPoint.distanceToCoastKm,
-            observationType: oceanMode === 'SCENARIO' ? 'SIMULATED SCENARIO' : 'HISTORICAL OBSERVATION',
-            dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'REAL',
-            source: oceanMode === 'SCENARIO' ? 'Disaster Response Simulation Model' : 'NOAA IBTrACS v04r01',
-          });
-        }
-      } else if (['sst', 'salinity', 'currents', 'tchp'].includes(layerId)) {
-        if (oceanMode === 'SCENARIO') {
-          setInspectionData({
-            latitude: inspectedCoords.lat,
-            longitude: inspectedCoords.lon,
-            timestamp: ts || new Date().toISOString(),
-            tempC: 30.5,
-            salnPSU: 32.8,
-            currentSpeedMS: 0.85,
-            currentDirectionDeg: 210,
-            uvelMS: 0.42,
-            vvelMS: -0.74,
-            dataStatus: 'SIMULATED',
-            source: 'Scenario Disaster Simulation Engine',
-          });
-          return;
-        }
-
-        const hRes = await apiProvider.inspectPoint(inspectedCoords.lat, inspectedCoords.lon, ts, signal);
-        if (signal.aborted) return;
-        if (hRes) {
-          setInspectionData({
-            latitude: hRes.latitude ?? inspectedCoords.lat,
-            longitude: hRes.longitude ?? inspectedCoords.lon,
-            timestamp: hRes.timestamp || ts || '',
-            tempC: hRes.tempC ?? hRes.temp_c,
-            salnPSU: hRes.salnPSU ?? hRes.saln_psu,
-            uvelMS: hRes.uvelMS ?? hRes.uvel_ms,
-            vvelMS: hRes.vvelMS ?? hRes.vvel_ms,
-            currentSpeedMS: hRes.currentSpeedMS ?? hRes.current_speed_ms,
-            currentDirectionDeg: hRes.currentDirectionDeg ?? hRes.current_direction_deg,
-            sshM: hRes.sshM ?? hRes.ssh_m,
-            tchpKJ: hRes.tchpKJ ?? hRes.tchp_kj_cm2,
-            mldM: hRes.mldM ?? hRes.mld_m,
-            depthM: hRes.depthM ?? hRes.depth_m ?? 0,
-            status: hRes.status,
-            dataStatus: hRes.dataStatus,
-            message: hRes.message,
-            requestedTimestamp: hRes.requestedTimestamp,
-            availableStart: hRes.availableStart,
-            availableEnd: hRes.availableEnd,
-            source: hRes.source || 'INCOIS RSMC HYCOM',
-          });
-        }
-      } else if (layerId === 'argo') {
-        const aProfiles = await apiProvider.getArgoProfiles();
-        if (signal.aborted) return;
-        if (aProfiles && aProfiles.length > 0) {
-          const p = aProfiles[0];
-          setInspectionData({
-            latitude: p.latitude,
-            longitude: p.longitude,
-            timestamp: p.observation_time,
-            customLabel: 'IN-SITU OBSERVATION PROFILE',
-            customValue: `FLOAT ${p.float_id}`,
-            customUnit: `· ${p.observations_count} OBS LEVELS`,
-            dataStatus: 'REAL SOURCE — INGESTION PENDING',
-            source: `Official Argo GDAC (${p.institution})`,
-          });
-        }
-      } else if (layerId === 'risk_zones') {
-        setInspectionData({
-          latitude: inspectedCoords.lat,
-          longitude: inspectedCoords.lon,
-          timestamp: ts || new Date().toISOString(),
-          customLabel: 'COASTAL RISK EVALUATION',
-          customValue: hazard?.severity || 'HIGH',
-          customUnit: `· RISK SCORE ${hazard?.riskAssessment?.score || 78}/100`,
-          dataStatus: oceanMode === 'SCENARIO' ? 'SIMULATED' : 'DERIVED ANALYTICS',
-          source: 'OceanLens Hazard Risk Engine',
-        });
-      } else if (['wind', 'wave_height', 'stations', 'buoys'].includes(layerId)) {
-        setInspectionData({
-          latitude: inspectedCoords.lat,
-          longitude: inspectedCoords.lon,
-          timestamp: ts || new Date().toISOString(),
-          dataStatus: 'SIMULATED',
-          source: 'Simulated Analytical Model',
-        });
-      } else if (['storm_surge', 'chlorophyll', 'rainfall'].includes(layerId)) {
-        setInspectionData({
-          latitude: inspectedCoords.lat,
-          longitude: inspectedCoords.lon,
-          timestamp: ts || new Date().toISOString(),
-          dataStatus: 'NOT CURRENTLY INTEGRATED',
-          source: 'Data Stream Pending',
-        });
-      }
-    }
-
-    inspectMapPoint();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [inspectedCoords, currentTrackIndex, activeLayer?.id, backendConnected, currentPoint?.timestamp, cyclone?.id, oceanMode, activeLayer, hazard]);
-
+export default function LandingPage() {
   return (
-    <div className="w-screen h-screen overflow-hidden bg-[#05070a] flex flex-col relative font-sans text-slate-100 select-none">
-      {/* 1. Top Header with Integrated OceanMode Switcher */}
-      <Header
-        mode={mode}
-        onModeChange={setMode}
-        oceanMode={oceanMode}
-        onOceanModeChange={handleOceanModeChange}
-        dataStatus={dataStatus}
-        backendConnected={backendConnected}
-        metrics={metrics}
-        cyclone={oceanMode === 'LIVE' ? null : cyclone}
-        dataMode={dataMode}
-        datasetSynthetic={datasetSynthetic}
-        datasetLoaded={datasetLoaded}
-        liveKpiAuthoritative={false}
-      />
-
-      {/* 2. Main 3D Cesium Earth Viewport */}
-      <main className="flex-1 relative w-full h-full bg-[#05070a]">
-        <CesiumGlobe
-          cyclone={oceanMode === 'LIVE' ? null : cyclone}
-          currentTrackIndex={currentTrackIndex}
-          stations={stations}
-          layers={layers}
-          argoProfiles={argoProfiles}
-          depthSliceVisible={depthSliceVisible}
-          depthSlicePayload={depthSliceMetadata}
-          depthSliceRender={depthSliceRender}
-          depthSliceOpacity={depthSliceDisplay.opacity}
-          currentField={currentField}
-          currentFieldStatus={currentFieldStatus}
-          currentFieldStatusReason={currentFieldStatusReason}
-          currentFieldMetadata={currentFieldMetadata}
-          onSelectStation={handleSelectStation}
-          onSelectArgoProfile={handleSelectArgoProfile}
-          onInspectPoint={handleInspectPoint}
-          onAstronomicalUpdate={setAstroData}
-          targetLocation={targetLocation}
-          timestamp={oceanMode === 'LIVE' ? new Date().toISOString() : currentPoint?.timestamp}
-        />
-
-        {/* Vertical Rotated Margin Caption */}
-        <div className="absolute left-6 top-1/2 -translate-y-1/2 z-10 hidden xl:block text-[9px] font-mono tracking-widest text-slate-500 uppercase writing-mode-vertical pointer-events-none opacity-40">
-          BAY OF BENGAL HAZARD INTELLIGENCE PLATFORM
+    <main className="landing-page">
+      <nav className="landing-nav" aria-label="Primary navigation">
+        <div className="landing-shell landing-nav__inner">
+          <a href="#top" className="landing-brand" aria-label={`${PROJECT_NAME} home`}>
+            <span className="landing-brand__mark" aria-hidden="true">◒</span>
+            <span>{PROJECT_NAME}</span>
+          </a>
+          <div className="landing-nav__links">
+            <a href="#features">Features</a>
+            <a href="#how-it-works">Data flow</a>
+            <a href="#data-note">Data note</a>
+          </div>
+          <Link href="/app" className="button button--small button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link>
         </div>
+      </nav>
 
-        {/* 3. Left GIS Layer Instrument (Internal Scrollbar, Safe Height) */}
-        <LayerControl layers={layers} onToggleLayer={handleToggleLayer} />
-
-        {/* HYCOM Model Depth Slice instrument (Phase 1B/1C) */}
-        <DepthSliceControl
-          visible={depthSliceVisible}
-          onToggleVisible={() => setDepthSliceVisible((v) => !v)}
-          selection={depthSliceSelection}
-          onChange={handleDepthSliceSelectionChange}
-          display={depthSliceDisplay}
-          onDisplayChange={handleDepthSliceDisplayChange}
-          onResetDisplay={handleResetDepthSliceDisplay}
-          render={depthSliceRender}
-          loading={depthSliceLoading}
-          unavailable={depthSliceUnavailable}
-          metadata={depthSliceMetadata}
-          datasetTimestamps={datasetTimestamps}
-          availableDepthsM={depthSliceMetadata?.available_depths_m ?? null}
-        />
-
-        {/* 4. Right Map Tool Rail & Drawers */}
-        <ToolRail
-          activeTool={activeRightTool}
-          onSelectTool={setActiveRightTool}
-          cyclone={oceanMode === 'LIVE' ? null : cyclone}
-          hazard={oceanMode === 'LIVE' ? null : hazard}
-          currentPoint={currentPoint}
-          astroData={astroData}
-          onFlyTo={setTargetLocation}
-        />
-
-        {/* 5. Argo Model vs Observation Matchup Drawer */}
-        <ArgoMatchupDrawer
-          profile={selectedArgoProfile}
-          onClose={() => handleSelectArgoProfile(null)}
-        />
-
-        {/* 6. Scientific Data Inspector Instrument (No Overlap) */}
-        <DataInspector
-          activeLayer={activeLayer}
-          inspection={inspectionData}
-          legendBounds={legendBounds}
-          onClose={() => setInspectionData(null)}
-        />
-
-        {/* 7. Research Mode Technical Banner Overlay */}
-        {mode === 'RESEARCH' && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 px-5 py-2 rounded-2xl bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 text-[11px] font-mono text-cyan-300 shadow-2xl flex items-center gap-3">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-            <div className="flex items-center gap-4">
-              <span>RESEARCH MODE ACTIVE</span>
-              <span className="text-white/20">│</span>
-              <span className="text-slate-300">MODE: {oceanMode}</span>
-              <span className="text-white/20">│</span>
-              <span className="text-emerald-400">DATA CONFIDENCE: {metrics?.dataConfidencePct ?? 'N/A'}</span>
+      <section id="top" className="landing-hero" aria-labelledby="hero-heading">
+        <DeferredOceanCanvas />
+        <div className="hero-vignette" aria-hidden="true" />
+        <div className="landing-shell landing-hero__grid">
+          <div className="hero-copy">
+            <p className="eyebrow"><span /> SIH26067 · BAY OF BENGAL</p>
+            <h1 id="hero-heading">Compare the ocean you <em>measure</em> with the ocean you model.</h1>
+            <p className="hero-lede"><span>{PROJECT_TAGLINE}</span> <span>Explore Argo profiles, HYCOM model fields and cyclone heat context in one view.</span></p>
+            <div className="hero-actions">
+              <Link href="/app" className="button button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link>
+              <a href="#features" className="button button--ghost">Explore the data <span aria-hidden="true">↓</span></a>
             </div>
           </div>
-        )}
+          <DashboardPreview className="hero-preview" loading="eager" priority />
+        </div>
+        <div className="landing-shell stats-dock" data-shot="stats" role="region" aria-label="Measured dashboard statistics">
+          <DeferredLiveStats />
+        </div>
+      </section>
 
-        {/* 8. Mode-Aware Bottom Time Axis Scrubber */}
-        <Timeline
-          track={activeTrack}
-          currentIndex={currentTrackIndex}
-          onIndexChange={setCurrentTrackIndex}
-          oceanMode={oceanMode}
-          isHistorical={oceanMode === 'HISTORICAL'}
-        />
-      </main>
+      <section id="features" className="landing-section landing-section--features" aria-labelledby="features-heading">
+        <div className="landing-shell">
+          <Reveal><div className="section-kicker">01 / THE VIEW</div><h2 id="features-heading">One basin. Three ways to read it.</h2><p className="section-intro">A visual comparison layer for the Bay of Bengal, grounded in the sources the dashboard actually uses.</p></Reveal>
+          <div className="feature-list">
+            {FEATURES.map((feature, index) => (
+              <Reveal key={feature.title} delay={index * 100}>
+                <article className={`feature-row ${index % 2 ? 'feature-row--reverse' : ''}`} data-testid="feature-row" data-shot={index === 0 ? 'feature' : undefined}>
+                  <div className="feature-row__media"><FeatureLightbox src={feature.image} alt={feature.alt} width={1400} height={788} /></div>
+                  <div className="feature-row__copy"><span className="feature-index">0{index + 1}</span><h3>{feature.title}</h3><p>{feature.body}</p><span className="source-tag">{feature.source}</span></div>
+                </article>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
 
-      {/* 9. Station Inspection Modal */}
-      <StationModal
-        station={selectedStation}
-        onClose={() => handleSelectStation(null)}
-      />
-    </div>
+      <section id="how-it-works" className="landing-section landing-section--flow" aria-labelledby="how-heading">
+        <div className="landing-shell">
+          <Reveal><div className="section-kicker">02 / THE PIPELINE</div><h2 id="how-heading">From source files to a navigable globe.</h2></Reveal>
+          <ol className="flow-list">
+            {STEPS.map((step, index) => <Reveal as="li" key={step.title} delay={index * 100}><div className="flow-card"><span className="flow-icon"><FlowIcon index={index} /></span><span className="flow-step">STEP 0{index + 1}</span><h3>{step.title}</h3><p>{step.body}</p></div>{index < STEPS.length - 1 && <span className="flow-connector" aria-hidden="true">→</span>}</Reveal>)}
+          </ol>
+        </div>
+      </section>
+
+      <section id="data-note" className="landing-section landing-section--honesty" aria-labelledby="data-heading">
+        <div className="landing-shell"><Reveal><div className="honesty-card"><div><div className="section-kicker">DATA NOTE</div><h2 id="data-heading">Clear about what is measured.</h2></div><div><p>Everything shown comes from INCOIS RSMC HYCOM, Argo GDAC and NOAA IBTrACS. A small demo subset ships with the repository so the dashboard runs without downloading gigabytes; the full dataset is optional.</p><p className="honesty-caption">Float-derived TCHP vs INCOIS TCHP product; definitions differ.</p><FeatureLightbox src="/landing/regional.webp" alt="Regional panel comparing float-derived TCHP with the INCOIS TCHP product." width={1400} height={788} /></div></div></Reveal></div>
+      </section>
+
+      <footer className="landing-footer">
+        <div className="landing-shell landing-footer__inner">
+          <div><p className="landing-brand"><span className="landing-brand__mark" aria-hidden="true">◒</span>{PROJECT_NAME}</p><p className="footer-meta">{PROJECT_TEAM} · {PROJECT_EVENT}</p></div>
+          <div className="footer-actions"><a href={PROJECT_REPOSITORY_URL}>View repository ↗</a><Link href="/app" className="button button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link></div>
+        </div>
+      </footer>
+    </main>
   );
 }

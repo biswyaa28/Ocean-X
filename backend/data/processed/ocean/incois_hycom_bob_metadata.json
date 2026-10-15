@@ -3,8 +3,8 @@
   "status": "REAL",
   "provider": "INCOIS",
   "source_product": "RSMC HYCOM",
-  "source_file": "RSMC_hycom_20260908.nc",
-  "source_date": "2026-09-08",
+  "source_file": "RSMC_hycom_20261008_bob_subset.nc",
+  "source_date": "2026-10-08",
   "region": {
     "min_lat": 5.0,
     "max_lat": 25.0,
@@ -12,9 +12,9 @@
     "max_lon": 100.0
   },
   "surface_depth_m": 0.0,
-  "time_start": "2026-09-07T06:00:00.000000000",
-  "time_end": "2026-09-14T00:00:00.000000000",
-  "time_steps": 28,
+  "time_start": "2026-10-07T06:00:00.000000000",
+  "time_end": "2026-10-08T18:00:00.000000000",
+  "time_steps": 7,
   "variables": {
     "UVEL": {
       "meaning": "Eastward ocean current",
@@ -53,6 +53,6 @@
       "units": "as provided by source"
     }
   },
-  "original_file": "data/raw/ocean/currents/RSMC_hycom_20260908.nc",
+  "original_file": "data/raw/ocean/currents/RSMC_hycom_20261008_bob_subset.nc",
   "processed_file": "data/processed/ocean/incois_hycom_bob_surface.nc"
 }

@@ -1,4 +1,25 @@
-"""Descriptive statistics for backend-produced Argo/HYCOM matched pairs."""
+"""Descriptive statistics for backend-produced Argo/HYCOM matched pairs.
+
+Reduces the comparison rows into ``n``, the mean residual, the mean absolute
+error and the RMSE for one variable, using the residual convention
+``HYCOM - Argo``.
+
+Notes on validity:
+- A row is included only when its residual is a finite number. A matched row
+  whose observation value is missing/non-finite (rejected by QC, for example)
+  contributes nothing rather than a fabricated zero.
+- Rows produced by vertical interpolation and rows taken straight from a
+  native model level are treated identically: both are valid model values at
+  the observation depth, and separating them would hide how the sample was
+  built. ``matchup_diagnostics`` reports the interpolated/native split
+  separately.
+- The unrounded backend residual (``_temperatureResidualRaw`` /
+  ``_salinityResidualRaw``) is preferred over the displayed 2-decimal value so
+  display rounding does not accumulate in the RMSE.
+
+These are descriptive reductions of the selected matchup sample. They are not
+a model-validation score, grade or acceptance decision.
+"""
 
 import math
 from typing import Any, Iterable, Literal, Optional, TypedDict

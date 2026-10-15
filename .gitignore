@@ -29,10 +29,22 @@ backend/.pytest_cache/
 backend/.env
 
 # Large raw scientific datasets & binary NetCDF files
-# (kept local or downloaded via scripts/setup-data.py - see data/manifest.json)
-backend/data/raw/ocean/currents/
+# (kept local or downloaded via scripts/setup-data.py / archive_hycom_runs.py
+#  - see data/manifest.json and data/README.md)
+backend/data/raw/
+frontend/public/landing/raw/
+
+# ...EXCEPT the IBTrACS North Indian Ocean best-track file, which IS tracked.
+# load_cyclones() returns an empty list when it is absent, so a fresh clone
+# without it silently loses every cyclone track and the risk engine has nothing
+# to score. It is ~27 MB of public NOAA data and is force-added with
+# `git add -f` when this exception is used. See README.md, "Data sources".
+!backend/data/raw/cyclones/ibtracs/ibtracs.NI.list.v04r01.csv
 *.nc
 *.nc4
+*.nc.part
+*.partial
+*full-download-partial
 *.h5
 *.hdf5
 *.grib
@@ -41,9 +53,21 @@ backend/data/raw/ocean/currents/
 *.parquet
 # Generated/processed scientific outputs are not committed
 backend/data/processed/**/*.nc
+backend/data/processed/**/*.json
 
 # ...EXCEPT small synthetic test fixtures, which ARE committed
 !backend/tests/fixtures/*.nc
+!backend/data/processed/ocean/argo/argo_bob_processed.json
+!backend/data/processed/ocean/argo/argo_bob_metadata.json
+!backend/data/processed/ocean/incois_hycom_bob_metadata.json
+
+# ...EXCEPT the demo subset, which IS committed
+# backend/data/demo holds a coarsened subset of the REAL INCOIS HYCOM runs
+# (~23 MB, float32+zlib) so a fresh clone has real ocean data to show. It is
+# never synthetic - it is thinned, never re-invented. Regenerate with
+# backend/scripts/make_demo_subset.py.
+!backend/data/demo/**/*.nc
+
 
 # IDE & OS
 .vscode/
@@ -52,9 +76,21 @@ backend/data/processed/**/*.nc
 Thumbs.db
 
 # Logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Agent tooling scratch (worktrees, bare clones)
+.delta/
+.kilo/
+
+# Diagnostic evidence CSVs live in backend/docs/diagnostics/ and are deliberately
+# TRACKED: they are the evidence behind the bias and TCHP figures quoted in the
+# UI, they are a few kilobytes each, and an untracked number nobody can check is
+# the thing this repository is trying to avoid.
+shot-*.png
+verify-*.png

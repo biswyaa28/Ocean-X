@@ -205,6 +205,61 @@ describe('ArgoProfileChart — robustness', () => {
     });
   });
 
+  describe('ArgoProfileChart — interpolated vs native model points', () => {
+    function renderMixedComparison() {
+      const normalized = normalizeArgoMatchupComparisons([
+        {
+          depthM: 0,
+          method: 'native',
+          argoTemperatureC: 29.8,
+          modelTemperatureC: 29.4,
+          matchedModelDepthM: 0,
+          argoSalinityPSU: 32.8,
+          modelSalinityPSU: 32.9,
+        },
+        {
+          depthM: 25,
+          method: 'interpolated',
+          argoTemperatureC: 28.7,
+          modelTemperatureC: 28.1,
+          matchedModelDepthM: 25,
+          argoSalinityPSU: 33.4,
+          modelSalinityPSU: 33.5,
+        },
+      ]);
+      return render(
+        <ArgoProfileChart normalized={normalizeArgoObservations([])} comparison={normalized} />
+      );
+    }
+
+    it('marks interpolated model points differently from native ones', () => {
+      const { container } = renderMixedComparison();
+      const chart = container.querySelectorAll('.recharts-wrapper')[0];
+      const fills = Array.from(chart.querySelectorAll('.recharts-dot')).map(
+        (dot) => dot.getAttribute('fill')
+      );
+
+      // Native model point: solid orange. Interpolated model point: hollow.
+      expect(fills).toContain('#f97316');
+      expect(fills).toContain('transparent');
+    });
+
+    it('discloses the interpolated/native split in the legend and panel header', () => {
+      renderMixedComparison();
+
+      expect(screen.getAllByText('NATIVE').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('INTERPOLATED').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/NATIVE LEVELS \+ VERTICAL INTERPOLATION/i)).toHaveLength(2);
+    });
+
+    it('hides the interpolation legend when every model point is native', () => {
+      renderComparison();
+
+      expect(screen.queryByText('INTERPOLATED')).not.toBeInTheDocument();
+      expect(screen.getAllByText(/NO INTERPOLATION/i)).toHaveLength(2);
+    });
+  });
+
   it('renders a deep profile (2000 m) with the full depth range on the axis', () => {
     const { container } = renderChart([
       obs(0, 30.0, 32.8),
@@ -218,5 +273,44 @@ describe('ArgoProfileChart — robustness', () => {
   it('renders a shallow profile (single meters) without errors', () => {
     const { container } = renderChart([obs(0, 30.1, 31.4), obs(2.5, 30.0, 31.5)]);
     expect(container.querySelectorAll('.recharts-wrapper').length).toBe(2);
+  });
+});
+
+describe('ArgoProfileChart — 26 C isotherm and D26 marker', () => {
+  it('draws the isotherm and D26 line on the temperature panel when D26 exists', () => {
+    const { container } = render(
+      <ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} d26M={64.2} isothermC={26} />
+    );
+    // One vertical isotherm line plus one horizontal D26 line.
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBeGreaterThanOrEqual(2);
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/26/);
+  });
+
+  it('draws no isotherm line when the float never reaches 26 C', () => {
+    const { container } = render(
+      <ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} d26M={null} isothermC={26} />
+    );
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBe(0);
+  });
+
+  it('draws no isotherm line when D26 was not supplied at all', () => {
+    const { container } = render(<ArgoProfileChart normalized={normalizeArgoObservations([
+      obs(0, 29.5, 33.1),
+      obs(50, 27.2, 34.0),
+      obs(120, 18.4, 34.6),
+      obs(300, 11.2, 34.9),
+    ])} />);
+    expect(container.querySelectorAll('.recharts-reference-line').length).toBe(0);
   });
 });

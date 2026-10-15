@@ -32,6 +32,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts';
 import { AlertCircle } from 'lucide-react';
 import {
@@ -48,6 +49,15 @@ export interface ArgoProfileChartProps {
   comparison?: NormalizedArgoMatchup;
   /** Pixel height of each variable panel. */
   heightPx?: number;
+  /**
+   * Float 26 C isotherm depth. When supplied (with `isothermC`) the temperature
+   * panel draws a dashed isotherm line and a D26 marker, so the reader can see
+   * where the float's warm layer ends rather than inferring it from the shape.
+   * Suppressed entirely when the float never reaches the isotherm.
+   */
+  d26M?: number | null;
+  /** Isotherm value to draw. Defaults to nothing; the caller passes 26. */
+  isothermC?: number;
 }
 
 type VariableKey = 'temperatureC' | 'salinityPsu';
@@ -89,7 +99,15 @@ const VariableChart: React.FC<{
   points: ArgoProfileChartPoint[];
   spec: VariablePanelSpec;
   heightPx: number;
-}> = ({ points, spec, heightPx }) => {
+  /**
+   * The 26 C isotherm. Drawn as a dashed vertical line on the temperature
+   * panel only, because it is a temperature, and only when the float actually
+   * crosses it, so a line is never painted across a profile that has no warm
+   * layer. `d26M` marks where that crossing is.
+   */
+  isothermC?: number;
+  d26M?: number | null;
+}> = ({ points, spec, heightPx, isothermC, d26M }) => {
   const segments = useMemo(() => splitContiguousSegments(points, spec.key), [points, spec.key]);
 
   // Depth domain: surface (0) at top, deepest observation at the bottom.
@@ -144,6 +162,39 @@ const VariableChart: React.FC<{
             fontSize: 8,
           }}
         />
+        {/* The 26 C isotherm and its float depth, drawn only when the profile
+            actually reaches 26 C. A dashed line across a profile with no warm
+            layer would imply a crossing that was never measured. */}
+        {isothermC !== undefined && d26M !== undefined && d26M !== null && (
+          <ReferenceLine
+            x={isothermC}
+            stroke="#fb923c"
+            strokeWidth={1.2}
+            strokeDasharray="6 3"
+            label={{
+              value: `${isothermC}°C`,
+              position: 'top',
+              fill: '#fb923c',
+              fontSize: 8,
+              fontFamily: 'inherit',
+            }}
+          />
+        )}
+        {isothermC !== undefined && d26M !== undefined && d26M !== null && (
+          <ReferenceLine
+            y={d26M}
+            stroke="#fb923c"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            label={{
+              value: `D26 ${d26M.toFixed(0)} m`,
+              position: 'insideRight',
+              fill: '#fb923c',
+              fontSize: 8,
+              fontFamily: 'inherit',
+            }}
+          />
+        )}
         <Tooltip
           cursor={{ stroke: 'rgba(148,163,184,0.35)', strokeWidth: 1 }}
           contentStyle={{
@@ -190,9 +241,19 @@ const ComparisonVariableChart: React.FC<{
   xLabel: string;
   unitSuffix: string;
   heightPx: number;
-}> = ({ points, xLabel, unitSuffix, heightPx }) => {
+  /** model_levels mode: the model has only a few depth levels. */
+  modelLevels?: boolean;
+}> = ({ points, xLabel, unitSuffix, heightPx, modelLevels }) => {
   const argo = points.filter((point) => point.series === 'ARGO OBSERVATION');
   const model = points.filter((point) => point.series === 'HYCOM MODEL');
+  // Native levels are solid dots; interpolated ones are hollow, so an
+  // interpolated point can never be mistaken for a directly sampled one.
+  const modelNative = model.filter(
+    (point) => point.method !== 'interpolated' && point.method !== 'float_interpolated'
+  );
+  const modelInterpolated = model.filter(
+    (point) => point.method === 'interpolated' || point.method === 'float_interpolated'
+  );
   const deepest = points.reduce((max, point) => Math.max(max, point.depthM), 0);
   const depthDomain: [number, number] = [0, deepest > 0 ? deepest : 1];
 
@@ -247,10 +308,38 @@ const ComparisonVariableChart: React.FC<{
           type="linear"
           dataKey="value"
           name="HYCOM MODEL"
+          // In model_levels mode the model contributes only a handful of levels,
+          // so they are joined by a thin dashed guide rather than a curve that
+          // would imply the model resolves the column between them.
           stroke="#f97316"
-          strokeWidth={1.8}
-          strokeDasharray="5 3"
+          strokeWidth={modelLevels ? 1 : 1.8}
+          strokeDasharray={modelLevels ? '2 3' : '5 3'}
+          // The per-point marking is handled by the two overlay series below,
+          // so this line draws the connecting guide only.
+          dot={false}
+          activeDot={false}
+          isAnimationActive={false}
+          connectNulls={false}
+        />
+        <Line
+          data={modelNative}
+          type="linear"
+          dataKey="value"
+          name="HYCOM MODEL (NATIVE LEVEL)"
+          stroke="none"
           dot={{ r: 2.5, fill: '#f97316', strokeWidth: 0 }}
+          legendType="none"
+          isAnimationActive={false}
+          connectNulls={false}
+        />
+        <Line
+          data={modelInterpolated}
+          type="linear"
+          dataKey="value"
+          name="HYCOM MODEL (INTERPOLATED)"
+          stroke="none"
+          dot={{ r: 3, fill: 'transparent', stroke: '#f97316', strokeWidth: 1.5 }}
+          legendType="none"
           isAnimationActive={false}
           connectNulls={false}
         />
@@ -259,7 +348,10 @@ const ComparisonVariableChart: React.FC<{
   );
 };
 
-const ComparisonLegend: React.FC = () => (
+const ComparisonLegend: React.FC<{
+  interpolationApplied: boolean;
+  modelLevels?: boolean;
+}> = ({ interpolationApplied, modelLevels }) => (
   <div className="flex items-center gap-3 font-mono text-[8px] text-slate-400">
     <span className="flex items-center gap-1">
       <span className="inline-block w-3 h-0.5 bg-cyan-400" />
@@ -269,6 +361,32 @@ const ComparisonLegend: React.FC = () => (
       <span className="inline-block w-3 h-0.5 bg-orange-400" />
       HYCOM MODEL
     </span>
+    {interpolationApplied && (
+      <>
+        <span
+          className="flex items-center gap-1"
+          title={
+            modelLevels
+              ? 'Float value taken from a native float level'
+              : 'Model value taken from one native HYCOM level'
+          }
+        >
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-400" />
+          NATIVE
+        </span>
+        <span
+          className="flex items-center gap-1"
+          title={
+            modelLevels
+              ? 'Float value interpolated between two float levels onto this model level'
+              : 'Model value linearly interpolated between two native HYCOM levels'
+          }
+        >
+          <span className="inline-block w-1.5 h-1.5 rounded-full border border-orange-400" />
+          INTERPOLATED
+        </span>
+      </>
+    )}
   </div>
 );
 
@@ -276,6 +394,8 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
   normalized,
   comparison,
   heightPx = 200,
+  d26M = null,
+  isothermC,
 }) => {
   const { points, stats } = normalized;
 
@@ -301,6 +421,14 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
   ];
 
   if (comparison) {
+    const interpolationApplied = comparison.stats.interpolationApplied;
+    // model_levels: the response carries one row per MODEL depth level.
+    const modelLevelsMode = comparison.stats.matchMode === 'model_levels';
+    const modelLevelCount = new Set(
+      comparison.temperaturePoints
+        .filter((point) => point.series === 'HYCOM MODEL')
+        .map((point) => point.depthM)
+    ).size;
     const panels = [
       {
         key: 'temperature',
@@ -335,12 +463,21 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
 
     return (
       <div className="space-y-3">
-        <ComparisonLegend />
+        <ComparisonLegend
+          interpolationApplied={interpolationApplied}
+          modelLevels={modelLevelsMode}
+        />
         {panels.map((panel) => (
           <div key={panel.key} className="bg-white/5 border border-white/10 rounded-xl p-2.5 space-y-1">
             <div className="flex items-center justify-between font-mono px-0.5">
               <span className="text-[9px] font-bold text-slate-300 tracking-wider">{panel.header}</span>
-              <span className="text-[8px] text-slate-500">NATIVE DEPTHS · NO INTERPOLATION</span>
+              <span className="text-[8px] text-slate-500">
+                {modelLevelsMode
+                  ? `MODEL, ${modelLevelCount} LEVEL${modelLevelCount === 1 ? '' : 'S'}`
+                  : interpolationApplied
+                    ? 'NATIVE LEVELS + VERTICAL INTERPOLATION'
+                    : 'NATIVE DEPTHS · NO INTERPOLATION'}
+              </span>
             </div>
             {panel.available ? (
               <ComparisonVariableChart
@@ -348,6 +485,7 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
                 xLabel={panel.xLabel}
                 unitSuffix={panel.unitSuffix}
                 heightPx={heightPx}
+                modelLevels={modelLevelsMode}
               />
             ) : (
               <UnavailablePanel text={panel.unavailableText} />
@@ -367,7 +505,15 @@ export const ArgoProfileChart: React.FC<ArgoProfileChartProps> = ({
             <span className="text-[8px] text-slate-500">{spec.validCount} VALID LEVELS</span>
           </div>
           {spec.validCount > 0 ? (
-            <VariableChart points={points} spec={spec} heightPx={heightPx} />
+            <VariableChart
+              points={points}
+              spec={spec}
+              heightPx={heightPx}
+              // The isotherm is a temperature: it is drawn on the temperature
+              // panel only, and only when the float actually crosses it.
+              isothermC={spec.key === 'temperatureC' ? isothermC : undefined}
+              d26M={spec.key === 'temperatureC' ? d26M : undefined}
+            />
           ) : (
             <UnavailablePanel text={spec.unavailableText} />
           )}

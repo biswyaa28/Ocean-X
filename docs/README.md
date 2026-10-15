@@ -49,23 +49,21 @@ The prototype combines:
 
 ### Optional persistence
 
-- PostgreSQL
-- PostGIS
-
-Persistence is not mandatory for the first 48-hour prototype.
+**Not used.** There is no database in this codebase — the backend reads NetCDF
+and JSON files directly and serves them as a stateless REST API. PostgreSQL /
+PostGIS appeared in early planning notes only.
 
 ## Data Strategy
 
-Real + simulated fallback.
+Real data first, with an explicitly-labelled demo fallback when the backend is
+unreachable. Sources actually integrated:
 
-Candidate official sources:
+- **INCOIS** — RSMC HYCOM ocean model
+- **Argo / INCOIS GDAC** — in-situ profiles
+- **NOAA IBTrACS** — cyclone best tracks
 
-- INCOIS
-- Copernicus Marine
-- NOAA IBTrACS
-- NASA Earthdata
-
-See `Dataset_Specification.md`.
+See `Dataset_Specification.md` and the **Data** section of the root `README.md`
+for exactly which files ship in Git and which must be installed separately.
 
 ## Repository Structure
 

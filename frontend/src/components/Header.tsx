@@ -1,8 +1,16 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { PROJECT_NAME } from '../constants/project';
 import { AppMode, OceanMode, DataStatus, DataModeType, KPIMetrics, Cyclone } from '../types/oceanlens';
-import { Compass, SlidersHorizontal, Activity } from 'lucide-react';
+import {
+  LIVE_FRESHNESS_LIMIT_HOURS,
+  ModelTimeRange,
+  describeModelDataAge,
+  describeModelRanges,
+  formatModelDate,
+} from '../utils/modelTime';
+import { Compass, SlidersHorizontal } from 'lucide-react';
 
 interface HeaderProps {
   mode: AppMode;
@@ -19,6 +27,14 @@ interface HeaderProps {
   datasetSynthetic?: boolean;
   datasetLoaded?: boolean;
   liveKpiAuthoritative?: boolean;
+  /** The real model time range the surface dataset covers. */
+  modelDateRange?: ModelTimeRange | null;
+  /** The depth-resolved run's own window — usually a different HYCOM run. */
+  modelDepthDateRange?: ModelTimeRange | null;
+  /** Argo profiles shown for the current time selection. */
+  argoProfileCount?: number | null;
+  /** Injectable clock so the data-age label is testable. */
+  nowMs?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,15 +50,80 @@ export const Header: React.FC<HeaderProps> = ({
   datasetSynthetic = false,
   datasetLoaded = false,
   liveKpiAuthoritative = false,
+  modelDateRange = null,
+  modelDepthDateRange = null,
+  argoProfileCount = null,
+  nowMs,
 }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
+  // Read once per tick rather than during render: Date.now() in a render is an
+  // impure read, and the existing 1 s clock tick already gives the age a
+  // heartbeat.
+  const [clockNow, setClockNow] = useState<number>(() => Date.now());
   const isFixture = dataMode === 'FIXTURE' || datasetSynthetic;
   const hasAuthoritativeRealData = backendConnected && dataStatus === 'REAL' && !isFixture && datasetLoaded;
   const hasAuthoritativeLiveData = hasAuthoritativeRealData && liveKpiAuthoritative;
   const displayMetrics = oceanMode === 'LIVE' && !hasAuthoritativeLiveData ? null : metrics;
 
+  // LIVE OCEAN reports the dataset's own coverage and HOW OLD IT IS. A run from
+  // four days ago is not live, and calling it live would be the one claim in
+  // this header nothing supports.
+  const modelRanges = describeModelRanges(modelDateRange, modelDepthDateRange);
+  const modelAge = describeModelDataAge(
+    [modelDateRange?.start, modelDateRange?.end, modelDepthDateRange?.start, modelDepthDateRange?.end],
+    nowMs ?? clockNow
+  );
+  const ageText = modelAge ? `LATEST MODEL RUN · ${modelAge.label}` : null;
+  const liveClaim = modelAge ? modelAge.isLive : modelRanges.length > 0;
+
+  // Tooltip text for the risk chip. When the backend scored the cyclone we
+  // list the actual weights it used so the number is never opaque; when it
+  // declined we surface its reason verbatim.
+  const riskTooltip = (() => {
+    if (!displayMetrics) return undefined;
+    const {
+      coastalRiskLevel,
+      coastalRiskLoading,
+      coastalRiskUnavailableReason,
+      coastalRiskWeights,
+      coastalRiskModelTimestamp,
+      coastalRiskTimeMatched,
+    } = displayMetrics;
+    if (coastalRiskLoading) {
+      return (
+        'SCORING — the backend has been asked for a score and has not answered yet.\n' +
+        'This is not an unavailability.'
+      );
+    }
+    if (coastalRiskLevel === null) {
+      return (
+        'UNAVAILABLE — no score was computed.\n' +
+        (coastalRiskUnavailableReason ?? 'No reason supplied by the backend.')
+      );
+    }
+    const lines: string[] = [];
+    if (coastalRiskTimeMatched === false) {
+      // The score is real, but its ocean state is not the storm's own day.
+      lines.push(
+        `Ocean state from ${formatModelDate(coastalRiskModelTimestamp) ?? 'an unknown model date'}, not the storm date.`
+      );
+    }
+    lines.push('Unvalidated heuristic demo score — NOT validated, NOT for operational use.');
+    lines.push('Backend /risk used these hand-tuned weights:');
+    if (coastalRiskWeights && Object.keys(coastalRiskWeights).length > 0) {
+      for (const [k, v] of Object.entries(coastalRiskWeights)) {
+        lines.push(`  ${k} = ${v}`);
+      }
+    } else {
+      lines.push('  (weights not supplied)');
+    }
+    lines.push('TCHP/SST are unweighted basin means, not values at the cyclone position.');
+    return lines.join('\n');
+  })();
+
   useEffect(() => {
     const updateTime = () => {
+      setClockNow(Date.now());
       const now = new Date();
       const hours = String(now.getUTCHours()).padStart(2, '0');
       const mins = String(now.getUTCMinutes()).padStart(2, '0');
@@ -63,7 +144,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]" />
             <h1 className="font-display font-extrabold text-sm tracking-widest text-white uppercase">
-              OCEANLENS
+              {PROJECT_NAME.toUpperCase()}
             </h1>
           </div>
 
@@ -180,54 +261,157 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* ONE Compact Integrated Telemetry & Provenance Ribbon (Requirement #12) */}
-      <div className="pointer-events-auto self-start bg-[#080c14]/80 backdrop-blur-xl border border-white/10 px-4 py-1.5 rounded-xl text-[10px] font-mono text-slate-300 flex items-center gap-3 shadow-xl max-w-full overflow-x-auto">
+      {/* ONE Compact Integrated Telemetry & Provenance Ribbon (Requirement #12).
+          Wraps rather than scrolls: a provenance label that is scrolled out of
+          sight is the same as a provenance label that is missing. */}
+      <div className="pointer-events-auto self-start bg-[#080c14]/80 backdrop-blur-xl border border-white/10 px-4 py-1.5 rounded-xl text-[10px] font-mono text-slate-300 flex flex-wrap items-center gap-x-3 gap-y-1 shadow-xl max-w-full">
         <div className="flex items-center gap-1.5 font-bold text-white shrink-0">
           <span className={`w-1.5 h-1.5 rounded-full animate-ping ${
             oceanMode === 'LIVE' ? 'bg-emerald-400' :
             oceanMode === 'HISTORICAL' ? 'bg-cyan-400' : 'bg-amber-400'
           }`} />
           <span>
-            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData ? 'LIVE OCEAN · REAL INCOIS HYCOM DATA' : 'LIVE OCEAN · DATA UNAVAILABLE / NON-AUTHORITATIVE') :
-             oceanMode === 'HISTORICAL' ? 'HISTORICAL REPLAY · AMPHAN (2020) · NOAA IBTrACS' :
-             'SCENARIO SIMULATION · NOT AN OFFICIAL FORECAST'}
+            {oceanMode === 'LIVE'
+              ? (modelRanges.length === 0
+                  ? 'LIVE OCEAN · NO MODEL TIME RANGE AVAILABLE'
+                  : `${liveClaim ? 'LIVE OCEAN' : 'LATEST MODEL DATA · NOT LIVE'} · INCOIS HYCOM · ${ageText ?? 'AGE UNKNOWN'}`)
+              : oceanMode === 'HISTORICAL'
+                ? (cyclone
+                    ? `HISTORICAL REPLAY · ${cyclone.name} (${cyclone.track[0]?.timestamp?.slice(0, 4) ?? '—'}) · NOAA IBTrACS`
+                    : 'HISTORICAL REPLAY · NO CYCLONE DATA')
+                : 'SCENARIO SIMULATION · NOT AN OFFICIAL FORECAST'}
           </span>
         </div>
 
         <span className="text-white/15 shrink-0">│</span>
 
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-slate-400">STATUS:</span>
-          <span className="text-cyan-300 font-bold">
-            {oceanMode === 'LIVE' ? (hasAuthoritativeLiveData && displayMetrics?.activeCyclones ? '01 ACTIVE CYCLONE' : 'LIVE KPI DATA UNAVAILABLE') :
-             oceanMode === 'HISTORICAL' ? 'HISTORICAL RECORD (NOAA IBTrACS)' :
-             'SIMULATION'}
-          </span>
+          <span className="text-slate-400">{oceanMode === 'LIVE' ? 'STATUS:' : 'STATUS:'}</span>
+          {oceanMode === 'LIVE' ? (
+            modelRanges.length > 0 ? (
+              <span
+                className="text-cyan-300 font-bold"
+                title={
+                  modelAge
+                    ? `Newest model time: ${formatModelDate(modelAge.newest)} (${modelAge.label}). ` +
+                      `${liveClaim ? 'Within' : 'Outside'} the ${LIVE_FRESHNESS_LIMIT_HOURS} h freshness window.`
+                    : undefined
+                }
+              >
+                {ageText ?? 'MODEL TIME UNKNOWN'}
+              </span>
+            ) : (
+              <span className="text-amber-300 font-bold">UNAVAILABLE</span>
+            )
+          ) : oceanMode === 'HISTORICAL' ? (
+            <span className="text-cyan-300 font-bold">HISTORICAL RECORD (NOAA IBTrACS)</span>
+          ) : (
+            <span className="text-cyan-300 font-bold">SIMULATION</span>
+          )}
         </div>
+
+        {/* Both windows when the surface and depth-resolved runs differ, so one
+            range never stands in for the other. */}
+        {oceanMode === 'LIVE' &&
+          modelRanges.map((range) => (
+            <div key={range.label} className="flex items-center gap-1 shrink-0">
+              <span className="text-white/15">│</span>
+              <span className="text-slate-400">{range.label}:</span>
+              <span
+                className="text-slate-200 font-bold"
+                title={
+                  range.label === 'DEPTH'
+                    ? 'Depth-resolved HYCOM run (currents, temperature, salinity, TCHP by depth)'
+                    : 'Surface HYCOM run (SST, salinity, currents, TCHP at the surface)'
+                }
+              >
+                {range.text}
+              </span>
+            </div>
+          ))}
+
+        {oceanMode === 'LIVE' && (
+          <>
+            <span className="text-white/15 shrink-0">│</span>
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-slate-400">ARGO:</span>
+              <span
+                className="text-emerald-300 font-bold"
+                title="Argo in-situ profiles observed within ±5 days of the selected model time."
+              >
+                {argoProfileCount === null ? 'N/A' : `${argoProfileCount} PROFILES ±5 d`}
+              </span>
+            </div>
+          </>
+        )}
 
         {displayMetrics && (
           <>
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">MAX WIND:</span>
-              <span className="text-cyan-300 font-bold">{displayMetrics.maxWindKts} KT</span>
+              {displayMetrics.maxWindKts === null ? (
+                <span className="text-slate-500 font-bold" title="No observed wind for this track point (WMO and IMD columns both blank)">
+                  NOT OBSERVED
+                </span>
+              ) : (
+                <span className="text-cyan-300 font-bold">{displayMetrics.maxWindKts} KT</span>
+              )}
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">SST:</span>
-              <span className="text-rose-300 font-bold">{displayMetrics.avgSSTC} °C</span>
+              {displayMetrics.avgSSTC === null ? (
+                <span className="text-slate-500 font-bold" title="No model SST read for this point">
+                  N/A
+                </span>
+              ) : (
+                <span className="text-rose-300 font-bold">{displayMetrics.avgSSTC} °C</span>
+              )}
             </div>
 
             <span className="text-white/15 shrink-0">│</span>
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-slate-400">RISK:</span>
-              <span className={`font-bold tracking-wider ${
-                displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
-                displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
-                displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
-                'text-emerald-400'
-              }`}>{displayMetrics.coastalRiskLevel}</span>
+              <span
+                className={`font-bold tracking-wider ${
+                  displayMetrics.coastalRiskLoading ? 'text-cyan-300' :
+                  displayMetrics.coastalRiskLevel === null ? 'text-slate-500' :
+                  displayMetrics.coastalRiskLevel === 'CRITICAL' ? 'text-rose-400' :
+                  displayMetrics.coastalRiskLevel === 'HIGH' ? 'text-amber-400' :
+                  displayMetrics.coastalRiskLevel === 'ELEVATED' ? 'text-yellow-400' :
+                  'text-emerald-400'
+                }`}
+                title={riskTooltip}
+              >
+                {displayMetrics.coastalRiskLoading
+                  ? 'SCORING…'
+                  : displayMetrics.coastalRiskLevel ?? 'UNAVAILABLE'}
+                {!displayMetrics.coastalRiskLoading &&
+                displayMetrics.coastalRiskScore !== null &&
+                displayMetrics.coastalRiskScore !== undefined
+                  ? ` ${displayMetrics.coastalRiskScore}/100`
+                  : ''}
+              </span>
+              {/* The score is an unvalidated demo heuristic, never a forecast. */}
+              <span
+                className="text-[9px] text-amber-500/80 tracking-wide"
+                title={riskTooltip}
+              >
+                (HEURISTIC DEMO, NOT VALIDATED)
+              </span>
+              {/* The ocean state behind the score is not the storm's own day.
+                  Marked visibly, not only in the tooltip, so it cannot be read
+                  as this storm's conditions. */}
+              {displayMetrics.coastalRiskTimeMatched === false && (
+                <span
+                  className="text-[9px] text-rose-400 tracking-wide font-bold"
+                  title={riskTooltip}
+                >
+                  (OCEAN STATE ≠ STORM DATE)
+                </span>
+              )}
             </div>
           </>
         )}

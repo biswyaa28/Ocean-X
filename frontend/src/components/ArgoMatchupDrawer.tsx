@@ -7,33 +7,353 @@ import {
   ArgoObservationPoint,
   MatchupStatistics,
   MatchupDiagnostics,
+  MatchupMode,
 } from '../types/oceanlens';
 import { apiProvider } from '../services/ApiProvider';
+import {
+  modelDepthAxisDisagreementM,
+  modelDepthAxisNote,
+  modelDepthLabel,
+  type ModelDepthAxis,
+} from '../utils/modelDepthLabel';
 import {
   normalizeArgoMatchupComparisons,
   normalizeArgoObservations,
   ARGO_DUPLICATE_DEPTH_STRATEGY,
 } from '../utils/argoProfileViz';
 import { ArgoProfileChart } from './ArgoProfileChart';
+import { RegionalSummary } from './RegionalSummary';
 import { X, Activity, ShieldCheck, AlertCircle, RefreshCw, Loader2, Table2, Waves } from 'lucide-react';
 
 interface ArgoMatchupDrawerProps {
   profile: ArgoProfile | null;
   onClose: () => void;
+  isDemo?: boolean;
+  /**
+   * Reports the loaded matchup upward so the 3D scene can draw the model's
+   * levels beside the float ribbon. Optional and additive: the drawer behaves
+   * identically without it, it just stops feeding the scene.
+   */
+  onMatchupLoaded?: (matchup: ArgoMatchupResponse | null) => void;
 }
 
-type DrawerTab = 'profile' | 'matchup' | 'data';
+type DrawerTab = 'profile' | 'matchup' | 'region' | 'data';
+
+/**
+ * Below this height the region tab cannot show its full set of charts without
+ * scrolling, so RegionalSummary is asked for its compact layout. Measured on the
+ * element itself, so rotating a phone or resizing the window is handled.
+ */
+const REGION_COMPACT_HEIGHT_PX = 520;
+
+function useCompactBelow(thresholdPx: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [compact, setCompact] = useState(false);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+
+    const measure = (height: number) => {
+      if (height > 0) setCompact(height < thresholdPx);
+    };
+
+    measure(node.getBoundingClientRect().height);
+
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) measure(entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [thresholdPx]);
+
+  return { ref, compact };
+}
+
 
 const TAB_LABELS: Record<DrawerTab, string> = {
   profile: 'PROFILE',
   matchup: 'MODEL COMPARISON',
+  region: 'REGION',
   data: 'DATA',
 };
 
 const OBSERVATIONS_UNAVAILABLE = 'ARGO OBSERVATIONS UNAVAILABLE';
 
+/**
+ * "Cyclone heat" - the cyclone-relevant view of one float.
+ *
+ * Wording rule enforced here: this is a heat-potential COMPARISON, never a
+ * forecast. Nothing in this panel says or implies that a cyclone will form,
+ * intensify, or track anywhere. The plain-language line states the measured
+ * difference between the model's heat potential and the float's estimate.
+ *
+ * Every missing value is shown as "Not available" together with the backend's
+ * reason, because "we could not measure it" and "there is no heat here" are
+ * different claims and must not look the same on screen.
+ */
+const CycloneHeatPanel: React.FC<{ matchup: ArgoMatchupResponse }> = ({ matchup }) => {
+  const floatTchp = matchup.tchpFloatKjCm2 ?? null;
+  const modelTchp = matchup.tchpModelKjCm2 ?? null;
+  const residual = matchup.tchpResidualKjCm2 ?? null;
+  const residualPercent = matchup.tchpResidualPercent ?? null;
+  const d26 = matchup.d26FloatM ?? null;
+  const mld = matchup.mldModelM ?? null;
+  const isotherm = matchup.tchpIsothermC ?? 26;
+  const reason = matchup.metricsReason ?? null;
+  const status = matchup.metricsStatus ?? null;
+
+  // A real measurement of zero (surface below the isotherm) is NOT unavailable.
+  const floatIsZero = floatTchp === 0;
+
+  const headline = useMemo(() => {
+    if (residual === null || floatTchp === null || modelTchp === null) {
+      return null;
+    }
+    if (floatIsZero) {
+      return 'THE FLOAT MEASURED NO WATER AT OR ABOVE 26 C, SO THE MODEL\u2019S HEAT POTENTIAL CANNOT BE COMPARED WITH IT.';
+    }
+    const direction = residual >= 0 ? 'ABOVE' : 'BELOW';
+    return `MODEL HEAT POTENTIAL IS ${Math.abs(residual).toFixed(1)} KJ/CM2 ${direction} THE FLOAT ESTIMATE.`;
+  }, [residual, floatTchp, modelTchp, floatIsZero]);
+
+  const value = (text: string) => (
+    <span className="text-cyan-300 font-bold">{text}</span>
+  );
+  const unavailable = (
+    <span className="text-slate-500">Not available</span>
+  );
+
+  return (
+    <div className="bg-white/5 border border-orange-500/25 rounded-xl p-2.5 space-y-2 font-mono">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold text-orange-300 tracking-wider">
+          CYCLONE HEAT
+        </span>
+        <span className="text-[8px] text-slate-500">
+          ABOVE THE {isotherm} C ISOTHERM
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5 text-[9px]">
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">Float-derived TCHP</div>
+          <div className="mt-0.5 text-[11px]">
+            {floatTchp === null ? unavailable : value(`${floatTchp.toFixed(1)} kJ/cm2`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">
+            INCOIS TCHP product
+            <span className="block normal-case text-amber-300/80">definitions differ</span>
+          </div>
+          <div className="mt-0.5 text-[11px]">
+            {modelTchp === null ? unavailable : value(`${modelTchp.toFixed(1)} kJ/cm2`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">Difference (INCOIS &minus; float)</div>
+          <div
+            className={`mt-0.5 text-[11px] font-bold ${
+              residual === null
+                ? 'text-slate-500'
+                : residual > 0
+                  ? 'text-orange-300'
+                  : 'text-cyan-300'
+            }`}
+          >
+            {residual === null
+              ? 'Not available'
+              : `${residual > 0 ? '+' : ''}${residual.toFixed(1)} kJ/cm2`}
+          </div>
+          {residualPercent !== null && (
+            <div className="text-[7.5px] text-slate-500 mt-0.5">
+              {residualPercent > 0 ? '+' : ''}
+              {residualPercent.toFixed(1)}% of the float estimate
+            </div>
+          )}
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
+          <div className="text-[7.5px] text-slate-500 uppercase">
+            Float {isotherm} C depth (D26)
+          </div>
+          <div className="mt-0.5 text-[11px]">
+            {d26 === null ? unavailable : value(`${d26.toFixed(1)} m`)}
+          </div>
+        </div>
+        <div className="bg-[#05070a] p-2 rounded-lg border border-white/10 col-span-2">
+          <div className="text-[7.5px] text-slate-500 uppercase">Model mixed layer depth</div>
+          <div className="mt-0.5 text-[11px]">
+            {mld === null ? unavailable : value(`${mld.toFixed(1)} m`)}
+          </div>
+        </div>
+      </div>
+
+      {headline ? (
+        <div
+          role="status"
+          className="text-[9px] text-slate-200 bg-[#05070a] border border-white/10 rounded-lg p-2 leading-relaxed"
+        >
+          {headline}
+        </div>
+      ) : (
+        <div
+          role="status"
+          className="text-[9px] text-amber-300/90 bg-amber-500/5 border border-amber-500/25 rounded-lg p-2 leading-relaxed"
+        >
+          HEAT METRIC NOT AVAILABLE
+          {reason ? `: ${reason}` : '.'}
+        </div>
+      )}
+
+      <div className="text-[7.5px] text-slate-500 leading-relaxed">
+        {status && status !== 'OK' ? `STATUS: ${status}. ` : ''}
+        THIS IS A COMPARISON OF MEASURED AND MODELLED HEAT CONTENT, NOT A FORECAST. IT
+        SAYS NOTHING ABOUT WHETHER A CYCLONE WILL FORM, INTENSIFY OR TRACK.
+      </div>
+
+      {matchup.tchpDefinitionStatus && (
+        <details className="text-[7.5px] text-slate-500 leading-relaxed">
+          <summary className="cursor-pointer text-slate-400 hover:text-slate-300">
+            HOW COMPARABLE IS THE INCOIS TCHP VALUE?
+          </summary>
+          <p className="mt-1">{matchup.tchpDefinitionStatus}</p>
+        </details>
+      )}
+    </div>
+  );
+};
+
+
+const MATCH_MODES: MatchupMode[] = ['model_levels', 'float_levels', 'native'];
+
+const MATCH_MODE_LABELS: Record<MatchupMode, string> = {
+  model_levels: 'MODEL LEVELS',
+  float_levels: 'FLOAT LEVELS',
+  native: 'NATIVE ONLY',
+};
+
+const MATCH_MODE_TITLES: Record<MatchupMode, string> = {
+  model_levels:
+    'Compare at the model\u2019s 6 native depth levels (layer definition pending INCOIS confirmation); '
+    + 'the float is interpolated onto each. Pairs are independent and the residual excludes model interpolation error.',
+  float_levels:
+    'Interpolate the model onto every float depth. Includes model interpolation '
+    + 'error across the model\u2019s sparse depth levels.',
+  native: 'Use only native model levels within the depth tolerance.',
+};
+
+const TIME_GAP_LABELS: Record<string, string> = {
+  good: 'TIME GAP · GOOD',
+  marginal: 'TIME GAP · MARGINAL',
+  too_large: 'TIME GAP · TOO LARGE',
+};
+
+const TIME_GAP_TONES: Record<string, string> = {
+  good: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  marginal: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  too_large: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+};
+
+const TIME_GAP_MESSAGES: Record<string, string> = {
+  good: 'Observation and model are close enough in time for a valid comparison.',
+  marginal:
+    'Observation and model are separated by more than the routine window. Residuals are shown but should be read with the time gap in mind.',
+  too_large: 'Time gap too large for a valid comparison',
+};
+
+const DEPTH_SOURCE_LABELS: Record<string, string> = {
+  pressure_gsw: 'PRESSURE→DEPTH · GSW (TEOS-10)',
+  provided: 'SOURCE-PROVIDED DEPTH',
+  mixed: 'MIXED DEPTH BASIS',
+  unavailable: 'DEPTH BASIS UNAVAILABLE',
+};
+
 function formatStatistic(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(4) : '—';
+}
+
+/**
+ * Backend-reported matching method badges (depth basis, vertical and
+ * horizontal sub-sampling). Every value is echoed from the response — the
+ * frontend never infers or recomputes a matching method.
+ */
+function MatchupMethodBadges({ matchup }: { matchup: ArgoMatchupResponse }) {
+  const depthSource = matchup.depthSource ?? 'unavailable';
+  const matchMode = matchup.matchMode ?? 'model_levels';
+  const spatialMode = matchup.spatialMode ?? 'bilinear';
+  const missingQc =
+    matchup.diagnostics?.missingQcLevelCount ?? matchup.missingQcLevelCount ?? 0;
+  const timeGapStatus = matchup.diagnostics?.timeGapStatus ?? matchup.timeGapStatus ?? 'good';
+  const badges: { key: string; label: string; title: string; tone: string }[] = [
+    {
+      key: 'depth',
+      label: DEPTH_SOURCE_LABELS[depthSource] ?? depthSource.toUpperCase(),
+      title:
+        'Float depth basis: derived from Argo pressure with gsw.z_from_p at the float '
+        + 'latitude, or taken unchanged from the source depth_m field.',
+      tone: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+    },
+    {
+      key: 'vertical',
+      label: `COMPARISON · ${MATCH_MODE_LABELS[matchMode]}`,
+      title: MATCH_MODE_TITLES[matchMode],
+      tone:
+        matchMode === 'model_levels'
+          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+          : 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    },
+    {
+      key: 'horizontal',
+      label: spatialMode === 'bilinear' ? 'HORIZONTAL · BILINEAR' : 'HORIZONTAL · NEAREST CELL',
+      title:
+        spatialMode === 'bilinear'
+          ? 'The four surrounding model cells are blended by bilinear weight, renormalized '
+            + 'over valid cells so land/masked cells drop out.'
+          : 'Only the single closest model grid cell is used.',
+      tone:
+        spatialMode === 'bilinear'
+          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+          : 'bg-white/10 text-slate-300 border-white/20',
+    },
+  {
+      key: 'qc',
+      label: missingQc > 0 ? `QC ABSENT · ${missingQc} LEVELS` : 'QC FLAGS PRESENT',
+      title:
+        'Accepted Argo QC flags. Raw values accept 1/2; adjusted values accept 1/2/5. '
+        + 'Flag 8 (value interpolated between measurements) is rejected on both. '
+        + 'Levels with no QC flag in the source are accepted leniently and counted here.',
+      tone:
+        missingQc > 0
+          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+          : 'bg-white/10 text-slate-300 border-white/20',
+    },
+    {
+      key: 'timegap',
+      label: TIME_GAP_LABELS[timeGapStatus] ?? timeGapStatus.toUpperCase(),
+      title:
+        `Observation-model time separation: ${matchup.timeDifferenceHours ?? 'unknown'} h `
+        + '(good <= 24 h, marginal <= 72 h). Beyond that the samples describe '
+        + 'different ocean states, so residual statistics are withheld.',
+      tone: TIME_GAP_TONES[timeGapStatus] ?? 'bg-white/10 text-slate-300 border-white/20',
+    },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {badges.map((badge) => (
+        <span
+          key={badge.key}
+          title={badge.title}
+          data-testid={`matchup-badge-${badge.key}`}
+          className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border ${badge.tone}`}
+        >
+          {badge.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function MatchupStatisticsCard({
@@ -79,8 +399,14 @@ function formatDiagnosticCount(value: number | null | undefined, noun: string): 
   return typeof value === 'number' && Number.isFinite(value) ? `${value} ${noun}` : 'Unavailable';
 }
 
-function formatMatchedPercentage(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}% matched` : 'Unavailable';
+function formatMatchedPercentage(
+  value: number | null | undefined,
+  basis?: 'model_levels' | 'argo_observations'
+): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Unavailable';
+  return basis === 'model_levels'
+    ? `${value.toFixed(2)}% of model levels matched`
+    : `${value.toFixed(2)}% matched`;
 }
 
 /**
@@ -90,33 +416,56 @@ function formatMatchedPercentage(value: number | null | undefined): string {
  */
 function buildMatchupLimitations(matchup: ArgoMatchupResponse): string[] {
   const diagnostics: MatchupDiagnostics | null | undefined = matchup.diagnostics;
+  const matchMode = matchup.matchMode ?? 'model_levels';
+  const spatialMode = matchup.spatialMode ?? 'bilinear';
+  const missingQcCount = diagnostics?.missingQcLevelCount ?? matchup.missingQcLevelCount;
   const limitations: string[] = [];
 
   if (typeof matchup.timeDifferenceHours === 'number' && matchup.timeDifferenceHours > 0) {
     limitations.push(
-      `Observation and model timestamps differ by ${matchup.timeDifferenceHours} h; no temporal interpolation is performed.`
+      matchup.timeInterpolationApplied
+        ? `Observation and nearest model timestamps differ by ${matchup.timeDifferenceHours} h; the model field is linearly interpolated between the two bracketing model time slices.`
+        : `Observation and model timestamps differ by ${matchup.timeDifferenceHours} h; no temporal interpolation is performed.`
     );
   }
   if (typeof matchup.distanceKm === 'number' && matchup.distanceKm > 0) {
     limitations.push(
-      'The Argo observation and the matched model grid point are not co-located; horizontal separation is non-zero.'
+      spatialMode === 'bilinear'
+        ? `The observation sits ${matchup.distanceKm} km from the nearest model grid centre; the four surrounding cells are blended bilinearly.`
+        : 'The Argo observation and the matched model grid point are not co-located; horizontal separation is non-zero.'
     );
   }
   if (matchup.modelDepthSelection) {
     limitations.push(
-      'Observations are matched to the nearest native HYCOM model depth; model values are used at native levels only.'
+      matchMode === 'model_levels'
+        ? 'Compared at the model’s own depth levels, with the float interpolated onto each; the residual excludes model interpolation error across sparse levels. Float values are never extrapolated and a bracket wider than the sampling-gap limit is rejected.'
+        : matchMode === 'float_levels'
+          ? 'Model values are linearly interpolated between the native HYCOM levels bracketing each float depth. This includes model interpolation error across the model’s sparse depth levels; values are never extrapolated beyond the model’s valid range or below the seafloor.'
+          : 'Observations are matched to the nearest native HYCOM model depth; model values are used at native levels only.'
     );
   }
-  if (typeof matchup.matchingToleranceM === 'number' && Number.isFinite(matchup.matchingToleranceM)) {
+  if (matchMode === 'native' && typeof matchup.matchingToleranceM === 'number' && Number.isFinite(matchup.matchingToleranceM)) {
     limitations.push(
       `Depth matching tolerance is ≤ ${matchup.matchingToleranceM} m; observations outside it remain unmatched.`
     );
   }
-  if (diagnostics && diagnostics.interpolationApplied === false) {
-    limitations.push('No depth interpolation is applied to the matched values.');
+  if (matchup.depthSource && matchup.depthSource !== 'unavailable') {
+    limitations.push(
+      matchup.depthSource === 'pressure_gsw'
+        ? 'Float depths are converted from Argo pressure with gsw.z_from_p (TEOS-10/GSW) at the float latitude; HYCOM depths are geometric metres.'
+        : matchup.depthSource === 'mixed'
+          ? 'Some float depths were converted from pressure with gsw.z_from_p and others were taken from the source depth_m field.'
+          : 'Float depths are the source-provided depth_m values; no pressure conversion was applied.'
+    );
+  }
+  if (diagnostics && diagnostics.interpolationApplied) {
+    const interpolated = diagnostics.interpolatedLevelCount ?? 0;
+    limitations.push(
+      `${interpolated} of ${diagnostics.matchedObservationCount} matched level(s) use an interpolated model value; ${diagnostics.nativeLevelCount ?? 0} use a native level.`
+    );
   }
   const repeatedNativeDepths = diagnostics?.repeatedNativeDepthMatchCount ?? 0;
-  if (repeatedNativeDepths > 0) {
+  if (matchMode === 'native' && repeatedNativeDepths > 0) {
     limitations.push(
       `${repeatedNativeDepths} native model depth(s) received more than one observation; each observation remains a separate matched pair.`
     );
@@ -127,7 +476,23 @@ function buildMatchupLimitations(matchup: ArgoMatchupResponse): string[] {
   );
   if (typeof matchedObservations === 'number' && validPairs.some((n) => n < matchedObservations)) {
     limitations.push(
-      'Matched pairs with missing or non-finite temperature/salinity values are excluded from the Phase 2B statistics.'
+      'Matched pairs with missing or non-finite temperature/salinity values are excluded from the statistics.'
+    );
+  }
+  const gapStatus = diagnostics?.timeGapStatus ?? matchup.timeGapStatus;
+  if (gapStatus === 'too_large') {
+    limitations.push(
+      matchup.timeGapReason ??
+        'Time gap too large for a valid comparison: residual statistics are withheld.'
+    );
+  } else if (gapStatus === 'marginal') {
+    limitations.push(
+      `The observation-model time gap exceeds ${24} h; residuals are reported but the sample is not a routine matchup.`
+    );
+  }
+  if (typeof missingQcCount === 'number' && missingQcCount > 0) {
+    limitations.push(
+      `${missingQcCount} observation level(s) carry no QC flag in the source; their values were accepted on the documented lenient assumption (flag treated as good) rather than discarded.`
     );
   }
   if (matchup.modelDataStatus === 'SIMULATED') {
@@ -152,6 +517,33 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
       ? `≤ ${matchup.matchingToleranceM} m`
       : 'Unavailable';
   const interpolationLabel = diagnostics ? (diagnostics.interpolationApplied ? 'APPLIED' : 'NONE') : 'Unavailable';
+  const matchMode = matchup.matchMode ?? 'model_levels';
+  // Missing QC flags stay lenient upstream but must be disclosed next to the
+  // other counts rather than hidden.
+  const missingQcCount = diagnostics?.missingQcLevelCount ?? matchup.missingQcLevelCount;
+  const missingQcLabel =
+    typeof missingQcCount === 'number' && Number.isFinite(missingQcCount)
+      ? formatDiagnosticCount(missingQcCount, 'levels')
+      : 'Unavailable';
+  // Matching-method rows fall back to Unavailable, never to an assumed value.
+  const depthBasisLabel =
+    (matchup.depthSource && DEPTH_SOURCE_LABELS[matchup.depthSource]) || 'Unavailable';
+  const variableBasisLabel = matchup.variableBasis ? matchup.variableBasis.toUpperCase() : 'Unavailable';
+  const argoDataModeLabel = matchup.argoDataMode ? matchup.argoDataMode.toUpperCase() : 'Unavailable';
+  const verticalModeLabel = matchup.matchMode ? matchup.matchMode.toUpperCase() : 'Unavailable';
+  const horizontalModeLabel = matchup.spatialMode ? matchup.spatialMode.toUpperCase() : 'Unavailable';
+  // Sampled axis vs the file's own DEPTH labels.
+  const depthAxis = useMemo<ModelDepthAxis | undefined>(
+    () => ({
+      modelDepths: matchup.modelDepths,
+      storedFileDepths: matchup.storedFileDepths,
+    }),
+    [matchup.modelDepths, matchup.storedFileDepths]
+  );
+  const depthAxisDisagreementM = useMemo(
+    () => modelDepthAxisDisagreementM(depthAxis),
+    [depthAxis]
+  );
 
   return (
     <>
@@ -178,7 +570,7 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
           </span>
           <span className="text-slate-500">MATCHED PERCENTAGE</span>
           <span className="text-right text-slate-200 font-bold">
-            {formatMatchedPercentage(diagnostics?.matchedPercentage)}
+            {formatMatchedPercentage(diagnostics?.matchedPercentage, diagnostics?.matchedPercentageBasis)}
           </span>
           <span className="text-slate-500">OBSERVATION–MODEL TIME SEPARATION</span>
           <span className="text-right text-slate-200 font-bold">
@@ -192,6 +584,34 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
           <span className="text-right text-slate-200 font-bold">{toleranceLabel}</span>
           <span className="text-slate-500">INTERPOLATION</span>
           <span className="text-right text-slate-200 font-bold">{interpolationLabel}</span>
+          <span className="text-slate-500">INTERPOLATED LEVELS</span>
+          <span className="text-right text-slate-200 font-bold">
+            {formatDiagnosticCount(diagnostics?.interpolatedLevelCount, 'levels')}
+          </span>
+          <span className="text-slate-500">NATIVE LEVELS</span>
+          <span className="text-right text-slate-200 font-bold">
+            {formatDiagnosticCount(diagnostics?.nativeLevelCount, 'levels')}
+          </span>
+          <span className="text-slate-500">LEVELS WITHOUT QC FLAGS</span>
+          <span
+            className={`text-right font-bold ${
+              typeof missingQcCount === 'number' && missingQcCount > 0
+                ? 'text-amber-300'
+                : 'text-slate-200'
+            }`}
+          >
+            {missingQcLabel}
+          </span>
+          <span className="text-slate-500">ARGO VARIABLE BASIS</span>
+          <span className="text-right text-slate-200 font-bold">{variableBasisLabel}</span>
+          <span className="text-slate-500">ARGO DATA MODE</span>
+          <span className="text-right text-slate-200 font-bold">{argoDataModeLabel}</span>
+          <span className="text-slate-500">DEPTH BASIS (ARGO)</span>
+          <span className="text-right text-slate-200 font-bold">{depthBasisLabel}</span>
+          <span className="text-slate-500">VERTICAL MATCHING</span>
+          <span className="text-right text-slate-200 font-bold">{verticalModeLabel}</span>
+          <span className="text-slate-500">HORIZONTAL MATCHING</span>
+          <span className="text-right text-slate-200 font-bold">{horizontalModeLabel}</span>
           <span className="text-slate-500">DEEPEST MATCHED ARGO DEPTH</span>
           <span className="text-right text-slate-200 font-bold">
             {formatDiagnosticMetric(diagnostics?.deepestMatchedObservationDepthM, 0, 'm (source)')}
@@ -204,9 +624,47 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
 
         <div className="font-mono text-[8px] text-slate-400 leading-relaxed">
           MODEL DEPTH SELECTION: <span className="text-slate-300">{depthSelectionLabel}</span>
+          {(matchup.matchMode ?? 'interpolated') !== 'native' && (
+            <>
+              {' '}· THE ±{matchup.matchingToleranceM} M TOLERANCE ONLY APPLIES IN NATIVE MODE.
+            </>
+          )}
         </div>
 
-        {repeatedNativeDepths > 0 && (
+        {Array.isArray(matchup.modelDepths) &&
+          Array.isArray(matchup.storedFileDepths) &&
+          matchup.modelDepths.length > 0 &&
+          matchup.storedFileDepths.length > 0 &&
+          JSON.stringify(matchup.modelDepths) !== JSON.stringify(matchup.storedFileDepths) && (
+            <div
+              data-testid="matchup-depth-axis-footnote"
+              className="font-mono text-[8px] text-slate-400 leading-relaxed"
+            >
+              {modelDepthAxisNote({
+                modelDepths: matchup.modelDepths,
+                storedFileDepths: matchup.storedFileDepths,
+              })}{' '}
+              Rule: {matchup.modelDepthAxisRule ?? 'native'}.
+            </div>
+          )}
+
+        {/* Where the depth of a model LEVEL is uncertain. The axis above is settled
+            (the file's DEPTH is the midpoint of its own bounds, and the bounds invert
+            back to the producer's native levels). What the file does NOT say is which
+            depth INSIDE a level the value represents - a level value, a slab average or
+            an interpolation - so the placement of a level within its own bounds is
+            unresolved, and in the thermocline that is worth real degrees. */}
+        {depthAxisDisagreementM > 0 && (
+          <div
+            data-testid="matchup-depth-uncertainty-note"
+            className="font-mono text-[8px] text-amber-200/90 leading-relaxed"
+          >
+            Model level depths are uncertain by up to {depthAxisDisagreementM} m; bias in the
+            thermocline changes by ~0.07 °C per metre.
+          </div>
+        )}
+
+        {repeatedNativeDepths > 0 && matchMode === 'native' && (
           <div className="font-mono text-[8px] text-amber-300/90 leading-relaxed">
             REPEATED NATIVE-DEPTH MATCHES: {repeatedNativeDepths} — TWO OR MORE OBSERVATIONS SHARE THE SAME NATIVE
             HYCOM LEVEL AND REMAIN SEPARATE MATCHED PAIRS.
@@ -250,10 +708,22 @@ function MatchupDiagnosticsPanel({ matchup }: { matchup: ArgoMatchupResponse }) 
   );
 }
 
-export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, onClose }) => {
+export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({
+  profile,
+  onClose,
+  isDemo,
+  onMatchupLoaded,
+}) => {
   const [matchup, setMatchup] = useState<ArgoMatchupResponse | null>(null);
+  const onMatchupLoadedRef = useRef(onMatchupLoaded);
+  useEffect(() => {
+    onMatchupLoadedRef.current = onMatchupLoaded;
+  }, [onMatchupLoaded]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // Vertical matching mode requested by the user. The backend is the authority
+  // on what was actually applied; this only selects the next request.
+  const [matchMode, setMatchMode] = useState<MatchupMode>('model_levels');
   const abortControllerRef = useRef<AbortController | null>(null);
   const matchupRequestIdRef = useRef(0);
 
@@ -267,33 +737,38 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
   /** Drawer-session cache: one observations fetch per profile id. */
   const obsCacheRef = useRef<Map<string, ArgoObservationPoint[]>>(new Map());
 
-  const handleFetchMatchup = useCallback(async (profileId: string) => {
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    const requestId = ++matchupRequestIdRef.current;
-    const { signal } = controller;
-    setMatchup(null);
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiProvider.getArgoMatchup(profileId, signal);
-      if (signal.aborted || requestId !== matchupRequestIdRef.current) return;
-      if (res) {
-        setMatchup(res);
-        setError(res.statusMessage || null);
-      } else {
+  const handleFetchMatchup = useCallback(
+    async (profileId: string, mode: MatchupMode) => {
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const requestId = ++matchupRequestIdRef.current;
+      const { signal } = controller;
+      setMatchup(null);
+      onMatchupLoadedRef.current?.(null);
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await apiProvider.getArgoMatchup(profileId, signal, mode);
+        if (signal.aborted || requestId !== matchupRequestIdRef.current) return;
+        if (res) {
+          setMatchup(res);
+          onMatchupLoadedRef.current?.(res);
+          setError(res.statusMessage || null);
+        } else {
+          setMatchup(null);
+          setError("NO REAL OBSERVATION AVAILABLE");
+        }
+      } catch {
+        if (signal.aborted || requestId !== matchupRequestIdRef.current) return;
         setMatchup(null);
         setError("NO REAL OBSERVATION AVAILABLE");
+      } finally {
+        if (!signal.aborted && requestId === matchupRequestIdRef.current) setLoading(false);
       }
-    } catch {
-      if (signal.aborted || requestId !== matchupRequestIdRef.current) return;
-      setMatchup(null);
-      setError("NO REAL OBSERVATION AVAILABLE");
-    } finally {
-      if (!signal.aborted && requestId === matchupRequestIdRef.current) setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     const effectRequestId = matchupRequestIdRef.current;
@@ -314,14 +789,14 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
         matchupRequestIdRef.current += 1;
         return;
       }
-      void handleFetchMatchup(profile.profile_id);
+      void handleFetchMatchup(profile.profile_id, matchMode);
     });
 
     return () => {
       abortControllerRef.current?.abort();
       matchupRequestIdRef.current += 1;
     };
-  }, [profile, handleFetchMatchup]);
+  }, [profile, handleFetchMatchup, matchMode]);
 
   useEffect(() => {
     // Same lifecycle pattern as the matchup fetch: abort the previous
@@ -403,23 +878,52 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
     [observations]
   );
   const normalizedMatchup = useMemo(
-    () => (matchup ? normalizeArgoMatchupComparisons(matchup.comparisons) : null),
+    () => {
+      if (!matchup) return null;
+      const normalized = normalizeArgoMatchupComparisons(matchup.comparisons);
+      return { ...normalized, stats: { ...normalized.stats, matchMode: matchup.matchMode ?? 'model_levels' } };
+    },
+    [matchup]
+  );
+  // Backend-reported observation-model time separation; drives the badge tone
+  // and whether residual statistics may be presented at all.
+  const timeGapStatus =
+    matchup?.diagnostics?.timeGapStatus ?? matchup?.timeGapStatus ?? 'good';
+
+  // Sampled axis vs the file's own DEPTH labels, so every model depth this tab
+  // shows can carry the file's label when the two disagree.
+  const depthAxis = useMemo<ModelDepthAxis | undefined>(
+    () =>
+      matchup
+        ? { modelDepths: matchup.modelDepths, storedFileDepths: matchup.storedFileDepths }
+        : undefined,
     [matchup]
   );
 
+  // Declared with the other hooks: `if (!profile) return null` sits below this
+  // point, and a hook called after an early return would change hook order
+  // between renders.
+  const { ref: regionRef, compact: regionCompact } =
+    useCompactBelow(REGION_COMPACT_HEIGHT_PX);
+
   if (!profile) return null;
 
-  const scientificStatus = profile.provenance?.data_status || 'UNAVAILABLE';
+  const isDemoFallback =
+    isDemo !== undefined
+      ? isDemo
+      : (profile.data_status === 'DEMO' || (profile.provenance?.data_status === 'DEMO' && profile.data_status !== 'REAL' && !profile.data_status?.includes('REAL')));
+  const scientificStatus = isDemoFallback ? 'DEMO' : 'REAL';
   const scientificStatusLabel =
     scientificStatus === 'DEMO'
       ? 'DEMO PROFILE SNAPSHOT'
-      : scientificStatus === 'REAL'
-      ? 'REAL IN-SITU OBSERVATION'
-      : scientificStatus;
+      : 'REAL IN-SITU OBSERVATION';
 
   return (
     <div className="fixed right-20 top-36 z-30 font-mono text-xs select-none transition-all duration-300">
-      <div className="bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 rounded-2xl p-4.5 shadow-2xl w-[420px] text-slate-100 font-sans max-h-[calc(100vh-180px)] flex flex-col">
+      <div
+        ref={regionRef}
+        className="bg-[#080c14]/90 backdrop-blur-xl border border-cyan-500/30 rounded-2xl p-4.5 shadow-2xl w-[420px] text-slate-100 font-sans max-h-[calc(100vh-180px)] flex flex-col"
+      >
         {/* Drawer Header */}
         <div className="flex items-center justify-between pb-3 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-2">
@@ -429,7 +933,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
             <div>
               <div className="font-mono font-bold text-[11px] uppercase tracking-widest text-white flex items-center gap-2">
                 ARGO PROFILE
-                <span className="px-2 py-0.5 rounded-full text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono ${
+                  scientificStatus === 'REAL'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                }`}>
                   {scientificStatusLabel}
                 </span>
               </div>
@@ -501,11 +1009,13 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
 
           <div className="font-mono text-[9px]">
             <span className="text-slate-500">STATUS: </span>
-            <span className="text-amber-400 font-bold">{profile.provenance?.data_status || 'UNAVAILABLE'}</span>
+            <span className={`font-bold ${scientificStatus === 'REAL' ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {scientificStatus}
+            </span>
           </div>
           <div className="font-mono text-[9px]">
             <span className="text-slate-500">SOURCE LABEL: </span>
-            <span className="text-slate-400">{profile.data_status}</span>
+            <span className="text-slate-400">{profile.data_status === 'REAL SOURCE — INGESTION PENDING' ? 'REAL · GDAC' : profile.data_status}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 font-mono text-[9px] text-slate-500">
             <span>VARIABLE: <b className="text-slate-300">{profile.provenance?.variable || '—'}</b></span>
@@ -514,11 +1024,17 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
         </div>
 
         {/* Tab Bar */}
-        <div className="grid grid-cols-3 gap-1.5 pt-3 shrink-0" role="tablist" aria-label="Argo drawer sections">
+        <div className="grid grid-cols-4 gap-1.5 pt-3 shrink-0" role="tablist" aria-label="Argo drawer sections">
           {(Object.keys(TAB_LABELS) as DrawerTab[]).map((tab) => (
             <button
               key={tab}
-              title={tab === 'matchup' ? 'Matchup tab' : `${TAB_LABELS[tab].charAt(0)}${TAB_LABELS[tab].slice(1).toLowerCase()} tab`}
+              title={
+                tab === 'matchup'
+                  ? 'Matchup tab'
+                  : tab === 'region'
+                    ? 'Regional tab'
+                    : `${TAB_LABELS[tab].charAt(0)}${TAB_LABELS[tab].slice(1).toLowerCase()} tab`
+              }
               onClick={() => setActiveTab(tab)}
               className={`py-1.5 rounded-lg border font-mono text-[9px] font-bold tracking-wider transition-colors ${
                 activeTab === tab
@@ -543,13 +1059,18 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                     <Waves className="w-3.5 h-3.5" />
                     ARGO OBSERVATION PROFILE
                   </div>
-                  <span className="text-[8px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono font-bold">
+                  <span className={`text-[8px] px-2 py-0.5 rounded font-mono font-bold ${
+                    scientificStatus === 'REAL'
+                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  }`}>
                     {scientificStatusLabel}
                   </span>
                 </div>
                 <div className="font-mono text-[7.5px] text-slate-500 leading-relaxed">
-                  SOURCE-PROVIDED DEPTH (depth_m) — NO PRESSURE CONVERSION, TEOS-10 OR GSW APPLIED.
-                  ARGO OBSERVATION DATA ONLY.
+                  THIS TAB PLOTS THE RAW ARGO OBSERVATION LIST (SOURCE-PROVIDED depth_m, NO PRESSURE
+                  CONVERSION). THE MODEL COMPARISON TAB RE-DERIVES DEPTH FROM PRESSURE WITH
+                  gsw.z_from_p (TEOS-10/GSW).
                 </div>
               </div>
 
@@ -570,7 +1091,11 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
               {/* Depth-profile charts + normalization disclosure */}
               {!obsLoading && !obsUnavailable && (
                 <>
-                  <ArgoProfileChart normalized={normalized} />
+                  <ArgoProfileChart
+                    normalized={normalized}
+                    d26M={matchup?.d26FloatM ?? null}
+                    isothermC={matchup?.tchpIsothermC ?? 26}
+                  />
                   <div className="bg-[#05070a] border border-white/10 rounded-xl p-2 space-y-1 font-mono text-[8.5px]">
                     <div className="flex justify-between">
                       <span className="text-slate-500">RAW OBSERVATIONS</span>
@@ -617,16 +1142,45 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
           {/* ================= MATCHUP TAB (existing interface) ================= */}
           {activeTab === 'matchup' && (
             <>
-              {/* Match Status & Action Row */}
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  onClick={() => handleFetchMatchup(profile.profile_id)}
-                  disabled={loading}
-                  className="flex-1 py-2 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-mono text-[10.5px] font-bold transition-all flex items-center justify-center gap-2 group disabled:opacity-50"
+              {/* Match Status, mode toggle & action row */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => handleFetchMatchup(profile.profile_id, matchMode)}
+                    disabled={loading}
+                    className="flex-1 py-2 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-mono text-[10.5px] font-bold transition-all flex items-center justify-center gap-2 group disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
+                    <span>{loading ? 'MATCHING WITH HYCOM...' : 'COMPARE WITH HYCOM'}</span>
+                  </button>
+                </div>
+
+                {/* Vertical matching mode: interpolated matches many more float
+                    levels, native matches only the pre-existing tolerance rule. */}
+                <div
+                  className="flex items-center gap-2 font-mono"
+                  role="group"
+                  aria-label="Comparison mode"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : 'group-hover:rotate-180 transition-transform duration-500'}`} />
-                  <span>{loading ? 'MATCHING WITH HYCOM...' : 'COMPARE WITH HYCOM'}</span>
-                </button>
+                  <span className="text-[8px] text-slate-500 shrink-0">COMPARISON</span>
+                  <div className="grid grid-cols-3 gap-1 flex-1">
+                    {MATCH_MODES.map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setMatchMode(mode)}
+                        aria-pressed={matchMode === mode}
+                        title={MATCH_MODE_TITLES[mode]}
+                        className={`py-1 rounded-lg border font-mono text-[7.5px] font-bold tracking-wider transition-colors ${
+                          matchMode === mode
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                            : 'bg-white/5 text-slate-500 border-white/10 hover:text-slate-300'
+                        }`}
+                      >
+                        {MATCH_MODE_LABELS[mode]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               {/* No Real Data Warning Box */}
@@ -651,6 +1205,10 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                           : 'HYCOM MODEL'}
                     </span>
                   </div>
+
+                  {/* Backend-reported matching method: depth basis, vertical and
+                      horizontal sub-sampling actually applied. */}
+                  <MatchupMethodBadges matchup={matchup} />
 
                   <div className="grid grid-cols-3 gap-2 font-mono text-[10px] pt-1 text-center">
                     <div className="bg-[#05070a] p-2 rounded-lg border border-white/10">
@@ -687,8 +1245,12 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                     </div>
                   </div>
                   <div className="font-mono text-[8px] text-slate-500">
-                    MODEL DEPTHS: {matchup.modelDepthSelection.toUpperCase()} · MODEL VALUES USE NATIVE
-                    HYCOM LEVELS RETURNED BY THE MATCHUP RESPONSE.
+                    MODEL DEPTHS: {matchup.modelDepthSelection.toUpperCase()} ·{' '}
+                    {matchMode === 'model_levels'
+                      ? 'COMPARED AT THE MODEL\u2019S OWN DEPTH LEVELS; THE FLOAT IS INTERPOLATED ONTO EACH. SOLID DOTS ARE NATIVE FLOAT LEVELS, HOLLOW DOTS ARE INTERPOLATED.'
+                      : matchMode === 'float_levels'
+                        ? 'MODEL VALUES ARE INTERPOLATED ONTO EACH FLOAT DEPTH AND INCLUDE MODEL INTERPOLATION ERROR ACROSS SPARSE LEVELS.'
+                        : 'MODEL VALUES USE NATIVE HYCOM LEVELS RETURNED BY THE MATCHUP RESPONSE.'}
                   </div>
                 </div>
               )}
@@ -704,8 +1266,9 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                     </div>
                   </div>
                   <div className="font-mono text-[8px] text-slate-500 leading-relaxed">
-                    Visual comparison only. Argo points use observation depth; HYCOM points use the
-                    nearest native model depth. No interpolation is applied in the frontend.
+                    Visual comparison only. Argo points use the observation depth; HYCOM points use
+                    the model depth reported by the backend. No interpolation, depth conversion or
+                    statistic is computed in the frontend.
                   </div>
                   {normalizedMatchup.stats.duplicateDepthCount > 0 && (
                     <div className="font-mono text-[8px] text-amber-300/90">
@@ -721,35 +1284,68 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                 </div>
               )}
 
+              {matchup && !matchup.statusMessage && <CycloneHeatPanel matchup={matchup} />}
+
               {matchup && !matchup.statusMessage && <MatchupDiagnosticsPanel matchup={matchup} />}
 
-              {matchup && !matchup.statusMessage && (
+              {/* Time-gap guard: beyond the configured limit the two samples
+                  describe different ocean states, so the residual-statistics
+                  section is replaced by an explanation instead of being shown
+                  with empty numbers. Both profiles remain visible. */}
+              {matchup && !matchup.statusMessage && timeGapStatus === 'too_large' && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-1.5">
+                  <div className="flex items-center gap-2 font-mono">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span className="text-[10px] font-bold text-rose-300">
+                      {TIME_GAP_MESSAGES.too_large.toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="font-mono text-[8px] text-slate-400 leading-relaxed">
+                    {matchup.timeGapReason ??
+                      'Residual statistics are withheld for this observation-model pair.'}
+                  </div>
+                  <div className="font-mono text-[8px] text-slate-500 leading-relaxed">
+                    BOTH PROFILES ARE STILL SHOWN ABOVE.
+                  </div>
+                </div>
+              )}
+
+              {matchup && !matchup.statusMessage && timeGapStatus !== 'too_large' && (
                 <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-2.5 space-y-2">
                   <div className="font-mono text-[10px] font-bold text-cyan-300 tracking-wider">
                     MATCHUP STATISTICS
                   </div>
-                  <div className="font-mono text-[8px] text-slate-500 leading-relaxed">
-                    Statistics use valid Argo–HYCOM matched pairs selected by the existing matchup method.
-                    Residuals are HYCOM − Argo. These descriptive values describe the selected matchup sample
-                    and are not a formal model-validation score.
-                  </div>
-                  {matchup.modelDataStatus === 'SIMULATED' && (
-                    <div className="font-mono text-[8px] text-amber-300/90">
-                      SYNTHETIC FIXTURE-BACKED STATISTICS — NOT SCIENTIFIC MEASUREMENTS.
-                    </div>
+                  {(
+                    <>
+                      <div className="font-mono text-[8px] text-slate-500 leading-relaxed">
+                        Statistics use valid Argo–HYCOM matched pairs selected by the existing matchup method.
+                        Residuals are HYCOM − Argo. These descriptive values describe the selected matchup sample
+                        and are not a formal model-validation score.
+                      </div>
+                      {timeGapStatus === 'marginal' && (
+                        <div className="font-mono text-[8px] text-amber-300/90 leading-relaxed">
+                          {TIME_GAP_MESSAGES.marginal.toUpperCase()}
+                        </div>
+                      )}
+                      {matchup.modelDataStatus === 'SIMULATED' && (
+                        <div className="font-mono text-[8px] text-amber-300/90">
+                          SYNTHETIC FIXTURE-BACKED STATISTICS — NOT SCIENTIFIC MEASUREMENTS.
+                        </div>
+                      )}
+                      <div className="grid grid-cols-1 gap-2">
+                        <MatchupStatisticsCard
+                          label="TEMPERATURE"
+                          statistics={matchup.statistics?.temperature}
+                          unit="°C"
+                        />
+                        <MatchupStatisticsCard
+                          label="SALINITY"
+                          statistics={matchup.statistics?.salinity}
+                          unit="PSU"
+                        />
+                      </div>
+                    </>
                   )}
-                  <div className="grid grid-cols-1 gap-2">
-                    <MatchupStatisticsCard
-                      label="TEMPERATURE"
-                      statistics={matchup.statistics?.temperature}
-                      unit="°C"
-                    />
-                    <MatchupStatisticsCard
-                      label="SALINITY"
-                      statistics={matchup.statistics?.salinity}
-                      unit="PSU"
-                    />
-                  </div>
                 </div>
               )}
 
@@ -770,6 +1366,7 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
                       <thead>
                         <tr className="bg-[#05070a] text-slate-400 text-[8.5px] uppercase border-b border-white/15">
                           <th className="py-2 px-2 text-center">Depth</th>
+                          <th className="py-2 px-1 text-center" title="How the model value was obtained">Method</th>
                           <th className="py-2 px-2 text-center">Argo T</th>
                           <th className="py-2 px-2 text-center">HYCOM T</th>
                           <th className="py-2 px-2 text-center">ΔT (°C)</th>
@@ -785,8 +1382,38 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
 
                           return (
                             <tr key={idx} className="hover:bg-white/5 transition-colors">
-                              <td className="py-2 px-2 text-center font-bold text-cyan-300">
-                                {c.depthM} m
+                              <td
+                                className="py-2 px-2 text-center font-bold text-cyan-300 whitespace-nowrap"
+                                title="Depth the model value was actually sampled at, and what this file calls the same level."
+                              >
+                                {modelDepthLabel(c.depthM, depthAxis)}
+                              </td>
+                              <td className="py-2 px-1 text-center">
+                                {c.method ? (
+                                  <span
+                                    title={
+                                      c.method === 'interpolated'
+                                        ? 'Model value linearly interpolated between two native HYCOM levels'
+                                        : c.method === 'float_interpolated'
+                                          ? 'Float value interpolated between two float levels onto this model level'
+                                          : c.method === 'float_native'
+                                            ? 'Float value taken from a native float level'
+                                            : 'Model value taken from one native HYCOM level'
+                                    }
+                                    className={`px-1.5 py-0.5 rounded font-mono text-[8px] font-bold ${
+                                      c.method === 'interpolated'
+                                        ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30'
+                                        : 'bg-white/10 text-slate-400 border border-white/20'
+                                    }`}
+                                  >
+                                    {c.method === 'interpolated' ||
+                                    c.method === 'float_interpolated'
+                                      ? 'INTP'
+                                      : 'NAT'}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-600">—</span>
+                                )}
                               </td>
                               <td className="py-2 px-2 text-center text-slate-200">
                                 {c.argoTemperatureC !== null ? `${c.argoTemperatureC}°` : '—'}
@@ -841,6 +1468,12 @@ export const ArgoMatchupDrawer: React.FC<ArgoMatchupDrawerProps> = ({ profile, o
           )}
 
           {/* ================= DATA TAB (raw observations) ================= */}
+          {/* ================= REGIONAL SUMMARY TAB ================= */}
+          {activeTab === 'region' && (
+            <RegionalSummary compact={regionCompact} />
+          )}
+
+          {/* ================= DATA / PROVENANCE TAB ================= */}
           {activeTab === 'data' && (
             <>
               {obsLoading && (

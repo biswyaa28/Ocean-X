@@ -20,7 +20,12 @@
  *   of the raw response is preserved in the raw response itself.
  */
 
-import { ArgoObservationPoint, DepthComparison } from '../types/oceanlens';
+import {
+  ArgoObservationPoint,
+  DepthComparison,
+  MatchupLevelMethod,
+  MatchupMode,
+} from '../types/oceanlens';
 
 /** A chart-ready point at a unique, finite depth. Missing variables are null. */
 export interface ArgoProfileChartPoint {
@@ -139,6 +144,13 @@ export interface ComparisonChartPoint {
   value: number;
   series: 'ARGO OBSERVATION' | 'HYCOM MODEL';
   comparisonIndex: number;
+  /**
+   * How the backend obtained the value for this matched level. Undefined on
+   * ARGO OBSERVATION points.
+   *  - 'native' / 'interpolated'          model value, float_levels mode
+   *  - 'float_native' / 'float_interpolated' float value, model_levels mode
+   */
+  method?: MatchupLevelMethod | null;
 }
 
 export interface NormalizedArgoMatchup {
@@ -151,7 +163,12 @@ export interface NormalizedArgoMatchup {
     salinityModelCount: number;
     salinityAvailable: boolean;
     duplicateDepthCount: number;
-    interpolationApplied: false;
+    /** Model points obtained from a native level / by interpolation. */
+    nativeCount: number;
+    /** Which comparison mode produced these rows (echoed from the response). */
+    matchMode?: MatchupMode;
+    interpolatedCount: number;
+    interpolationApplied: boolean;
   };
 }
 
@@ -162,7 +179,9 @@ function isFiniteValue(value: number | null | undefined): value is number {
 /**
  * Normalize values returned by the existing matchup response.
  * Argo values use observation depth; HYCOM values use matchedModelDepthM.
- * No interpolation or depth conversion is performed.
+ * The backend-reported `method` is carried through so the chart can mark
+ * interpolated model points differently from native ones; no interpolation,
+ * depth conversion or statistic is computed in the frontend.
  */
 export function normalizeArgoMatchupComparisons(
   comparisons: DepthComparison[] | null | undefined
@@ -170,6 +189,7 @@ export function normalizeArgoMatchupComparisons(
   const temperaturePoints: ComparisonChartPoint[] = [];
   const salinityPoints: ComparisonChartPoint[] = [];
   const seenDepths = new Set<string>();
+  const methods = new Set<MatchupLevelMethod>();
   let duplicateDepthCount = 0;
 
   for (const [comparisonIndex, comparison] of (Array.isArray(comparisons) ? comparisons : []).entries()) {
@@ -186,7 +206,11 @@ export function normalizeArgoMatchupComparisons(
         duplicateDepthCount++;
       }
       seenDepths.add(depthKey);
-      points.push({ depthM: depth, value, series, comparisonIndex });
+      if (series === 'HYCOM MODEL' && comparison.method) methods.add(comparison.method);
+      // The model_levels mode interpolates the FLOAT onto the model's depth, so
+      // the interpolation label there refers to the Argo point.
+      if (series === 'ARGO OBSERVATION' && comparison.method) methods.add(comparison.method);
+      points.push({ depthM: depth, value, series, comparisonIndex, method: comparison.method });
     };
 
     add(temperaturePoints, comparison.depthM, comparison.argoTemperatureC, 'ARGO OBSERVATION', 'temperature');
@@ -213,7 +237,10 @@ export function normalizeArgoMatchupComparisons(
       salinityModelCount,
       salinityAvailable: salinityArgoCount > 0 && salinityModelCount > 0,
       duplicateDepthCount,
-      interpolationApplied: false,
+      nativeCount: methods.has('native') ? 1 : 0,
+      interpolatedCount: methods.has('interpolated') || methods.has('float_interpolated') ? 1 : 0,
+      interpolationApplied:
+        methods.has('interpolated') || methods.has('float_interpolated'),
     },
   };
 }

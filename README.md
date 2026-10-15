@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python)](https://www.python.org/)
 [![CesiumJS](https://img.shields.io/badge/CesiumJS-1.145-689f38?style=for-the-badge&logo=cesium)](https://cesium.com/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?style=for-the-badge&logo=tailwind-css)](https://tailwindcss.com/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)]()
 
 **An interactive 3D disaster-intelligence platform focused on the Bay of Bengal.**  
 Ocean-X synthesizes oceanographic observations, atmospheric dynamics, and cyclone telemetry into actionable decision-support insights.
@@ -41,11 +41,11 @@ There are **two ways to run OCEAN-X**:
    synthetic, schema-compatible HYCOM fixtures committed to this repository.
    **No large download is required.**
 2. **REAL Production HYCOM Mode** — only required for actual production HYCOM
-   runtime verification. Requires the ~9.85 GB INCOIS HYCOM dataset to be
+   runtime verification. Requires the ~10.58 GB INCOIS HYCOM dataset to be
    installed and processed locally (see
    [Optional: REAL Production HYCOM](#optional-real-production-hycom)).
 
-> ✅ **The normal SIH demo does NOT require downloading the ~9.85 GB production
+> ✅ **The normal SIH demo does NOT require downloading the ~10.58 GB production
 > HYCOM dataset.** The repository contains small synthetic HYCOM fixtures for
 > development and testing (`backend/tests/fixtures/hycom_raw_fixture.nc` and
 > `backend/tests/fixtures/hycom_surface_fixture.nc`).
@@ -170,7 +170,7 @@ See [🔵 Data Modes — REAL vs FIXTURE](#-data-modes--real-vs-fixture) for det
 #### Troubleshooting
 
 **"HYCOM dataset not found"** — Expected for a fresh clone when running in REAL
-mode: the ~9.85 GB production dataset is intentionally not committed to Git. For
+mode: the ~10.58 GB production dataset is intentionally not committed to Git. For
 the SIH demo, run in FIXTURE mode (`OCEANX_DATA_MODE=FIXTURE`) as shown above.
 
 **"Backend unavailable"** — Confirm the backend is running by checking
@@ -201,14 +201,18 @@ directory (it installs from `frontend/package.json`).
 
 - **🌐 3D Bay of Bengal Globe:** Dynamic camera positioning, high-resolution bathymetric & satellite imagery rendered via **CesiumJS**.
 - **🌀 Cyclone Telemetry & Hazard Tracking:** Historical replay and forecast projections with storm tracks, central pressure, maximum sustained wind speeds, and coastal proximity.
-- **🌊 Multi-Layer Environmental Data:** Toggleable layers for:
-  - **Ocean Currents** (velocity vectors & direction)
-  - **Wind Dynamics** (surface wind vectors)
-  - **Sea Surface Temperature (SST)**
-  - **Wave Height & Period**
-  - **Coastal Monitoring Station Feeds**
-- **🛡️ Evidence-Based Risk Explainer:** Transparent risk scoring engine evaluating wind severity, wave heights, and exposure parameters without black-box ML claims.
-- **🔄 Data Resiliency Engine:** Seamless fallback between live provider APIs (INCOIS, NOAA IBTrACS, Copernicus) and deterministic local simulation models when external APIs are unavailable.
+- **🌊 Multi-Layer Environmental Data:** Toggleable layers, all backed by real INCOIS HYCOM output:
+  - **Ocean Currents** (HYCOM UVEL/VVEL velocity vectors)
+  - **Sea Surface Temperature (SST)** · **Sea Surface Salinity** · **Sea Surface Height (SSH)**
+  - **Mixed Layer Depth (MLD)**
+  - **Tropical Cyclone Heat Potential (TCHP)**
+  - **Argo Observations** (real GDAC in-situ profiles, T/S vs depth)
+- **🧪 Argo–Model Validation:** Real Argo profiles matched against real HYCOM runs, with QC policy, a time-gap guard, honest nulls, and depth-axis provenance. The TCHP/D26 comparison is genuinely computed, not mocked.
+- **🌀 Cyclone Telemetry:** Historical best-track replay from NOAA IBTrACS with per-point agency provenance (WMO / IMD), observed wind radii, and a data-completeness report.
+- **🛡️ Unvalidated Risk Demo:** A clearly-labelled **heuristic demo score** (`heuristicDemoScore`), never a forecast. It returns `UNAVAILABLE` with a reason rather than scoring on invented inputs, ships its weights in every response, and is marked **not validated, not for operational use** in the UI.
+- **🔄 Data Resiliency:** Falls back to an explicitly-labelled **demo provider** (never a silent simulation) when the backend is unreachable.
+
+> **Not implemented (removed):** the wave-height layer, the parametric surface-wind layer, and the coastal monitoring-station feeds. Each was permanently synthetic with no data behind it, so they were removed rather than shipped mislabelled. The impact-analysis endpoint does not exist.
 - **⏱️ Time-Machine Timeline Playback:** Interactive time slider supporting historical event reconstruction and forecast horizon browsing.
 
 ---
@@ -237,6 +241,108 @@ directory (it installs from `frontend/package.json`).
 
 ---
 
+## 💾 Data
+
+A fresh clone runs the **whole app on real ocean data**. The multi-gigabyte
+HYCOM runs are not in Git, but a coarsened **subset of those same real files**
+is, so a new clone has SST, salinity, currents, TCHP, SSH, MLD, depth slices and
+a working Argo–model matchup without downloading anything.
+
+### Committed to Git — real data, ships with the clone
+
+| Dataset | Path | Size | Notes |
+| :--- | :--- | :--- | :--- |
+| **HYCOM demo subset (surface)** | `backend/data/demo/processed/ocean/incois_hycom_bob_surface.nc` | 12.9 MB | Real INCOIS HYCOM surface field, 7 time steps (2026-10-07 06:00 → 2026-10-08 18:00 UTC), full 347×334 Bay-of-Bengal grid, float32 + zlib. |
+| **HYCOM demo subset (depth-resolved)** | `backend/data/demo/raw/ocean/currents/RSMC_hycom_20261004_bob_subset.nc` | 10.1 MB | Real INCOIS HYCOM run, 6 native depth levels (0, 17.5, 52.5, 125, 275, 500 m), 8 of 28 time steps (2026-10-03 06:00 → 2026-10-10 00:00 UTC), every 2nd LAT/LON point → 175×167 grid, float32 + zlib. |
+| NOAA IBTrACS North Indian Ocean | `backend/data/raw/cyclones/ibtracs/ibtracs.NI.list.v04r01.csv` | ~27 MB | Force-tracked despite the `backend/data/raw/` ignore rule. Cyclone tracks, seasons ≥ 2020. |
+| Argo profiles (23 floats / 23 profiles / 6,560 levels) | `backend/data/processed/ocean/argo/argo_bob_processed.json` | ~2.4 MB | Real GDAC/INCOIS data, Oct 2026, Bay of Bengal. Provenance in `argo_bob_metadata.json`. |
+| Synthetic schema fixtures | `backend/tests/fixtures/hycom_*.nc` | ~90 KB | `synthetic='true'` in the NetCDF attrs. `FIXTURE` mode / CI only — **not scientific evidence**. |
+
+**Total demo subset: 23 MB.** With IBTrACS and Argo that is ~52 MB of data in
+the clone.
+
+#### The demo subset is real data, thinned — never invented
+
+Both demo files are a **subsample of published INCOIS output**. Every kept
+number is the number the publisher wrote, at the index it was written at:
+no interpolation, no averaging, no synthetic fill, no invented timestamps. Only
+whole grid points and whole time steps are dropped. Each file records this in
+its NetCDF global attributes:
+
+```
+subset_of          RSMC_hycom_20261004_bob_subset.nc
+subset_method      coarsened real HYCOM subset: every 2nd LAT and 2nd LON grid
+                   point, 8 of 28 time steps kept; values subsampled only,
+                   never interpolated, averaged or replaced
+data_status        REAL          # no `synthetic` flag is ever written
+time_steps_kept    8
+time_steps_source  28
+```
+
+The time steps were chosen so the Argo–model matchup stays meaningful: all 23
+committed profiles land within the 24 h matchup window (mean separation 6.4 h),
+versus the ~10 that were required.
+
+#### `dataScope`: the app tells you which one you are looking at
+
+`/status`, `/layers` and `/datasets` report a `dataScope`:
+
+| Value | Meaning |
+| :--- | :--- |
+| `FULL` | The production HYCOM files are installed at their normal paths. |
+| `DEMO SUBSET (real HYCOM, coarsened)` | Running on the committed 23 MB subset. Real HYCOM values at lower resolution and fewer time steps. |
+
+The data stays `REAL` in both cases — a coarsened real subset is not synthetic,
+and labelling it as such would make the app hide data it can honestly show. In
+the header ribbon, Live mode publishes **both** model windows when they differ
+(they come from two different HYCOM runs) and states how old the newest one is;
+data older than 24 h is never called "live".
+
+#### Regenerating the demo subset
+
+Only needed when the installed HYCOM runs change. The script thins the files
+that are already on disk — it never creates data of its own:
+
+```bash
+cd backend
+python scripts/make_demo_subset.py --dry-run                     # report the plan
+python scripts/make_demo_subset.py     --depth-run RSMC_hycom_20261004_bob_subset.nc     --lat-stride 2 --lon-stride 2 --time-step 4                  # the committed defaults
+python scripts/make_demo_subset.py --lat-stride 4 --lon-stride 4 # a smaller subset (~7 MB)
+```
+
+The script prints what it wrote and refuses to leave anything over the 60 MB
+hard limit (40 MB target). Useful flags: `--depth-run` (which run to thin),
+`--surface-lat-stride/--surface-lon-stride` (the surface file is kept at full
+resolution by default), `--time-step`, `--compression-level`, `--demo-dir`.
+
+### NOT in Git — installed separately (~2.3 GB)
+
+| Dataset | Path | Notes |
+| :--- | :--- | :--- |
+| HYCOM daily subsets (6 runs) | `backend/data/raw/ocean/currents/RSMC_hycom_*.nc` | ~379 MB each. Real INCOIS output (`PyFerret V7.63`, CF-1.6). |
+| Processed surface field | `backend/data/processed/ocean/incois_hycom_bob_surface.nc` | ~13.5 MB. Derived from the runs above. |
+
+Both are covered by `.gitignore`. **When they are installed they take priority**
+and `dataScope` becomes `FULL`; the demo subset is only a fallback for when
+nothing is installed.
+
+```bash
+python scripts/setup-data.py --check      # what is present / missing
+python scripts/setup-data.py --download   # ~10.58 GB source, asks first
+python scripts/setup-data.py --process    # regenerate the processed surface field
+python scripts/check-data.py              # preflight: AVAILABLE / MISSING / INVALID
+```
+
+**Without any HYCOM file at all** (no production data *and* no demo subset) the
+ocean layers, depth slices, currents and the Argo–model matchup are unavailable,
+and the API says so explicitly rather than substituting values. Run the backend
+with `OCEANX_DATA_MODE=FIXTURE` to exercise the full pipeline on committed
+synthetic fixtures.
+
+> Legacy filename note: `arco_bob` / `incois_hycom_bob` is a historical tag for **BoB** = **Bay of Bengal**, not a single float.
+
+---
+
 ## 📐 Architecture
 
 Ocean-X uses a **Source-Agnostic Adapter Pattern** separating data provider integrations from the visualization interface:
@@ -255,8 +361,10 @@ graph TD
 
     SubGraph3[Data Resilience Layer]
     DomainModel --> AdapterMgr[Provider Adapter Manager]
-    AdapterMgr -->|Primary| RealData[INCOIS / NOAA / Copernicus Adapters]
-    AdapterMgr -->|Fallback| SimData[Deterministic Simulation Engine]
+    AdapterMgr -->|Primary| RealData[INCOIS RSMC HYCOM]
+    AdapterMgr -->|Primary| RealData2[Argo GDAC / INCOIS]
+    AdapterMgr -->|Primary| RealData3[NOAA IBTrACS]
+    AdapterMgr -->|Fallback| SimData[Explicitly-labelled Demo Provider]
 ```
 
 ---
@@ -264,7 +372,7 @@ graph TD
 ## 🚀 Getting Started
 
 ### **Prerequisites**
-- **Node.js** >= 18.0.0
+- **Node.js** >= 20.9.0
 - **npm** >= 9.0.0
 - **Python** >= 3.10
 - **Git**
@@ -312,7 +420,7 @@ REAL ocean-field mode requires installing them:
 # From the repository root
 python scripts/check-data.py          # preflight: what is present/missing
 python scripts/setup-data.py          # instructions
-python scripts/setup-data.py --download   # optional: ~9.85 GB INCOIS HYCOM source
+python scripts/setup-data.py --download   # optional: ~10.58 GB INCOIS HYCOM source
 ```
 See [data/README.md](data/README.md) for the full dataset inventory,
 provenance and policies.
@@ -343,19 +451,18 @@ npm run dev
 | `/api/status` | `GET` | System status + data mode (`dataMode`, `datasetSynthetic`) |
 | `/api/datasets` | `GET` | Dataset metadata |
 | `/api/cyclones` | `GET` | Cyclone tracks (NOAA IBTrACS) |
-| `/api/stations` | `GET` | Coastal monitoring stations |
 | `/api/hazards` | `GET` | Active hazard list |
-| `/api/risk/{id}` | `GET` | Prototype risk assessment |
+| `/api/risk/{id}` | `GET` | Unvalidated heuristic demo score (or `UNAVAILABLE` + reason) |
 | `/api/timeseries` | `GET` | Available HYCOM model timestamps |
 | `/api/layers` | `GET` | GIS layer list (status coherent with data mode) |
-| `/api/layers/{name}` | `GET` | Layer grid data (currents/sst/salinity/tchp) |
+| `/api/layers/{name}` | `GET` | Layer grid data (currents/sst/salinity/tchp/ssh/mld); masked cells are `null` |
 | `/api/model/depth-slice` | `GET` | HYCOM depth slice at nearest native model level |
+| `/api/observations` | `GET` | Dataset availability with derived (never hardcoded) status |
 | `/api/argo/floats` | `GET` | Argo float list |
 | `/api/argo/profiles` | `GET` | Argo profile list |
 | `/api/argo/{id}/matchup` | `GET` | Model–observation matchup, statistics & diagnostics |
+| `/api/argo/matchup/summary` | `GET` | Regional model–observation statistics |
 | `/api/inspect` | `GET` | Point ocean data inspection |
-
-> **Note:** `/api/v1/impact-analysis` does **not exist** in the current implementation and has been removed from this documentation.
 
 ---
 
@@ -409,7 +516,9 @@ Ocean-X/
 > in FIXTURE mode with the committed synthetic fixtures (see
 > [Quick Start](#quick-start)).
 
-- The production INCOIS HYCOM dataset is approximately **9.85 GB**.
+- The production INCOIS HYCOM dataset is approximately **10.58 GB**
+  (10,581,647,292 bytes — 9.85 GiB in binary units; the same number, counted
+  two ways. Older revisions of this README quoted only the GiB figure).
 - It is **intentionally NOT committed to Git** (`.gitignore` excludes large raw
   NetCDF / scientific files).
 - The repository expects the documented INCOIS HYCOM source file
@@ -428,13 +537,13 @@ Ocean-X/
 ```bash
 python scripts/check-data.py              # preflight: what is present/missing
 python scripts/setup-data.py --check      # status; exit 1 when required data is missing
-python scripts/setup-data.py --download   # ~9.85 GB INCOIS HYCOM source (asks for confirmation)
+python scripts/setup-data.py --download   # ~10.58 GB INCOIS HYCOM source (asks for confirmation)
 python scripts/setup-data.py --process    # regenerate the processed surface NetCDF
 python scripts/check-data.py              # re-check -> "Required HYCOM data available: YES"
 ```
 
 `--download` is supported automatically only for datasets with a verified public
-source (`HYCOM_RSMC_RAW`, ~9.85 GB); it announces the size, asks for confirmation
+source (`HYCOM_RSMC_RAW`, ~10.58 GB); it announces the size, asks for confirmation
 first, and resumes if interrupted. `--process` regenerates the derived surface
 dataset by running `backend/scripts/extract_hycom_bob.py` (it prefers the backend
 `.venv` interpreter, which has `xarray` + `netCDF4`).
@@ -500,7 +609,7 @@ OCEANX_DATA_MODE=FIXTURE python scripts/check-data.py
 
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements, dataset adapters, or visualization improvements.
 
-Distributed under the **MIT License**. See `LICENSE` for details.
+Distributed under the **MIT License** — see [LICENSE](LICENSE).
 
 ---
 
