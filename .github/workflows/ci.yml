@@ -58,7 +58,7 @@ jobs:
       # Pinning an older Node fails the test step with
       # "webidl.util.markAsUncloneable is not a function", because jsdom's
       # bundled undici calls an API that did not exist there.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.22.2'
           cache: npm
