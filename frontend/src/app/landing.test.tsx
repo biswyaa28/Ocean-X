@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
 import LandingPage from './page';
 import { PROJECT_EVENT, PROJECT_NAME, PROJECT_TAGLINE, PROJECT_TEAM } from '../constants/project';
 
@@ -30,8 +31,7 @@ beforeEach(() => {
   }) as unknown as typeof fetch;
   // next/link renders a plain anchor in tests.
   vi.mock('next/link', () => ({
-    default: ({ href, children, ...rest }: any) => {
-      const { createElement } = require('react');
+    default: ({ href, children, ...rest }: { href: string; children: ReactNode } & Record<string, unknown>) => {
       return createElement('a', { href, ...rest }, children);
     },
   }));
@@ -48,7 +48,8 @@ afterEach(() => {
 describe('LandingPage', () => {
   it('renders the project name from the shared constant', () => {
     render(<LandingPage />);
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(PROJECT_NAME);
+    expect(screen.getByRole('link', { name: new RegExp(`${PROJECT_NAME} home`, 'i') })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('measure');
   });
 
   it('states the one-line value proposition', () => {
@@ -68,8 +69,18 @@ describe('LandingPage', () => {
 
   it('has a secondary action that smooth-scrolls to how it works', () => {
     render(<LandingPage />);
-    const cta = screen.getByRole('link', { name: /see how it works/i });
-    expect(cta.getAttribute('href')).toBe('#how-it-works');
+    const cta = screen.getByRole('link', { name: /explore the data/i });
+    expect(cta.getAttribute('href')).toBe('#features');
+  });
+
+  it('renders the landing navigation and anchored content sections', () => {
+    render(<LandingPage />);
+    expect(screen.getByRole('navigation')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /features/i }).getAttribute('href')).toBe('#features');
+    expect(screen.getByRole('link', { name: /data flow/i }).getAttribute('href')).toBe('#how-it-works');
+    expect(screen.getByRole('link', { name: /data note/i }).getAttribute('href')).toBe('#data-note');
+    expect(document.querySelector('#features')).toBeTruthy();
+    expect(document.querySelector('#data-note')).toBeTruthy();
   });
 
   it('uses semantic landmarks and a sane heading order', () => {
@@ -89,28 +100,28 @@ describe('LandingPage', () => {
   it('describes each screenshot with real alt text', () => {
     render(<LandingPage />);
     const images = Array.from(document.querySelectorAll('img'));
-    expect(images).toHaveLength(3);
+    expect(images).toHaveLength(5);
     images.forEach((img) => {
       expect(img.getAttribute('alt')).toBeTruthy();
       expect((img.getAttribute('alt') ?? '').length).toBeGreaterThan(30);
-      expect(img.getAttribute('loading')).toBe('lazy');
     });
+    expect(document.querySelector('[data-hero-image="true"]')).toBeTruthy();
+    expect(images.slice(1).every((img) => img.getAttribute('loading') === 'lazy')).toBe(true);
   });
 
   it('ships the three captured screenshots', () => {
     render(<LandingPage />);
-    const sources = Array.from(document.querySelectorAll('img')).map((i) => i.getAttribute('src'));
-    expect(sources).toContain('/landing/dashboard-globe.webp');
-    expect(sources).toContain('/landing/profile-ribbon.webp');
-    expect(sources).toContain('/landing/regional-summary.webp');
+    const images = Array.from(document.querySelectorAll('img'));
+    expect(images.some((img) => img.getAttribute('alt')?.includes('3D globe'))).toBe(true);
+    expect(images.some((img) => img.getAttribute('alt')?.includes('profile ribbon'))).toBe(true);
+    expect(images.some((img) => img.getAttribute('alt')?.includes('TCHP product'))).toBe(true);
   });
 
   it('shows the team and event in the footer', () => {
     render(<LandingPage />);
     const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(screen.getByText(new RegExp(escape(PROJECT_TEAM)))).toBeTruthy();
-    // The event is used twice (hero eyebrow and footer), so assert both.
-    expect(screen.getAllByText(new RegExp(escape(PROJECT_EVENT))).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(new RegExp(escape(PROJECT_EVENT)))).toBeTruthy();
   });
 
   it('names its real data sources in the how-it-works flow', () => {
@@ -121,6 +132,25 @@ describe('LandingPage', () => {
     expect(text).toContain('NOAA IBTrACS');
     expect(text).toContain('FastAPI');
     expect(text).toContain('CesiumJS');
+  });
+
+  it('presents features as factual rows with source tags', () => {
+    render(<LandingPage />);
+    expect(screen.getByText('3D globe: model + Argo together')).toBeTruthy();
+    expect(screen.getByText('INCOIS RSMC HYCOM')).toBeTruthy();
+    expect(screen.getByText('Argo GDAC')).toBeTruthy();
+    expect(screen.getByText('NOAA IBTrACS')).toBeTruthy();
+    expect(document.querySelectorAll('[data-testid="feature-row"]')).toHaveLength(3);
+  });
+
+  it('uses the dedicated feature screenshots and regional TCHP note', () => {
+    render(<LandingPage />);
+    const featureImages = Array.from(document.querySelectorAll('[data-testid="feature-row"] img'));
+    expect(featureImages[0]?.getAttribute('src')).toContain('globe');
+    expect(featureImages[1]?.getAttribute('src')).toContain('matchup');
+    expect(featureImages[2]?.getAttribute('src')).toContain('cyclone-heat');
+    expect(screen.queryByText('Built to inspect, not decorate.')).toBeNull();
+    expect(screen.getByText(/float-derived TCHP vs INCOIS TCHP product/i)).toBeTruthy();
   });
 
   it('makes no claim the app cannot back up', () => {
@@ -147,11 +177,13 @@ describe('LandingPage', () => {
     expect(screen.queryByTestId('live-stats')).toBeNull();
   });
 
-  it('does not mount Cesium', () => {
+  it('does not mount Cesium', async () => {
     // The landing route must not request the globe engine at all.
     const { container } = render(<LandingPage />);
     const scripts = Array.from(document.querySelectorAll('script'));
     expect(scripts.some((s) => (s.getAttribute('src') ?? '').includes('Cesium'))).toBe(false);
-    expect(container.querySelector('canvas')?.getAttribute('data-testid')).toBe('ocean-canvas');
+    await waitFor(() =>
+      expect(container.querySelector('canvas')?.getAttribute('data-testid')).toBe('ocean-canvas')
+    );
   });
 });

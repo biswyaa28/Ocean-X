@@ -1,8 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import OceanCanvas from '../components/landing/OceanCanvas';
-import LiveStats from '../components/landing/LiveStats';
+import Image from 'next/image';
+import DashboardPreview from '../components/landing/DashboardPreview';
+import DeferredLiveStats from '../components/landing/DeferredLiveStats';
+import DeferredOceanCanvas from '../components/landing/DeferredOceanCanvas';
 import Reveal from '../components/landing/Reveal';
+import FeatureLightbox from '../components/landing/FeatureLightbox';
 import {
   PROJECT_EVENT,
   PROJECT_NAME,
@@ -19,127 +22,93 @@ export const metadata: Metadata = {
     description: PROJECT_TAGLINE,
     type: 'website',
     siteName: PROJECT_NAME,
-    images: [{ url: '/landing/dashboard-globe.webp', width: 1280, height: 720, alt: `${PROJECT_NAME} 3D ocean globe showing Argo float positions over the Bay of Bengal` }],
+    images: [{ url: '/landing/hero.webp', width: 1800, height: 1013, alt: `${PROJECT_NAME} 3D ocean globe showing Argo float positions over the Bay of Bengal` }],
   },
 };
-
-/** Screenshots captured from the running dashboard, as optimised .webp. */
-const SCREENSHOTS = [
-  {
-    src: '/landing/dashboard-globe.webp',
-    alt: 'The OceanLens 3D globe showing Argo float positions and observation radii over the Bay of Bengal.',
-    caption: '3D globe with Argo floats',
-  },
-  {
-    src: '/landing/profile-ribbon.webp',
-    alt: 'A selected float drawn as a vertical profile ribbon in the 3D scene, with HYCOM model levels marked as labelled spheres beside it.',
-    caption: 'Float profile ribbon with HYCOM levels',
-  },
-  {
-    src: '/landing/regional-summary.webp',
-    alt: 'The regional summary panel showing model-minus-float bias by model depth and the TCHP comparison.',
-    caption: 'Regional bias summary',
-  },
-];
 
 const FEATURES = [
   {
     title: '3D globe: model + Argo together',
-    body: 'INCOIS HYCOM currents, temperature and salinity sit on the same Cesium globe as the ingested Argo floats, so you can see where the water is being measured against where the model places it.',
+    body: 'INCOIS HYCOM currents, temperature and salinity sit on the same Cesium globe as the ingested Argo floats. See where the water is measured and where the model places it.',
+    source: 'INCOIS RSMC HYCOM',
+    image: '/landing/globe.webp',
+    alt: 'OceanLens 3D globe with Argo floats and observation radii over the Bay of Bengal.',
   },
   {
-    title: 'Float vs model matchup (profile comparison)',
+    title: 'Float vs model matchup',
     body: 'Open a float and compare its QC-passed profile against the model at the model’s own depth levels, per variable, with the residual convention stated rather than implied.',
+    source: 'Argo GDAC',
+    image: '/landing/matchup.webp',
+    alt: 'OceanLens profile ribbon comparing a selected Argo float with HYCOM levels.',
   },
   {
-    title: 'Cyclone ocean heat (TCHP, D26)',
-    body: 'Float-derived heat content and the depth of the 26 °C isotherm next to the model’s own TCHP field, with the difference between the two definitions stated instead of presented as model error.',
+    title: 'Cyclone ocean heat',
+    body: 'Read the cyclone-track context alongside the ocean heat view shown in the dashboard. The panel keeps the track context separate from the float and model heat products.',
+    source: 'NOAA IBTrACS',
+    image: '/landing/cyclone-heat.webp',
+    alt: 'OceanLens cyclone tracks and ocean heat comparison view.',
   },
 ];
 
 const STEPS = [
-  {
-    title: 'Collect',
-    body: 'INCOIS RSMC HYCOM for the model, Argo GDAC for float profiles, NOAA IBTrACS for cyclone tracks.',
-  },
-  {
-    title: 'Reconcile',
-    body: 'A FastAPI service aligns time and space, matches float levels to model levels, and computes residual statistics.',
-  },
-  {
-    title: 'Show',
-    body: 'A CesiumJS web globe renders the model, the floats and their matchups directly in the browser.',
-  },
+  { title: 'Sources', body: 'INCOIS RSMC HYCOM, Argo GDAC and NOAA IBTrACS provide the model, profiles and cyclone tracks.' },
+  { title: 'FastAPI', body: 'The service aligns time and space, matches float levels to model levels, and computes residual statistics.' },
+  { title: 'CesiumJS', body: 'A browser globe renders the model, floats and matchups without loading the dashboard engine on this page.' },
 ];
+
+function FlowIcon({ index }: { index: number }) {
+  if (index === 0) return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16c3-8 13-8 16 0M5 11h14M7 7h10M12 4v16" /></svg>;
+  if (index === 1) return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h10v14H7zM4 9h3M17 9h3M4 15h3M17 15h3M10 9h4M10 13h4" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16" /></svg>;
+}
 
 export default function LandingPage() {
   return (
-    <main className="flex-1">
-      {/* ---------------- HERO ---------------- */}
-      <section
-        className="relative min-h-[100svh] flex items-center overflow-hidden"
-        aria-labelledby="hero-heading"
-      >
-        <OceanCanvas />
-        {/* Legibility scrim: the canvas is decoration, the text is the content. */}
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 bg-gradient-to-b from-[#070a0f]/85 via-[#070a0f]/55 to-[#070a0f]"
-        />
-
-        <div className="relative z-10 w-full max-w-6xl mx-auto px-5 sm:px-8 py-20 sm:py-28">
-          <p className="font-mono text-[11px] sm:text-xs uppercase tracking-[0.3em] text-cyan-300/90">
-            {PROJECT_EVENT}
-          </p>
-
-          <h1
-            id="hero-heading"
-            className="mt-4 sm:mt-6 font-display text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-white text-balance"
-          >
-            {PROJECT_NAME}
-          </h1>
-
-          <p className="mt-4 sm:mt-6 max-w-2xl text-base sm:text-xl leading-relaxed text-slate-300 text-pretty">
-            {PROJECT_TAGLINE}
-          </p>
-
-          <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row gap-3">
-            <Link
-              href="/app"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-400 px-6 py-3.5 text-sm font-bold text-[#04121c] shadow-[0_0_30px_rgba(34,211,238,0.25)] transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200 active:scale-[0.99]"
-            >
-              Launch dashboard
-              <span aria-hidden="true">→</span>
-            </Link>
-            <a
-              href="#how-it-works"
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-6 py-3.5 text-sm font-semibold text-slate-200 backdrop-blur transition-colors hover:bg-white/10 hover:border-white/25 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200"
-            >
-              See how it works
-            </a>
+    <main className="landing-page">
+      <nav className="landing-nav" aria-label="Primary navigation">
+        <div className="landing-shell landing-nav__inner">
+          <a href="#top" className="landing-brand" aria-label={`${PROJECT_NAME} home`}>
+            <span className="landing-brand__mark" aria-hidden="true">◒</span>
+            <span>{PROJECT_NAME}</span>
+          </a>
+          <div className="landing-nav__links">
+            <a href="#features">Features</a>
+            <a href="#how-it-works">Data flow</a>
+            <a href="#data-note">Data note</a>
           </div>
+          <Link href="/app" className="button button--small button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link>
+        </div>
+      </nav>
+
+      <section id="top" className="landing-hero" aria-labelledby="hero-heading">
+        <DeferredOceanCanvas />
+        <div className="hero-vignette" aria-hidden="true" />
+        <div className="landing-shell landing-hero__grid">
+          <div className="hero-copy">
+            <p className="eyebrow"><span /> SIH26067 · BAY OF BENGAL</p>
+            <h1 id="hero-heading">Compare the ocean you <em>measure</em> with the ocean you model.</h1>
+            <p className="hero-lede"><span>{PROJECT_TAGLINE}</span> <span>Explore Argo profiles, HYCOM model fields and cyclone heat context in one view.</span></p>
+            <div className="hero-actions">
+              <Link href="/app" className="button button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link>
+              <a href="#features" className="button button--ghost">Explore the data <span aria-hidden="true">↓</span></a>
+            </div>
+          </div>
+          <DashboardPreview className="hero-preview" loading="eager" priority />
+        </div>
+        <div className="landing-shell stats-dock" data-shot="stats" role="region" aria-label="Measured dashboard statistics">
+          <DeferredLiveStats />
         </div>
       </section>
 
-      {/* ---------------- WHAT IT DOES ---------------- */}
-      <section className="relative py-16 sm:py-24" aria-labelledby="features-heading">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <Reveal>
-            <h2
-              id="features-heading"
-              className="font-display text-2xl sm:text-4xl font-extrabold text-white"
-            >
-              What it does
-            </h2>
-          </Reveal>
-          <div className="mt-8 sm:mt-12 grid gap-4 sm:gap-6 md:grid-cols-3">
+      <section id="features" className="landing-section landing-section--features" aria-labelledby="features-heading">
+        <div className="landing-shell">
+          <Reveal><div className="section-kicker">01 / THE VIEW</div><h2 id="features-heading">One basin. Three ways to read it.</h2><p className="section-intro">A visual comparison layer for the Bay of Bengal, grounded in the sources the dashboard actually uses.</p></Reveal>
+          <div className="feature-list">
             {FEATURES.map((feature, index) => (
-              <Reveal key={feature.title} delay={index * 90}>
-                <article className="h-full rounded-2xl border border-white/10 bg-[#080c14]/70 p-6 backdrop-blur-xl transition-colors hover:border-cyan-400/35 hover:bg-[#0a1018]/80">
-                  <h3 className="font-display text-lg font-bold text-cyan-200">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-3 text-sm leading-relaxed text-slate-400">{feature.body}</p>
+              <Reveal key={feature.title} delay={index * 100}>
+                <article className={`feature-row ${index % 2 ? 'feature-row--reverse' : ''}`} data-testid="feature-row" data-shot={index === 0 ? 'feature' : undefined}>
+                  <div className="feature-row__media"><FeatureLightbox src={feature.image} alt={feature.alt} width={1400} height={788} /></div>
+                  <div className="feature-row__copy"><span className="feature-index">0{index + 1}</span><h3>{feature.title}</h3><p>{feature.body}</p><span className="source-tag">{feature.source}</span></div>
                 </article>
               </Reveal>
             ))}
@@ -147,137 +116,23 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ---------------- LIVE PROOF ---------------- */}
-      <section className="relative py-16 sm:py-24" aria-labelledby="live-heading">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <Reveal>
-            <h2 id="live-heading" className="font-display text-2xl sm:text-4xl font-extrabold text-white">
-              What is in the data right now
-            </h2>
-            <p className="mt-3 max-w-2xl text-sm sm:text-base leading-relaxed text-slate-400">
-              These counts are read from the running analysis backend. If it cannot be reached,
-              they are withheld rather than replaced with placeholder numbers.
-            </p>
-          </Reveal>
-          <Reveal delay={120} className="mt-8">
-            <LiveStats />
-          </Reveal>
-        </div>
-      </section>
-
-      {/* ---------------- HOW IT WORKS ---------------- */}
-      <section
-        id="how-it-works"
-        className="relative py-16 sm:py-24 scroll-mt-8"
-        aria-labelledby="how-heading"
-      >
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <Reveal>
-            <h2 id="how-heading" className="font-display text-2xl sm:text-4xl font-extrabold text-white">
-              How it works
-            </h2>
-          </Reveal>
-          <ol className="mt-8 sm:mt-12 grid gap-4 sm:gap-6 md:grid-cols-3">
-            {STEPS.map((step, index) => (
-              <Reveal
-                key={step.title}
-                as="li"
-                delay={index * 90}
-                className="h-full rounded-2xl border border-white/10 bg-[#080c14]/70 p-6 backdrop-blur-xl"
-              >
-                <span className="font-mono text-xs text-cyan-400/90">STEP {index + 1}</span>
-                <h3 className="mt-2 font-display text-lg font-bold text-white">{step.title}</h3>
-                <p className="mt-3 text-sm leading-relaxed text-slate-300">{step.body}</p>
-              </Reveal>
-            ))}
+      <section id="how-it-works" className="landing-section landing-section--flow" aria-labelledby="how-heading">
+        <div className="landing-shell">
+          <Reveal><div className="section-kicker">02 / THE PIPELINE</div><h2 id="how-heading">From source files to a navigable globe.</h2></Reveal>
+          <ol className="flow-list">
+            {STEPS.map((step, index) => <Reveal as="li" key={step.title} delay={index * 100}><div className="flow-card"><span className="flow-icon"><FlowIcon index={index} /></span><span className="flow-step">STEP 0{index + 1}</span><h3>{step.title}</h3><p>{step.body}</p></div>{index < STEPS.length - 1 && <span className="flow-connector" aria-hidden="true">→</span>}</Reveal>)}
           </ol>
         </div>
       </section>
 
-      {/* ---------------- SCREENSHOTS ---------------- */}
-      <section className="relative py-16 sm:py-24" aria-labelledby="shots-heading">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <Reveal>
-            <h2 id="shots-heading" className="font-display text-2xl sm:text-4xl font-extrabold text-white">
-              The dashboard
-            </h2>
-          </Reveal>
-          <div className="mt-8 sm:mt-12 grid gap-6 sm:gap-8 md:grid-cols-3">
-            {SCREENSHOTS.map((shot, index) => (
-              <Reveal key={shot.src} delay={index * 90}>
-                <figure className="group">
-                  {/* A tilted glass frame, so the shots read as objects rather
-                      than as flat images pasted into a page. */}
-                  <div
-                    className="rounded-2xl border border-white/12 bg-[#080c14]/70 p-2 backdrop-blur-xl transition-transform duration-300 group-hover:-rotate-1 group-hover:scale-[1.01] motion-reduce:transform-none motion-reduce:transition-none"
-                    style={{ rotate: `${index % 2 === 0 ? -1.2 : 1.2}deg` }}
-                  >
-                    <img
-                      src={shot.src}
-                      alt={shot.alt}
-                      loading="lazy"
-                      decoding="async"
-                      width={1280}
-                      height={720}
-                      className="w-full rounded-xl border border-white/10 object-cover aspect-video"
-                    />
-                  </div>
-                  <figcaption className="mt-3 text-xs text-slate-400">{shot.caption}</figcaption>
-                </figure>
-              </Reveal>
-            ))}
-          </div>
-        </div>
+      <section id="data-note" className="landing-section landing-section--honesty" aria-labelledby="data-heading">
+        <div className="landing-shell"><Reveal><div className="honesty-card"><div><div className="section-kicker">DATA NOTE</div><h2 id="data-heading">Clear about what is measured.</h2></div><div><p>Everything shown comes from INCOIS RSMC HYCOM, Argo GDAC and NOAA IBTrACS. A small demo subset ships with the repository so the dashboard runs without downloading gigabytes; the full dataset is optional.</p><p className="honesty-caption">Float-derived TCHP vs INCOIS TCHP product; definitions differ.</p><FeatureLightbox src="/landing/regional.webp" alt="Regional panel comparing float-derived TCHP with the INCOIS TCHP product." width={1400} height={788} /></div></div></Reveal></div>
       </section>
 
-      {/* ---------------- HONEST DATA NOTE ---------------- */}
-      <section className="relative py-12 sm:py-16" aria-labelledby="data-heading">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <Reveal>
-            <div className="rounded-2xl border border-amber-400/25 bg-amber-500/[0.06] p-6 sm:p-7">
-              <h2
-                id="data-heading"
-                className="font-display text-base sm:text-lg font-bold text-amber-200"
-              >
-                About the data
-              </h2>
-              <p className="mt-3 text-sm leading-relaxed text-slate-300 max-w-3xl">
-                Everything shown comes from real sources: INCOIS RSMC HYCOM, Argo GDAC and NOAA
-                IBTrACS. A small demo subset of the model ships with the repository so the
-                dashboard runs without downloading gigabytes; the full dataset is optional and
-                can be pointed at instead. Model values are labelled with the depth actually
-                sampled, and where the source file labels a level differently the UI says so.
-              </p>
-            </div>
-          </Reveal>
-        </div>
-      </section>
-
-      {/* ---------------- FOOTER ---------------- */}
-      <footer className="relative border-t border-white/10 py-12">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-          <div>
-            <p className="font-display text-sm font-extrabold tracking-widest text-white uppercase">
-              {PROJECT_NAME}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">
-              {PROJECT_TEAM} · {PROJECT_EVENT}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <a
-              href={PROJECT_REPOSITORY_URL}
-              className="inline-flex items-center rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200"
-            >
-              View source
-            </a>
-            <Link
-              href="/app"
-              className="inline-flex items-center justify-center rounded-xl bg-cyan-400 px-4 py-2.5 text-xs font-bold text-[#04121c] transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-200"
-            >
-              Launch dashboard
-            </Link>
-          </div>
+      <footer className="landing-footer">
+        <div className="landing-shell landing-footer__inner">
+          <div><p className="landing-brand"><span className="landing-brand__mark" aria-hidden="true">◒</span>{PROJECT_NAME}</p><p className="footer-meta">{PROJECT_TEAM} · {PROJECT_EVENT}</p></div>
+          <div className="footer-actions"><a href={PROJECT_REPOSITORY_URL}>View repository ↗</a><Link href="/app" className="button button--primary">Launch dashboard <span aria-hidden="true">↗</span></Link></div>
         </div>
       </footer>
     </main>

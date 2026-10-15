@@ -47,6 +47,7 @@ from app.services.matchup_summary import (
 
 
 router = APIRouter()
+_landing_summary_cache: Optional[Dict[str, Any]] = None
 
 @router.get("/health")
 def get_health():
@@ -89,6 +90,31 @@ def get_status():
         # it is installed so a reader is never misled about the resolution.
         dataScope=settings.DATA_SCOPE,
     )
+
+
+@router.get("/summary/landing")
+def get_landing_summary():
+    """Return the small set of measured counts used by the landing page.
+
+    The first request reuses the existing providers and matchup summary
+    calculation. The compact result is then held for the lifetime of this
+    process, so the landing page never downloads the full profile, cyclone, or
+    regional-summary payloads and repeated visits do not repeat the work.
+    """
+    global _landing_summary_cache
+    if _landing_summary_cache is None:
+        profiles = argo_provider.get_profiles()
+        cyclones = ibtracs_provider.load_cyclones()
+        summary = get_argo_matchup_summary()
+        _landing_summary_cache = {
+            "argoProfileCount": len(profiles),
+            "includedProfileCount": int(summary.get("includedProfileCount", 0)),
+            "excludedProfileCount": int(summary.get("excludedProfileCount", 0)),
+            "cycloneTrackCount": len(cyclones),
+            "modelRunCount": len(summary.get("modelRuns") or []),
+            "dataScope": settings.DATA_SCOPE,
+        }
+    return _landing_summary_cache
 
 @router.get("/datasets", response_model=List[DatasetInfo])
 def get_datasets():

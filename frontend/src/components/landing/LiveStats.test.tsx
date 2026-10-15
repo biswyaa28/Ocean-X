@@ -29,24 +29,29 @@ afterEach(() => {
 
 describe('fetchLandingStats', () => {
   it('reads real figures when the backend answers', async () => {
-    global.fetch = vi.fn(async (url: string) => {
-      if (url.includes('/argo/profiles')) {
-        return jsonResponse([{ profile_id: 'a' }, { profile_id: 'b' }, { profile_id: 'c' }]);
-      }
-      if (url.includes('/cyclones')) return jsonResponse([{ id: 1 }, { id: 2 }]);
-      if (url.includes('/argo/matchup/summary')) {
-        return jsonResponse({ includedProfileCount: 19, totalProfileCount: 23, modelRuns: ['a', 'b'] });
-      }
-      return jsonResponse({ dataScope: 'FULL' });
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        argoProfileCount: 3,
+        cycloneTrackCount: 2,
+        includedProfileCount: 19,
+        excludedProfileCount: 4,
+        modelRunCount: 2,
+        dataScope: 'FULL',
+      })
+    ) as unknown as typeof fetch;
 
     const stats = await fetchLandingStats();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/summary/landing'),
+      expect.any(Object)
+    );
     expect(stats).not.toBeNull();
     expect(stats!.argoProfiles).toBe(3);
     expect(stats!.cyclones).toBe(2);
     expect(stats!.matchedProfiles).toBe(19);
-    expect(stats!.totalProfiles).toBe(23);
-    expect(stats!.modelRuns).toEqual(['a', 'b']);
+    expect(stats!.totalProfiles).toBe(3);
+    expect(stats!.modelRunCount).toBe(2);
     expect(stats!.dataScope).toBe('FULL');
   });
 
@@ -64,18 +69,14 @@ describe('fetchLandingStats', () => {
   });
 
   it('returns null when the payload is not a list of profiles', async () => {
-    global.fetch = vi.fn(async (url: string) => {
-      if (url.includes('/argo/profiles')) return jsonResponse({ error: 'nope' });
-      return jsonResponse([]);
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn(async () => jsonResponse({ error: 'nope' }, false)) as unknown as typeof fetch;
     await expect(fetchLandingStats()).resolves.toBeNull();
   });
 
   it('keeps working when only the optional endpoints fail', async () => {
     // Profiles answered; the summary did not. The profile count is real and must
     // still be shown, with the missing figure left absent rather than guessed.
-    global.fetch = vi.fn(async (url: string) => {
-      if (url.includes('/argo/profiles')) return jsonResponse([{ profile_id: 'a' }]);
+    global.fetch = vi.fn(async () => {
       throw new Error('summary down');
     }) as unknown as typeof fetch;
 
@@ -84,6 +85,13 @@ describe('fetchLandingStats', () => {
 });
 
 describe('LiveStats', () => {
+  it('shows neutral skeleton blocks while the compact response is pending', () => {
+    global.fetch = vi.fn(() => new Promise(() => undefined)) as unknown as typeof fetch;
+    render(<LiveStats />);
+    expect(screen.getByTestId('live-stats-skeleton')).toBeTruthy();
+    expect(screen.queryByText(/\d/)).toBeNull();
+  });
+
   it('shows no numbers at all when the backend is down', async () => {
     global.fetch = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
@@ -98,14 +106,16 @@ describe('LiveStats', () => {
   });
 
   it('shows measured figures when the backend answers', async () => {
-    global.fetch = vi.fn(async (url: string) => {
-      if (url.includes('/argo/profiles')) return jsonResponse([{ p: 1 }, { p: 2 }]);
-      if (url.includes('/cyclones')) return jsonResponse([{ id: 1 }]);
-      if (url.includes('/argo/matchup/summary')) {
-        return jsonResponse({ includedProfileCount: 7, totalProfileCount: 9, modelRuns: ['r1'] });
-      }
-      return jsonResponse({ dataScope: 'FULL' });
-    }) as unknown as typeof fetch;
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        argoProfileCount: 2,
+        cycloneTrackCount: 1,
+        includedProfileCount: 7,
+        excludedProfileCount: 2,
+        modelRunCount: 1,
+        dataScope: 'FULL',
+      })
+    ) as unknown as typeof fetch;
 
     render(<LiveStats />);
     await waitFor(() => expect(screen.getByTestId('live-stats')).toBeTruthy());
@@ -115,17 +125,19 @@ describe('LiveStats', () => {
     expect(text).toContain('Matched to model');
   });
 
-  it('renders a missing figure as a dash, never a fallback number', async () => {
-    global.fetch = vi.fn(async (url: string) => {
-      if (url.includes('/argo/profiles')) return jsonResponse([{ p: 1 }]);
-      if (url.includes('/cyclones')) return jsonResponse([]);
-      // Summary answers but with no counts.
-      return jsonResponse({ modelRuns: [] });
-    }) as unknown as typeof fetch;
+  it('withholds all figures when the compact payload is incomplete', async () => {
+    global.fetch = vi.fn(async () =>
+      jsonResponse({
+        argoProfileCount: 1,
+        cycloneTrackCount: 0,
+        excludedProfileCount: 1,
+        modelRunCount: 0,
+        dataScope: 'FULL',
+      })
+    ) as unknown as typeof fetch;
 
     render(<LiveStats />);
-    await waitFor(() => expect(screen.getByTestId('live-stats')).toBeTruthy());
-    expect(screen.getByTestId('live-stat-missing')).toBeTruthy();
-    expect(screen.getByTestId('live-stat-missing').textContent).toContain('Not reported by the backend');
+    await waitFor(() => expect(screen.getByTestId('live-stats-unavailable')).toBeTruthy());
+    expect(screen.queryByTestId('live-stats')).toBeNull();
   });
 });

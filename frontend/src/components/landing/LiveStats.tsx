@@ -17,20 +17,11 @@ export interface LandingStats {
   cyclones: number;
   matchedProfiles: number | null;
   totalProfiles: number | null;
-  modelRuns: string[];
+  modelRunCount: number;
   dataScope: string | null;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';
-
-const EMPTY: LandingStats = {
-  argoProfiles: 0,
-  cyclones: 0,
-  matchedProfiles: null,
-  totalProfiles: null,
-  modelRuns: [],
-  dataScope: null,
-};
 
 /**
  * Fetch the landing figures.
@@ -43,29 +34,28 @@ export async function fetchLandingStats(
   signal?: AbortSignal
 ): Promise<LandingStats | null> {
   try {
-    const [profiles, cyclones, summary, status] = await Promise.all([
-      fetch(`${API_BASE}/argo/profiles`, { signal }).then((r) => (r.ok ? r.json() : null)),
-      fetch(`${API_BASE}/cyclones`, { signal }).then((r) => (r.ok ? r.json() : null)),
-      fetch(`${API_BASE}/argo/matchup/summary`, { signal }).then((r) => (r.ok ? r.json() : null)),
-      fetch(`${API_BASE}/status`, { signal }).then((r) => (r.ok ? r.json() : null)),
-    ]);
+    const response = await fetch(`${API_BASE}/summary/landing`, { signal });
+    const summary = response.ok ? await response.json() : null;
 
     // Nothing usable came back: the caller hides the section.
-    if (!Array.isArray(profiles)) return null;
-
-    const modelRuns: string[] = Array.isArray(summary?.modelRuns)
-      ? summary.modelRuns.map((run: unknown) => String(run))
-      : [];
+    if (!summary || typeof summary !== 'object') return null;
+    if (
+      typeof summary.argoProfileCount !== 'number' ||
+      typeof summary.cycloneTrackCount !== 'number' ||
+      typeof summary.includedProfileCount !== 'number' ||
+      typeof summary.excludedProfileCount !== 'number' ||
+      typeof summary.modelRunCount !== 'number'
+    ) {
+      return null;
+    }
 
     return {
-      argoProfiles: profiles.length,
-      cyclones: Array.isArray(cyclones) ? cyclones.length : 0,
-      matchedProfiles:
-        typeof summary?.includedProfileCount === 'number' ? summary.includedProfileCount : null,
-      totalProfiles:
-        typeof summary?.totalProfileCount === 'number' ? summary.totalProfileCount : null,
-      modelRuns,
-      dataScope: typeof status?.dataScope === 'string' ? status.dataScope : null,
+      argoProfiles: summary.argoProfileCount,
+      cyclones: summary.cycloneTrackCount,
+      matchedProfiles: summary.includedProfileCount,
+      totalProfiles: summary.argoProfileCount,
+      modelRunCount: summary.modelRunCount,
+      dataScope: typeof summary.dataScope === 'string' ? summary.dataScope : null,
     };
   } catch {
     // Unreachable backend, aborted request, malformed payload — all the same
@@ -215,6 +205,13 @@ export default function LiveStats() {
   // Backend unreachable or not answering: show nothing rather than invent a
   // figure. The section itself still explains what the dashboard measures.
   if (loading || !stats) {
+    if (loading) {
+      return (
+        <div data-testid="live-stats-skeleton" className="stats-skeleton" aria-label="Loading measured statistics">
+          {[1, 2, 3, 4].map((item) => <span key={item} />)}
+        </div>
+      );
+    }
     return (
       <div
         data-testid="live-stats-unavailable"
@@ -227,8 +224,8 @@ export default function LiveStats() {
   }
 
   const runLabel =
-    stats.modelRuns.length > 0
-      ? `${stats.modelRuns.length} archived run${stats.modelRuns.length === 1 ? '' : 's'}`
+    stats.modelRunCount > 0
+      ? `${stats.modelRunCount} archived run${stats.modelRunCount === 1 ? '' : 's'}`
       : null;
 
   return (

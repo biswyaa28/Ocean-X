@@ -32,6 +32,7 @@ backend/.env
 # (kept local or downloaded via scripts/setup-data.py / archive_hycom_runs.py
 #  - see data/manifest.json and data/README.md)
 backend/data/raw/
+frontend/public/landing/raw/
 *.nc
 *.nc4
 *.nc.part
