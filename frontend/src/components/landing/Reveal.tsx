@@ -30,18 +30,28 @@ export default function Reveal({
    */
   as?: ElementType;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
+const ref = useRef<HTMLDivElement | null>(null);
   const [seen, setSeen] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
 
   // The content must never depend on an animation to become visible, so
-  // reduced-motion reveals unconditionally. Whether IntersectionObserver exists
-  // is a browser capability, not component state, so it is read during render.
-  const revealed = seen || reducedMotion || typeof IntersectionObserver === 'undefined';
+  // reduced-motion reveals unconditionally. This is deliberately NOT extended
+  // with a `typeof IntersectionObserver === 'undefined'` check: that reads true
+  // on the server and false in the browser, so the two renders disagree and
+  // hydration patches nothing.
+  const revealed = seen || reducedMotion;
 
   useEffect(() => {
     const node = ref.current;
     if (!node || revealed) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      // Nothing will ever observe this element, so reveal it on the next frame
+      // rather than synchronously inside the effect body, which would cascade
+      // an extra render.
+      const frame = requestAnimationFrame(() => setSeen(true));
+      return () => cancelAnimationFrame(frame);
+    }
 
     const observer = new IntersectionObserver(
       (entries) => {

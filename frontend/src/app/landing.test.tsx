@@ -137,10 +137,22 @@ describe('LandingPage', () => {
   it('presents features as factual rows with source tags', () => {
     render(<LandingPage />);
     expect(screen.getByText('3D globe: model + Argo together')).toBeTruthy();
-    expect(screen.getByText('INCOIS RSMC HYCOM')).toBeTruthy();
+    // getAllByText: two cards legitimately credit the same source — the globe
+    // screenshot and the cyclone-heat screenshot are both HYCOM products. What
+    // matters is that each real source is named, not that they are distinct.
+    expect(screen.getAllByText('INCOIS RSMC HYCOM').length).toBeGreaterThan(0);
     expect(screen.getByText('Argo GDAC')).toBeTruthy();
-    expect(screen.getByText('NOAA IBTrACS')).toBeTruthy();
     expect(document.querySelectorAll('[data-testid="feature-row"]')).toHaveLength(3);
+  });
+
+  it('names every real data source it draws on', () => {
+    render(<LandingPage />);
+    // IBTrACS supplies cyclone tracks and the risk engine rather than any one
+    // feature screenshot, so it is asserted against the page as a whole.
+    const text = document.body.textContent ?? '';
+    ['INCOIS RSMC HYCOM', 'Argo GDAC', 'NOAA IBTrACS'].forEach((source) => {
+      expect(text).toContain(source);
+    });
   });
 
   it('uses the dedicated feature screenshots and regional TCHP note', () => {
