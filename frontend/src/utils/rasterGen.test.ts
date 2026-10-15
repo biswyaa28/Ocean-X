@@ -407,7 +407,7 @@ describe('surface raster — masked land vs genuine zero', () => {
   beforeEach(() => clearRasterCache());
   afterEach(() => clearRasterCache());
 
-  function alphasOf(values: (number | null)[][], layerType: 'sst' | 'salinity' | 'tchp'): number[] {
+  function alphasOf(values: (number | null)[][]): number[] {
     const nLat = values.length;
     const nLon = values[0].length;
     const img = mkImageData(nLon, nLat);
@@ -426,7 +426,7 @@ describe('surface raster — masked land vs genuine zero', () => {
   }
 
   it('leaves masked (null) cells fully transparent', () => {
-    const alphas = alphasOf([[null, 29.1], [29.4, null]], 'sst');
+    const alphas = alphasOf([[null, 29.1], [29.4, null]]);
     expect(alphas[0]).toBe(0);
     expect(alphas[3]).toBe(0);
     expect(alphas[1]).toBe(180);
@@ -434,7 +434,7 @@ describe('surface raster — masked land vs genuine zero', () => {
   });
 
   it('draws a genuine zero-valued current/TCHP cell instead of hiding it', () => {
-    const alphas = alphasOf([[0, 120]], 'tchp');
+    const alphas = alphasOf([[0, 120]]);
     expect(alphas[0]).toBe(180);
     expect(alphas[1]).toBe(180);
   });

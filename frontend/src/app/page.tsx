@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import Image from 'next/image';
 import DashboardPreview from '../components/landing/DashboardPreview';
 import DeferredLiveStats from '../components/landing/DeferredLiveStats';
 import DeferredOceanCanvas from '../components/landing/DeferredOceanCanvas';

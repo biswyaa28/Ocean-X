@@ -411,11 +411,11 @@ export class DemoProvider implements DataProvider {
     return [];
   }
 
-  async getArgoProfileById(id: string): Promise<ArgoProfile | null> {
+  async getArgoProfileById(_id: string): Promise<ArgoProfile | null> {
     return null;
   }
 
-  async getArgoMatchup(profileId: string): Promise<ArgoMatchupResponse | null> {
+  async getArgoMatchup(_profileId: string): Promise<ArgoMatchupResponse | null> {
     return null;
   }
 

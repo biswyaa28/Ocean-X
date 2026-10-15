@@ -42,14 +42,12 @@ interface DataInspectorProps {
   activeLayer: GISLayer | null;
   inspection: InspectionData | null;
   legendBounds?: { min: number; mid: number; max: number; unit: string; layerName: string; timestamp?: string } | null;
-  onClose?: () => void;
 }
 
 export const DataInspector: React.FC<DataInspectorProps> = ({
   activeLayer,
   inspection,
   legendBounds,
-  onClose,
 }) => {
   if (!activeLayer) return null;
 

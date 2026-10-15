@@ -33,7 +33,7 @@ beforeEach(() => {
   rafCalls = 0;
   cancelled = 0;
   setReducedMotion(false);
-  globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+  globalThis.requestAnimationFrame = vi.fn((): number => {
     rafCalls++;
     // Never actually invoke the callback: the loop must not run in a test.
     return rafCalls;

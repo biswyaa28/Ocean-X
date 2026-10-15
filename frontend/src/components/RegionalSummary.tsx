@@ -18,7 +18,7 @@
  * dominate the regional figure.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   ChevronDown,
@@ -44,7 +44,6 @@ import {
 import type { ArgoMatchupSummary, TchpScatterPoint } from '../types/oceanlens';
 import { apiProvider } from '../services/ApiProvider';
 import {
-  modelDepthAxisDisagreementM,
   modelDepthAxisNote,
   modelDepthLabel,
   modelDepthLabelCompact,
@@ -415,35 +414,34 @@ const TchpScatter: React.FC<{
   );
 };
 
-interface RegionalSummaryProps {
-  /** Render inline (inside the drawer) or as a standalone panel. */
-  compact?: boolean;
-}
-
-export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => {
+export const RegionalSummary: React.FC = () => {
   const [summary, setSummary] = useState<ArgoMatchupSummary | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<boolean>(false);
 
-  const load = useCallback(async (signal: AbortSignal) => {
-    setLoading(true);
-    setUnavailable(null);
-    const data = await apiProvider.getArgoMatchupSummary(signal);
-    if (signal.aborted) return;
-    if (data) setSummary(data);
-    else {
-      setSummary(null);
-      setUnavailable('REGIONAL SUMMARY UNAVAILABLE FROM THE BACKEND — NOTHING IS FABRICATED.');
-    }
-    setLoading(false);
-  }, []);
+  // Retrying bumps a token instead of re-entering the effect by hand, so the
+  // load lives in exactly one place and every state update stays inside the
+  // promise callback rather than in the effect body.
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
+    let cancelled = false;
+    void apiProvider.getArgoMatchupSummary(controller.signal).then((data) => {
+      if (cancelled) return;
+      if (data) setSummary(data);
+      else {
+        setSummary(null);
+        setUnavailable('REGIONAL SUMMARY UNAVAILABLE FROM THE BACKEND — NOTHING IS FABRICATED.');
+      }
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [reloadToken]);
 
   // Sampled axis vs the file's own DEPTH labels. Passed down so every depth this
   // panel shows carries the file's label when the two disagree.
@@ -455,10 +453,6 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
     [summary]
   );
   const depthAxisNote = useMemo(() => modelDepthAxisNote(depthAxis), [depthAxis]);
-  const depthAxisDisagreementM = useMemo(
-    () => modelDepthAxisDisagreementM(depthAxis),
-    [depthAxis]
-  );
 
   const tchpDefinitionNoteText = useMemo(
     () => tchpDefinitionNote(summary?.tchpModelDefinition),
@@ -494,7 +488,11 @@ export const RegionalSummary: React.FC<RegionalSummaryProps> = ({ compact }) => 
           <span>REGIONAL SUMMARY</span>
         </div>
         <button
-          onClick={() => void load(new AbortController().signal)}
+          onClick={() => {
+            setUnavailable(null);
+            setLoading(true);
+            setReloadToken((n) => n + 1);
+          }}
           title="Reload the regional summary"
           className="p-1 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
         >

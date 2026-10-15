@@ -17,6 +17,7 @@ import {
   CycloneTrackPoint,
   AstronomicalData,
   RiskAssessment,
+  type FlyToTarget,
 } from '../../types/oceanlens';
 
 import { Header } from '../../components/Header';
@@ -81,12 +82,14 @@ export default function Home() {
   const [selectedMatchup, setSelectedMatchup] = useState<ArgoMatchupResponse | null>(null);
   // Authoritative heuristic score, fetched from GET /risk/{cycloneId}?index=N.
   // null until the first response arrives; never recomputed on the client.
-  const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
-  const [riskLoading, setRiskLoading] = useState(false);
+  // The score is stored together with the request it answers, so a response
+  // that arrives after the user has scrubbed to another track point is
+  // recognised as stale rather than displayed as the current cyclone's score.
+  const [riskState, setRiskState] = useState<{ key: string; value: RiskAssessment | null } | null>(null);
 
   // -1 = not positioned yet; effectiveTrackIndex resolves the per-mode default.
   const [currentTrackIndex, setCurrentTrackIndex] = useState<number>(-1);
-  const [targetLocation, setTargetLocation] = useState<{ lat: number; lon: number; height?: number } | null>(null);
+  const [targetLocation, setTargetLocation] = useState<FlyToTarget | null>(null);
 
   // Inspection Data State & Dynamic Legend Bounds
   const [inspectedCoords, setInspectedCoords] = useState<{ lat: number; lon: number } | null>({ lat: 18.2247, lon: 88.4000 });
@@ -245,6 +248,17 @@ export default function Home() {
 
   const currentPoint =
     activeTrack[Math.min(effectiveTrackIndex, activeTrack.length - 1)] || activeTrack[0];
+
+  const riskKey =
+    oceanMode === 'LIVE' || !cyclone || !activeTrack.length
+      ? null
+      : `${cyclone.id}:${Math.min(effectiveTrackIndex, activeTrack.length - 1)}`;
+
+  // Derived, not stored: when no risk request is in scope, or the answer on
+  // hand belongs to a different track point, there is no current score to show.
+  // This is also what stops the previous cyclone's score lingering on screen
+  // while the next one is still being fetched.
+  const riskAssessment = riskState?.key === riskKey && riskKey !== null ? riskState.value : null;
 
   // Single source of truth for the ocean-data timestamp. The legend effect and
   // the Cesium raster overlay MUST resolve to the same key or Phase 2B's
@@ -438,25 +452,19 @@ export default function Home() {
   // Fetch the unvalidated heuristic score from the backend for the cyclone
   // point currently on screen. Aborted on rapid scrubbing so a slow response
   // cannot overwrite a newer one.
-  useEffect(() => {
-    if (oceanMode === 'LIVE' || !cyclone || !activeTrack.length) {
-      setRiskAssessment(null);
-      return;
-    }
+useEffect(() => {
+    if (oceanMode === 'LIVE' || !cyclone || !activeTrack.length) return;
     const idx = Math.min(effectiveTrackIndex, activeTrack.length - 1);
+    const key = `${cyclone.id}:${idx}`;
     const controller = new AbortController();
     let cancelled = false;
-    setRiskLoading(true);
     apiProvider
       .getRiskAssessment(cyclone.id, idx, controller.signal)
       .then((r) => {
-        if (!cancelled) setRiskAssessment(r);
+        if (!cancelled) setRiskState({ key, value: r });
       })
       .catch(() => {
-        if (!cancelled) setRiskAssessment(null);
-      })
-      .finally(() => {
-        if (!cancelled) setRiskLoading(false);
+        if (!cancelled) setRiskState({ key, value: null });
       });
     return () => {
       cancelled = true;
@@ -1132,7 +1140,6 @@ export default function Home() {
           activeLayer={activeLayer}
           inspection={inspectionData}
           legendBounds={legendBounds}
-          onClose={() => setInspectionData(null)}
         />
 
         {/* 7. Research Mode Technical Banner Overlay */}

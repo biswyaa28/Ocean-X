@@ -11,6 +11,7 @@ import {
   GISLayer,
   ArgoProfile,
   AstronomicalData,
+  type FlyToTarget,
 } from '../types/oceanlens';
 import { CurrentFieldDataStatus, EnvironmentalFlowField } from '../types/flow';
 import { FlowCanvasOverlay } from './FlowCanvasOverlay';
@@ -47,6 +48,32 @@ import {
 
 if (typeof window !== 'undefined') {
   (window as unknown as { CESIUM_BASE_URL: string }).CESIUM_BASE_URL = '/cesium';
+}
+
+/**
+ * Cesium types `LabelGraphics.show` and `.text` as `Property | boolean`, but at
+ * runtime the value is either a plain primitive (when assigned directly) or a
+ * `ConstantProperty` exposing getValue/setValue. Both shapes occur depending on
+ * how the entity was built, so both are handled here — structurally, rather than
+ * by casting to `any` and losing every type check around the call site.
+ */
+type CesiumProperty<T> = { getValue(): T | undefined; setValue(value: T): void };
+
+function readCesiumProperty<T>(owner: object, key: string): T | undefined {
+  const current = (owner as Record<string, unknown>)[key];
+  if (current && typeof (current as CesiumProperty<T>).getValue === 'function') {
+    return (current as CesiumProperty<T>).getValue();
+  }
+  return current as T | undefined;
+}
+
+function writeCesiumProperty<T>(owner: object, key: string, value: T): void {
+  const current = (owner as Record<string, unknown>)[key];
+  if (current && typeof (current as CesiumProperty<T>).setValue === 'function') {
+    (current as CesiumProperty<T>).setValue(value);
+    return;
+  }
+  (owner as Record<string, unknown>)[key] = value;
 }
 
 export function safeJulianDate(timestampStr: string): CesiumTypes.JulianDate {
@@ -194,7 +221,7 @@ interface CesiumViewerInnerProps {
   onSelectArgoProfile?: (profile: ArgoProfile) => void;
   onInspectPoint?: (lat: number, lon: number) => void;
   onAstronomicalUpdate?: (data: AstronomicalData) => void;
-  targetLocation?: { lat: number; lon: number; height?: number } | null;
+  targetLocation?: FlyToTarget | null;
   timestamp?: string;
   depthSliceVisible?: boolean;
   depthSlicePayload?: DepthSlicePayload | null;
@@ -618,7 +645,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed() || !targetLocation) return;
 
-    if ((targetLocation as { isSun?: boolean }).isSun && timestamp) {
+    if (targetLocation.isSun && timestamp) {
       const julianDate = safeJulianDate(timestamp);
       const sunPosIcrf = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(julianDate);
       const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
@@ -637,7 +664,7 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
       return;
     }
 
-    if ((targetLocation as { isMoon?: boolean }).isMoon && timestamp) {
+    if (targetLocation.isMoon && timestamp) {
       const julianDate = safeJulianDate(timestamp);
       const moonPosIcrf = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(julianDate);
       const icrfToFixed = Cesium.Transforms.computeIcrfToFixedMatrix(julianDate) || new Cesium.Matrix3();
@@ -1173,18 +1200,10 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
           })
         );
         if (pointEntity.label) {
-          if (typeof (pointEntity.label.show as any)?.setValue === 'function') {
-            (pointEntity.label.show as any).setValue(showLabel);
-          } else {
-            pointEntity.label.show = showLabel as any;
-          }
+          writeCesiumProperty(pointEntity.label, 'show', showLabel);
           if (pointEntity.label.text) {
             const labelText = `ARGO FLOAT ${p.float_id}\nREAL · GDAC`;
-            if (typeof (pointEntity.label.text as any)?.setValue === 'function') {
-              (pointEntity.label.text as any).setValue(labelText);
-            } else {
-              pointEntity.label.text = labelText as any;
-            }
+            writeCesiumProperty(pointEntity.label, 'text', labelText);
           }
         }
         pointEntity.show = true;
@@ -1236,17 +1255,10 @@ export const CesiumViewerInner: React.FC<CesiumViewerInnerProps> = ({
         );
         const shouldShow = isSelected || isHovered;
 
-        const currentShow =
-          typeof (pointEntity.label.show as any)?.getValue === 'function'
-            ? (pointEntity.label.show as any).getValue()
-            : pointEntity.label.show;
+        const currentShow = readCesiumProperty<boolean>(pointEntity.label, 'show');
 
         if (currentShow !== shouldShow) {
-          if (typeof (pointEntity.label.show as any)?.setValue === 'function') {
-            (pointEntity.label.show as any).setValue(shouldShow);
-          } else {
-            pointEntity.label.show = shouldShow as any;
-          }
+          writeCesiumProperty(pointEntity.label, 'show', shouldShow);
           changed = true;
         }
       }

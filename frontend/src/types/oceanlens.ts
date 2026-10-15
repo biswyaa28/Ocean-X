@@ -570,3 +570,21 @@ export interface AstronomicalData {
     lon: number;
   };
 }
+
+/**
+ * A camera fly-to target.
+ *
+ * `isSun` / `isMoon` select the sub-point of that body rather than a fixed
+ * lat/lon: the viewer resolves the body's position for the current timestamp.
+ * They travel with the target through AppState.setTargetLocation, so they are
+ * part of the contract rather than an untyped extra field.
+ */
+export interface FlyToTarget {
+  lat: number;
+  lon: number;
+  height?: number;
+  /** Point the camera at the Sun's sub-point for the current timestamp. */
+  isSun?: boolean;
+  /** Point the camera at the Moon's sub-point for the current timestamp. */
+  isMoon?: boolean;
+}

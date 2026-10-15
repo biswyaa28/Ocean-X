@@ -8,7 +8,6 @@ export default function DeferredOceanCanvas() {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: number | undefined;
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
       cancelIdleCallback?: (handle: number) => void;
@@ -23,10 +22,10 @@ export default function DeferredOceanCanvas() {
         idleWindow.cancelIdleCallback?.(idle);
       };
     }
-    timer = window.setTimeout(start, 0);
+    const timer = window.setTimeout(start, 0);
     return () => {
       cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      window.clearTimeout(timer);
     };
   }, []);
 
