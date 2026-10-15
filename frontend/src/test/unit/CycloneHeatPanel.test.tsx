@@ -12,7 +12,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { ArgoMatchupDrawer } from '../../components/ArgoMatchupDrawer';
 import { apiProvider } from '../../services/ApiProvider';
 import type { ArgoMatchupResponse } from '../../types/oceanlens';
@@ -28,16 +28,26 @@ vi.mock('../../services/ApiProvider', () => ({
 const getArgoObservations = vi.mocked(apiProvider.getArgoObservations);
 const getArgoMatchup = vi.mocked(apiProvider.getArgoMatchup);
 
-function renderDrawer(matchup: ArgoMatchupResponse) {
+async function renderDrawer(matchup: ArgoMatchupResponse) {
   const profile = makeArgoProfile();
   getArgoObservations.mockResolvedValue(profile.observations);
   getArgoMatchup.mockResolvedValue(matchup);
-  return render(<ArgoMatchupDrawer profile={profile} onClose={() => {}} />);
+  const view = render(<ArgoMatchupDrawer profile={profile} onClose={() => {}} />);
+  // The drawer fetches observations and the matchup on mount. Let both settle
+  // inside act so React is not updated after the test body has finished, which
+  // otherwise logs an unwrapped-act warning for every one of them.
+  await act(async () => {});
+  return view;
 }
 
 async function openMatchupTab() {
-  fireClick(screen.getByTitle('Matchup tab'));
+  // Clicking the tab starts the matchup request; wrap it so the state updates
+  // it triggers are applied inside act rather than after the test body.
+  await act(async () => {
+    fireClick(screen.getByTitle('Matchup tab'));
+  });
   await waitFor(() => expect(getArgoMatchup).toHaveBeenCalled());
+  await act(async () => {});
 }
 
 function fireClick(element: HTMLElement) {
@@ -50,7 +60,7 @@ beforeEach(() => {
 
 describe('Cyclone heat section', () => {
   it('shows the float-derived, INCOIS and difference values for a warm profile', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     // Labels carry a CSS text-transform, so DOM casing is mixed-case. The
@@ -70,7 +80,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('states the plain-language difference between model and float', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() =>
@@ -81,7 +91,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('reports D26 for the float and MLD for the model', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() => expect(screen.getByText('64.2 m')).toBeTruthy());
@@ -91,7 +101,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('never claims a cyclone will form or intensify', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() => expect(screen.getByText(/^cyclone heat$/i)).toBeTruthy());
@@ -122,7 +132,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('says "Not available" with the reason instead of a blank or a zero', async () => {
-    renderDrawer(
+    await renderDrawer(
       makeArgoMatchup({
         tchpFloatKjCm2: null,
         tchpModelKjCm2: null,
@@ -145,7 +155,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('treats a genuine float TCHP of zero as a measurement, not a failure', async () => {
-    renderDrawer(
+    await renderDrawer(
       makeArgoMatchup({
         tchpFloatKjCm2: 0,
         tchpModelKjCm2: 41.2,
@@ -162,7 +172,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('carries the caveat that the model TCHP formula is not published', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() =>
@@ -175,7 +185,7 @@ describe('Cyclone heat section', () => {
   });
 
   it('names both sides by their source instead of calling the gap a bias', async () => {
-    renderDrawer(makeArgoMatchup());
+    await renderDrawer(makeArgoMatchup());
     await openMatchupTab();
 
     await waitFor(() => expect(screen.getByText(/^cyclone heat$/i)).toBeTruthy());
