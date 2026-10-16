@@ -374,7 +374,11 @@ describe('Phase 2B — PNG Blob / object URL image sources', () => {
   });
 
   it('falls back to the Data URL path when object URLs are unavailable', async () => {
-    Reflect.deleteProperty(URL, 'createObjectURL');
+    // Assigned rather than deleted: this describe's beforeEach installs a mock,
+    // and under Vitest 5's jsdom (which implements createObjectURL natively)
+    // deleteProperty does not reliably remove it. The code under test only
+    // checks that the property is callable.
+    URL.createObjectURL = undefined as unknown as typeof URL.createObjectURL;
 
     const res = await generateLayerImageSourceCached('sst', [5], [80], [[28]], 't1');
     expect(res.encoding).toBe('dataurl');
