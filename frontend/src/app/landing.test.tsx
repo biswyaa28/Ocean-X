@@ -13,6 +13,15 @@ const originalFetch = global.fetch;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalRAF = globalThis.requestAnimationFrame;
 
+// next/link renders a plain anchor in tests. Declared at the top level because
+// vi.mock is hoisted: Vitest 5 errors when it is written inside beforeEach,
+// where its actual execution order would be misleading.
+vi.mock('next/link', () => ({
+  default: ({ href, children, ...rest }: { href: string; children: ReactNode } & Record<string, unknown>) => {
+    return createElement('a', { href, ...rest }, children);
+  },
+}));
+
 beforeEach(() => {
   // jsdom has no canvas backend; the landing page draws a decorative hero, so a
   // stub context is enough to exercise the render path.
@@ -29,12 +38,6 @@ beforeEach(() => {
   global.fetch = vi.fn(async () => {
     throw new Error('ECONNREFUSED');
   }) as unknown as typeof fetch;
-  // next/link renders a plain anchor in tests.
-  vi.mock('next/link', () => ({
-    default: ({ href, children, ...rest }: { href: string; children: ReactNode } & Record<string, unknown>) => {
-      return createElement('a', { href, ...rest }, children);
-    },
-  }));
 });
 
 afterEach(() => {
