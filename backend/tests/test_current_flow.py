@@ -367,7 +367,7 @@ def test_endpoint_current_flow_dataset_missing_503(monkeypatch):
 # ------------------------------------------------------------
 
 def test_surface_currents_endpoint_still_works():
-    r = client.get("/layers/currents")
+    r = client.get("/api/layers/currents")
     assert r.status_code == 200
     data = r.json()
     assert data["status"] in ("REAL", "SIMULATED"), f"status must be REAL or SIMULATED (data-mode-aware)"

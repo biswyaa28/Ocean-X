@@ -197,7 +197,7 @@ def test_api_exposes_the_default_point_reason():
     from app.main import app
 
     client = TestClient(app)
-    payload = client.get("/cyclones").json()
+    payload = client.get("/api/cyclones").json()
     if not payload:
         pytest.skip("IBTrACS not installed")
 
@@ -218,7 +218,7 @@ def test_user_can_still_scrub_to_a_null_point():
     from app.main import app
 
     client = TestClient(app)
-    payload = client.get("/cyclones").json()
+    payload = client.get("/api/cyclones").json()
     if not payload:
         pytest.skip("IBTrACS not installed")
 
@@ -240,7 +240,7 @@ def test_risk_at_a_scrubbed_null_point_is_unavailable_not_wrong():
     from app.main import app
 
     client = TestClient(app)
-    payload = client.get("/cyclones").json()
+    payload = client.get("/api/cyclones").json()
     target = None
     for c in payload:
         for i, pt in enumerate(c["track"]):
@@ -252,7 +252,7 @@ def test_risk_at_a_scrubbed_null_point_is_unavailable_not_wrong():
     if target is None:
         pytest.skip("no null-wind points available")
 
-    body = client.get(f"/risk/{target[0]}", params={"index": target[1]}).json()
+    body = client.get(f"/api/risk/{target[0]}", params={"index": target[1]}).json()
     assert body["status"] == "UNAVAILABLE"
     assert body["heuristicDemoScore"] is None
     assert "wind" in body["unavailableReason"].lower()

@@ -26,7 +26,7 @@ def cyclones():
 # ---------------------------------------------------------------------------
 
 def test_cyclones_endpoint_exposes_provenance_and_completeness(cyclones):
-    response = client.get("/cyclones")
+    response = client.get("/api/cyclones")
     assert response.status_code == 200
     payload = response.json()
     assert payload
@@ -48,7 +48,7 @@ def test_cyclones_endpoint_no_longer_returns_the_fabricated_constant_pair():
     A real observation can legitimately be 45.0 kt, but it must then carry a
     real source — so we assert the pairing, not the bare number.
     """
-    response = client.get("/cyclones")
+    response = client.get("/api/cyclones")
     for c in response.json():
         for pt in c["track"]:
             if pt["maxWindKts"] == 45.0 and pt["centralPressureMb"] == 990.0:
@@ -62,7 +62,7 @@ def test_cyclones_endpoint_no_longer_returns_the_fabricated_constant_pair():
 # ---------------------------------------------------------------------------
 
 def test_unknown_cyclone_id_returns_404_not_the_first_storm():
-    response = client.get("/cyclones/DEFINITELY-NOT-A-STORM")
+    response = client.get("/api/cyclones/DEFINITELY-NOT-A-STORM")
     assert response.status_code == 404
 
 
@@ -72,11 +72,11 @@ def test_risk_path_param_selects_the_requested_cyclone(cyclones):
         c for c in cyclones
         if any(p.maxWindKts is not None and p.distanceToCoastKm is not None for p in c.track)
     )
-    response = client.get(f"/risk/{target.id}")
+    response = client.get(f"/api/risk/{target.id}")
     assert response.status_code == 200
     body = response.json()
 
-    other = client.get(f"/risk/{cyclones[0].id}").json()
+    other = client.get(f"/api/risk/{cyclones[0].id}").json()
     # Different storms must be independently addressable. Either the scores
     # differ, or at least both responded rather than aliasing one storm.
     assert "status" in body
@@ -86,17 +86,17 @@ def test_risk_path_param_selects_the_requested_cyclone(cyclones):
 
 def test_risk_accepts_the_hazard_prefix(cyclones):
     target = cyclones[0]
-    assert client.get(f"/risk/hazard-{target.id}").status_code == 200
+    assert client.get(f"/api/risk/hazard-{target.id}").status_code == 200
 
 
 def test_risk_unknown_id_returns_404():
-    response = client.get("/risk/DEFINITELY-NOT-A-STORM")
+    response = client.get("/api/risk/DEFINITELY-NOT-A-STORM")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
 
 def test_risk_response_shape_is_renamed_and_labelled():
-    response = client.get(f"/risk/{ibtracs_provider.load_cyclones()[0].id}")
+    response = client.get(f"/api/risk/{ibtracs_provider.load_cyclones()[0].id}")
     if not response.status_code == 200:
         pytest.skip("no cyclones")
     body = response.json()
@@ -114,7 +114,7 @@ def test_risk_response_shape_is_renamed_and_labelled():
 def test_risk_unavailable_never_carries_a_score():
     """Whichever cyclone, an unavailable assessment must have no number."""
     for c in ibtracs_provider.load_cyclones():
-        body = client.get(f"/risk/{c.id}").json()
+        body = client.get(f"/api/risk/{c.id}").json()
         if body["status"] == "UNAVAILABLE":
             assert body["heuristicDemoScore"] is None
             assert body["category"] is None
@@ -127,7 +127,7 @@ def test_risk_unavailable_never_carries_a_score():
 # ---------------------------------------------------------------------------
 
 def test_hazards_severity_is_null_when_unavailable():
-    hazards = client.get("/hazards").json()
+    hazards = client.get("/api/hazards").json()
     assert hazards
     for h in hazards:
         if h["riskAssessment"]["status"] == "UNAVAILABLE":
@@ -138,13 +138,13 @@ def test_hazards_accepts_a_cyclone_selector():
     cyclones = ibtracs_provider.load_cyclones()
     if not cyclones:
         pytest.skip("no cyclones")
-    response = client.get("/hazards", params={"cyclone_id": cyclones[1].id})
+    response = client.get("/api/hazards", params={"cyclone_id": cyclones[1].id})
     assert response.status_code == 200
     assert response.json()[0]["id"] == f"hazard-{cyclones[1].id}"
 
 
 def test_hazards_unknown_cyclone_returns_404():
-    response = client.get("/hazards", params={"cyclone_id": "NOT-A-STORM"})
+    response = client.get("/api/hazards", params={"cyclone_id": "NOT-A-STORM"})
     assert response.status_code == 404
 
 
@@ -154,7 +154,7 @@ def test_hazards_unknown_cyclone_returns_404():
 
 def test_datasets_ibtracs_range_matches_served_data(cyclones):
     """C2: 1842-2025 / 62851 was hardcoded; the API serves 2020+ only."""
-    datasets = client.get("/datasets").json()
+    datasets = client.get("/api/datasets").json()
     ibtracs = next(d for d in datasets if "IBTrACS" in d["dataset_name"])
 
     expected_points = sum(len(c.track) for c in cyclones)
@@ -171,7 +171,7 @@ def test_datasets_ibtracs_range_matches_served_data(cyclones):
 
 
 def test_datasets_lists_the_imd_fallback_columns():
-    datasets = client.get("/datasets").json()
+    datasets = client.get("/api/datasets").json()
     ibtracs = next(d for d in datasets if "IBTrACS" in d["dataset_name"])
     assert "NEWDELHI_WIND" in ibtracs["variables"]
     assert "NEWDELHI_PRES" in ibtracs["variables"]
@@ -182,7 +182,7 @@ def test_datasets_lists_the_imd_fallback_columns():
 # ---------------------------------------------------------------------------
 
 def test_observations_status_is_derived_not_hardcoded_real():
-    body = client.get("/observations").json()
+    body = client.get("/api/observations").json()
     assert body["status"] != "REAL" or (
         body["oceanDataStatus"] == "REAL" and body["cycloneDataStatus"] == "REAL"
     )
@@ -200,7 +200,7 @@ def test_observations_never_claims_real_without_a_dataset(monkeypatch):
     monkeypatch.setattr(
         ep.incois_provider, "get_available_timestamps", lambda: []
     )
-    body = client.get("/observations").json()
+    body = client.get("/api/observations").json()
     assert body["oceanDataStatus"] == "NOT CURRENTLY INTEGRATED"
     assert body["status"] != "REAL"
 
@@ -209,7 +209,7 @@ def test_observations_reports_simulated_in_fixture_mode(monkeypatch):
     import app.api.endpoints as ep
 
     monkeypatch.setenv("OCEANX_DATA_MODE", "FIXTURE")
-    body = client.get("/observations").json()
+    body = client.get("/api/observations").json()
     assert body["oceanDataStatus"] == "SIMULATED"
     assert body["status"] == "SIMULATED"
     assert body["dataMode"] == "FIXTURE"
@@ -221,7 +221,7 @@ def test_observations_reports_simulated_in_fixture_mode(monkeypatch):
 
 def test_inspect_never_claims_real_for_synthetic_fixture(monkeypatch):
     monkeypatch.setenv("OCEANX_DATA_MODE", "FIXTURE")
-    body = client.get("/inspect?lat=15&lon=88").json()
+    body = client.get("/api/inspect?lat=15&lon=88").json()
     if body["status"] == "OK":
         assert body["dataStatus"] == "SIMULATED"
         assert body["dataMode"] == "FIXTURE"
@@ -231,13 +231,13 @@ def test_inspect_missing_dataset_is_not_called_a_real_dataset(monkeypatch):
     import app.api.endpoints as ep
 
     monkeypatch.setattr(ep.incois_provider, "_get_dataset", lambda: None)
-    body = client.get("/inspect?lat=15&lon=88").json()
+    body = client.get("/api/inspect?lat=15&lon=88").json()
     assert body["status"] == "NO_REAL_MODEL_DATA"
     assert body["dataStatus"] == "NOT CURRENTLY INTEGRATED"
 
 
 def test_inspect_missing_pressure_is_null_not_a_default():
-    body = client.get("/cyclones/inspect?lat=18.2&lon=88.4").json()
+    body = client.get("/api/cyclones/inspect?lat=18.2&lon=88.4").json()
     assert body["status"] == "OK"
     assert "windSource" in body
     assert "pressureSource" in body

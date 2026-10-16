@@ -19,9 +19,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API Router at /api and root
+# Mounted once, under /api, which is the documented base path. The router used
+# to be included a second time with no prefix so that tests could call routes
+# without it; that doubled the entire API surface (45 GET paths for 22 routes),
+# polluted the OpenAPI schema with duplicates, and meant most of the test suite
+# exercised a surface no client uses. The tests now call /api/... as well.
 app.include_router(api_router, prefix=settings.API_V1_STR)
-app.include_router(api_router)
 
 @app.get("/")
 def root():

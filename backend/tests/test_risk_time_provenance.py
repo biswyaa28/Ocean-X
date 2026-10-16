@@ -38,7 +38,7 @@ def model_timestamps():
 
 
 def test_risk_reports_the_model_timestamp_it_used(amphan, model_timestamps):
-    response = client.get(f"/risk/{amphan.id}?index={amphan.currentTrackIndex}")
+    response = client.get(f"/api/risk/{amphan.id}?index={amphan.currentTrackIndex}")
     assert response.status_code == 200
     body = response.json()
 
@@ -54,7 +54,7 @@ def test_risk_reports_the_model_timestamp_it_used(amphan, model_timestamps):
 
 def test_replay_storm_is_flagged_as_not_time_matched(amphan, model_timestamps):
     """A 2020-2025 replay track against 2026 model fields is never matched."""
-    response = client.get(f"/risk/{amphan.id}?index={amphan.currentTrackIndex}")
+    response = client.get(f"/api/risk/{amphan.id}?index={amphan.currentTrackIndex}")
     body = response.json()
     if body["status"] != "OK":
         pytest.skip("risk engine declined to score (no model data)")
@@ -68,7 +68,7 @@ def test_replay_storm_is_flagged_as_not_time_matched(amphan, model_timestamps):
 
 
 def test_explanation_carries_the_ocean_state_time_mismatch(amphan):
-    response = client.get(f"/risk/{amphan.id}?index={amphan.currentTrackIndex}")
+    response = client.get(f"/api/risk/{amphan.id}?index={amphan.currentTrackIndex}")
     body = response.json()
     if body["status"] != "OK":
         pytest.skip("risk engine declined to score (no model data)")
@@ -87,7 +87,7 @@ def test_unavailable_response_never_claims_a_time_matched_score(amphan, monkeypa
     monkeypatch.setattr(
         ep.incois_provider, "get_layer_data", lambda *a, **k: None
     )
-    response = client.get(f"/risk/{amphan.id}?index={amphan.currentTrackIndex}")
+    response = client.get(f"/api/risk/{amphan.id}?index={amphan.currentTrackIndex}")
     body = response.json()
     assert body["status"] == "UNAVAILABLE"
     assert body["heuristicDemoScore"] is None

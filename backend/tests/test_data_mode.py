@@ -95,7 +95,7 @@ class TestStatusEndpointDataMode:
         from fastapi.testclient import TestClient
         from app.main import app
         client = TestClient(app)
-        resp = client.get("/status")
+        resp = client.get("/api/status")
         assert resp.status_code == 200
         data = resp.json()
         assert "dataMode" in data, "/api/status must include 'dataMode'"
@@ -105,7 +105,7 @@ class TestStatusEndpointDataMode:
         from fastapi.testclient import TestClient
         from app.main import app
         client = TestClient(app)
-        resp = client.get("/status")
+        resp = client.get("/api/status")
         data = resp.json()
         assert data["dataMode"] in ("REAL", "FIXTURE"), \
             f"dataMode must be 'REAL' or 'FIXTURE', got {data['dataMode']!r}"
@@ -137,7 +137,7 @@ class TestStatusEndpointDataMode:
         from fastapi.testclient import TestClient
         from app.main import app
         client = TestClient(app)
-        resp = client.get("/status")
+        resp = client.get("/api/status")
         data = resp.json()
         if data["dataMode"] == "REAL":
             assert data["datasetSynthetic"] is False, \
@@ -215,7 +215,7 @@ class TestLayerStatusCoherence:
         from fastapi.testclient import TestClient
         from app.main import app
         client = TestClient(app)
-        resp = client.get("/layers")
+        resp = client.get("/api/layers")
         layers = {l["id"]: l for l in resp.json()}
 
         assert "wind" not in layers, \

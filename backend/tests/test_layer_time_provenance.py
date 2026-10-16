@@ -34,7 +34,7 @@ def _assert_is_a_real_model_time(label, model_timestamps):
 
 
 def test_layer_response_reports_a_real_model_time(model_timestamps):
-    response = client.get("/layers/sst")
+    response = client.get("/api/layers/sst")
     assert response.status_code == 200
     _assert_is_a_real_model_time(response.json()["timestamp"], model_timestamps)
 
@@ -47,7 +47,7 @@ def test_requested_model_time_that_is_equivalent_but_not_string_equal_is_honoure
     equivalent = target.split(".")[0] + "Z"
     assert equivalent != target  # genuinely a different string
 
-    response = client.get(f"/layers/sst?timestamp={equivalent}")
+    response = client.get(f"/api/layers/sst?timestamp={equivalent}")
     assert response.status_code == 200
     body = response.json()
     assert body["timestamp"] == target
@@ -63,7 +63,7 @@ def test_time_outside_the_dataset_reports_the_nearest_real_time_not_the_first(
     that the value is stated and real — and that a request after the window is
     not answered with the earliest slice.
     """
-    response = client.get("/layers/sst?timestamp=2020-05-18T12:00:00")
+    response = client.get("/api/layers/sst?timestamp=2020-05-18T12:00:00")
     assert response.status_code == 200
     body = response.json()
     _assert_is_a_real_model_time(body["timestamp"], model_timestamps)
@@ -75,7 +75,7 @@ def test_time_outside_the_dataset_reports_the_nearest_real_time_not_the_first(
 def test_time_after_the_dataset_window_is_not_served_as_the_first_time(
     model_timestamps,
 ):
-    response = client.get("/layers/sst?timestamp=2031-01-01T00:00:00")
+    response = client.get("/api/layers/sst?timestamp=2031-01-01T00:00:00")
     assert response.status_code == 200
     body = response.json()
     _assert_is_a_real_model_time(body["timestamp"], model_timestamps)
@@ -84,7 +84,7 @@ def test_time_after_the_dataset_window_is_not_served_as_the_first_time(
 
 
 def test_unparseable_timestamp_is_rejected_rather_than_answered_with_another_day():
-    response = client.get("/layers/sst?timestamp=not-a-timestamp")
+    response = client.get("/api/layers/sst?timestamp=not-a-timestamp")
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert detail["requestedTimestamp"] == "not-a-timestamp"
@@ -92,7 +92,7 @@ def test_unparseable_timestamp_is_rejected_rather_than_answered_with_another_day
 
 
 def test_time_matched_is_true_when_the_request_is_the_model_time(model_timestamps):
-    response = client.get(f"/layers/sst?timestamp={model_timestamps[0]}")
+    response = client.get(f"/api/layers/sst?timestamp={model_timestamps[0]}")
     assert response.json()["timeMatched"] is True
 
 def test_observations_reports_the_depth_dataset_own_time_range():
@@ -102,7 +102,7 @@ def test_observations_reports_the_depth_dataset_own_time_range():
     """
     from app.api import endpoints as ep
 
-    body = client.get("/observations").json()
+    body = client.get("/api/observations").json()
     depth_times = body["available_depth_timestamps"]
     surface_times = body["available_timestamps"]
 

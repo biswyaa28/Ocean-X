@@ -49,9 +49,11 @@ It is never inferred silently from file presence.
 
 Do not expose secrets.
 
-## Implemented Routes (as of Phase 3)
+## Implemented Routes
 
 All routes are prefixed with `/api` (actual base path, not `/api/v1`).
+
+Verified against the running service's OpenAPI schema, not written by hand.
 
 | Route | Method | Description |
 |---|---|---|
@@ -64,14 +66,18 @@ All routes are prefixed with `/api` (actual base path, not `/api/v1`).
 | `/api/risk/{hazard_id}` | GET | Risk assessment |
 | `/api/timeseries` | GET | Available model timestamps |
 | `/api/layers` | GET | GIS layer list (status coherent with data mode) |
-| `/api/layers/{name}` | GET | Layer grid data |
+| `/api/layers/{layer_name}` | GET | Layer grid data |
 | `/api/model/depth-slice` | GET | HYCOM depth slice (Phase 1A) |
 | `/api/argo/floats` | GET | Argo float list |
 | `/api/argo/profiles` | GET | Argo profile list |
-| `/api/argo/profiles/{id}` | GET | Single Argo profile |
+| `/api/argo/profiles/{profile_id}` | GET | Single Argo profile |
 | `/api/argo/nearest` | GET | Nearest Argo profile by lat/lon |
-| `/api/argo/{id}/observations` | GET | Profile depth observations |
-| `/api/argo/{id}/matchup` | GET | Model–observation matchup (Phase 2A/2B/2C) |
+| `/api/argo/{profile_id}/observations` | GET | Profile depth observations |
+| `/api/argo/{profile_id}/matchup` | GET | Model–observation matchup (Phase 2A/2B/2C) |
+| `/api/argo/matchup/summary` | GET | Aggregate matchup statistics over all profiles |
+| `/api/observations` | GET | Observation listing |
+| `/api/summary/landing` | GET | Compact measured counts for the landing page |
+| `/api/cyclones/{id}` | GET | One cyclone's track |
 | `/api/inspect` | GET | Point ocean data inspection |
 
 > [!WARNING]

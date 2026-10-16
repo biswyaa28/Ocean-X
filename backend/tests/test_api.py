@@ -16,14 +16,14 @@ from app.api import endpoints
 client = TestClient(app)
 
 def test_health():
-    response = client.get("/health")
+    response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
     assert "version" in data
 
 def test_status():
-    response = client.get("/status")
+    response = client.get("/api/status")
     assert response.status_code == 200
     data = response.json()
     # Phase 3: dataMode and datasetSynthetic must be present
@@ -155,7 +155,7 @@ def test_landing_summary_computes_once_under_concurrent_requests(monkeypatch):
     assert all(result == results[0] for result in results), "all callers must see the same value"
 
 def test_datasets():
-    response = client.get("/datasets")
+    response = client.get("/api/datasets")
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -172,7 +172,7 @@ def test_datasets():
     assert incois["status"] == expected_status
 
 def test_cyclones():
-    response = client.get("/cyclones")
+    response = client.get("/api/cyclones")
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -182,7 +182,7 @@ def test_cyclones():
         assert len(c["track"]) > 0
 
 def test_layer_currents():
-    response = client.get("/layers/currents")
+    response = client.get("/api/layers/currents")
     assert response.status_code == 200
     data = response.json()
     # Phase 3: status reflects actual data mode — never hardcoded REAL
@@ -194,7 +194,7 @@ def test_layer_currents():
     assert data["grid"]["v"] is not None
 
 def test_layer_sst():
-    response = client.get("/layers/sst")
+    response = client.get("/api/layers/sst")
     assert response.status_code == 200
     data = response.json()
     # Phase 3: status reflects actual data mode
@@ -205,7 +205,7 @@ def test_layer_sst():
     assert data["grid"]["values"] is not None
 
 def test_layer_salinity():
-    response = client.get("/layers/salinity")
+    response = client.get("/api/layers/salinity")
     assert response.status_code == 200
     data = response.json()
     # Phase 3: status reflects actual data mode
@@ -214,14 +214,14 @@ def test_layer_salinity():
     assert data["units"] == "PSU"
 
 def test_layer_tchp():
-    response = client.get("/layers/tchp")
+    response = client.get("/api/layers/tchp")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] in ("REAL", "SIMULATED"), f"status must be REAL or SIMULATED, got {data['status']!r}"
     assert data["units"] == "KJ/cm2"
 
 def test_inspect_point():
-    response = client.get("/inspect?lat=15.25&lon=88.42")
+    response = client.get("/api/inspect?lat=15.25&lon=88.42")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -247,7 +247,7 @@ def _available_model_timestamp():
 
 
 def test_2026_hycom_sst_inspect():
-    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
+    response = client.get(f"/api/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -256,7 +256,7 @@ def test_2026_hycom_sst_inspect():
     assert isinstance(data["tempC"], float)
 
 def test_2026_hycom_salinity_inspect():
-    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
+    response = client.get(f"/api/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -265,7 +265,7 @@ def test_2026_hycom_salinity_inspect():
     assert isinstance(data["salnPSU"], float)
 
 def test_2026_hycom_currents_inspect():
-    response = client.get(f"/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
+    response = client.get(f"/api/inspect?lat=18.2&lon=88.4&timestamp={_available_model_timestamp()}")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"
@@ -275,7 +275,7 @@ def test_2026_hycom_currents_inspect():
     assert data["currentSpeedMS"] is not None
 
 def test_2020_hycom_timestamp_unavailable():
-    response = client.get("/inspect?lat=18.2&lon=88.4&timestamp=2020-05-15T21:00:00")
+    response = client.get("/api/inspect?lat=18.2&lon=88.4&timestamp=2020-05-15T21:00:00")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "NO_REAL_MODEL_DATA"
@@ -286,7 +286,7 @@ def test_2020_hycom_timestamp_unavailable():
     assert "tempC" not in data
 
 def test_2020_amphan_cyclone_inspect():
-    response = client.get("/cyclones/inspect?lat=18.2&lon=88.4&timestamp=2020-05-15T21:00:00")
+    response = client.get("/api/cyclones/inspect?lat=18.2&lon=88.4&timestamp=2020-05-15T21:00:00")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "OK"

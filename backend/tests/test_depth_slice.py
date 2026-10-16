@@ -326,7 +326,7 @@ def test_endpoint_dataset_unavailable_is_503(monkeypatch):
 
 def test_endpoint_surface_layer_endpoint_unchanged():
     # The pre-existing surface endpoint must keep working alongside the new one.
-    r = client.get("/layers/sst")
+    r = client.get("/api/layers/sst")
     assert r.status_code == 200
     data = r.json()
     assert data["status"] in ("REAL", "SIMULATED"), f"status must be REAL or SIMULATED (data-mode-aware), got {data["status"]!r}"
