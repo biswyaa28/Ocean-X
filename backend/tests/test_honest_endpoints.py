@@ -244,3 +244,68 @@ def test_inspect_missing_pressure_is_null_not_a_default():
     assert "dataCompleteness" in body
     if body["maxWindKts"] is None:
         assert body["windSource"] is None
+
+# ---------------------------------------------------------------------------
+# Missing IBTrACS snapshot must be loud, never an empty answer
+# ---------------------------------------------------------------------------
+
+def test_missing_snapshot_raises_rather_than_returning_empty_list(monkeypatch):
+    """An absent dataset is not the same finding as "no cyclones occurred"."""
+    from app.providers.ibtracs_provider import IBTrACSDataMissing
+
+    monkeypatch.setattr(
+        ibtracs_provider, "csv_path", ibtracs_provider.csv_path.parent / "__absent__.csv"
+    )
+    monkeypatch.setattr(ibtracs_provider, "_cached_cyclones", None)
+
+    with pytest.raises(IBTrACSDataMissing) as excinfo:
+        ibtracs_provider.load_cyclones()
+
+    # The message has to say what is wrong and how to fix it.
+    assert "missing" in str(excinfo.value).lower()
+    assert "git checkout" in str(excinfo.value)
+
+
+def test_missing_snapshot_surfaces_as_503_with_remedy(monkeypatch):
+    """Endpoints must not degrade into an empty 200 when the file is gone."""
+    monkeypatch.setattr(
+        ibtracs_provider, "csv_path", ibtracs_provider.csv_path.parent / "__absent__.csv"
+    )
+    monkeypatch.setattr(ibtracs_provider, "_cached_cyclones", None)
+
+    for route in (
+        "/api/cyclones",
+        "/api/hazards",
+        "/api/summary/landing",
+        "/api/datasets",
+        "/api/observations",
+    ):
+        response = client.get(route)
+        assert response.status_code == 503, f"{route} returned {response.status_code}"
+        detail = response.json()["detail"]
+        assert detail["error"] == "ibtracs_dataset_missing"
+        assert "git checkout" in detail["remedy"]
+        assert detail["see"] == "data/README.md#ibtracs-ni-provenance"
+
+
+def test_committed_snapshot_matches_its_recorded_checksum():
+    """The provenance recorded in the manifest must describe the real bytes."""
+    import hashlib
+    import json
+    from pathlib import Path
+
+    manifest = json.loads(
+        (Path(__file__).resolve().parents[2] / "data" / "manifest.json").read_text()
+    )
+    entry = next(d for d in manifest["datasets"] if d["name"] == "IBTrACS_NI")
+
+    csv_path = Path(__file__).resolve().parents[2] / entry["local_path"]
+
+    digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    assert digest == entry["snapshot_sha256"], (
+        "IBTrACS snapshot has drifted from the checksum recorded in "
+        "data/manifest.json; update snapshot_sha256 and the provenance table "
+        "in data/README.md deliberately"
+    )
+    assert entry["committed"] is True
+    assert entry["snapshot_date"]

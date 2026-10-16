@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "project": "OCEAN-X",
-  "description": "Dataset manifest for OCEAN-X (OceanLens). Describes every dataset the backend depends on. Large scientific datasets are NOT committed to Git; see data/README.md for installation instructions.",
+  "description": "Dataset manifest for OCEAN-X (OceanLens). Describes every dataset the backend depends on. Large scientific datasets are generally NOT committed to Git; see data/README.md for installation instructions. IBTrACS_NI is the one committed exception and carries its own snapshot provenance.",
   "root": "backend",
   "datasets": [
     {
@@ -14,10 +14,17 @@
       "format": "CSV (IBTrACS list format, 2 header rows: names + units)",
       "source": "NOAA National Centers for Environmental Information (NCEI), IBTrACS v04r01, North Indian Ocean basin",
       "source_url": "https://www.ncei.noaa.gov/products/international-best-track-archive",
+      "landing_page_url": "https://www.ncei.noaa.gov/products/international-best-track-archive",
       "approx_size_bytes": 28000000,
       "committed": true,
+      "committed_rationale": "Tracked in Git deliberately. This file is the only copy of the cyclone dataset anywhere, and load_cyclones() has nothing to score without it. .gitignore lists backend/data/raw/ and this path is negated with an explicit comment, so the two do not silently disagree.",
+      "upstream_url": "https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r01/access/csv/ibtracs.NI.list.v04r01.csv",
+      "upstream_url_note": "Comparison only. Deliberately NOT named 'download_url': setup-data.py --download overwrites datasets that have a download_url, and this file must never be overwritten by a setup script. Use --ibtracs to compare.",
+      "snapshot_date": "2026-09-11",
+      "snapshot_sha256": "1e892624f97f5481cddf6b8e9e65be2925fa0a3336f399f5b9fd87fbb463fb78",
+      "snapshot_note": "These are the exact bytes committed on 2026-09-11 and they are what every clone gets. NOAA revises IBTrACS in place at the download_url above, so re-fetching today returns a DIFFERENT file (a newer IBTrACS revision with an extra season). Upstream no longer serves these bytes, so the snapshot cannot be reproduced by re-downloading. scripts/setup-data.py --ibtracs reports the difference rather than overwriting, so adopting a newer revision is always a deliberate act.",
       "auto_download": false,
-      "manual_install": null,
+      "manual_install": "Already in the repository \u2014 no download needed. To compare the committed snapshot against the current NOAA revision: python scripts/setup-data.py --ibtracs",
       "expected_columns": [
         "SID",
         "SEASON",
@@ -49,7 +56,7 @@
       "manual_install": null,
       "regenerate_command": "cd backend && python scripts/process_argo_bob.py",
       "companion_metadata": "backend/data/processed/ocean/argo/argo_bob_metadata.json",
-      "provenance_note": "Data status label 'REAL SOURCE — INGESTION PENDING'. The processed file currently contains a curated fallback profile set; see process_argo_bob.py for provenance details."
+      "provenance_note": "Data status label 'REAL SOURCE \u2014 INGESTION PENDING'. The processed file currently contains a curated fallback profile set; see process_argo_bob.py for provenance details."
     },
     {
       "name": "HYCOM_RSMC_RAW",

@@ -1,4 +1,5 @@
 import csv
+import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 from app.core.config import settings
@@ -8,6 +9,27 @@ from app.models.schemas import (
     DataCompleteness,
     WindRadius,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class IBTrACSDataMissing(RuntimeError):
+    """The committed IBTrACS snapshot is not on disk.
+
+    This file is the only copy of the cyclone dataset in the project: nothing
+    downloads it, and every /cyclones, /hazards and /risk number is measured
+    from it. When it is absent those endpoints have nothing real to report, so
+    the failure is raised rather than answered with an empty list -- an empty
+    list is indistinguishable from "no cyclones occurred", which is false.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        super().__init__(
+            f"IBTrACS snapshot missing at {path}. Every cyclone count, hazard and "
+            f"risk score served by this API is measured from this file. Restore it "
+            f"with: git checkout -- {path}. See data/README.md for provenance."
+        )
 
 
 def _to_float(raw: Optional[str]) -> Optional[float]:
@@ -136,7 +158,13 @@ class IBTrACSProvider:
             return self._cached_cyclones
 
         if not self.csv_path.exists():
-            return []
+            logger.error(
+                "IBTrACS snapshot not found at %s. /cyclones, /hazards and /risk have "
+                "no observations to serve; this is a missing-dataset failure, not an "
+                "absence of cyclones.",
+                self.csv_path,
+            )
+            raise IBTrACSDataMissing(self.csv_path)
 
         storms_by_id: Dict[str, Dict] = {}
 

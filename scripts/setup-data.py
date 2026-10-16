@@ -14,17 +14,21 @@ Usage:
     python scripts/setup-data.py --download --yes                     # no confirmation prompt
     python scripts/setup-data.py --process    # regenerate derived datasets after download
                                               # (runs backend/scripts/extract_hycom_bob.py)
+    python scripts/setup-data.py --ibtracs   # compare the committed IBTrACS snapshot against
+                                              # the current NOAA revision (never overwrites)
 
 Only datasets with a verified 'download_url' in the manifest are downloadable.
 Everything else is reported with manual installation instructions.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
@@ -147,6 +151,100 @@ def run_extractor():
     return result.returncode == 0
 
 
+def sha256_of(path: Path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(CHUNK_SIZE), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def cmd_ibtracs(manifest):
+    """Compare the committed IBTrACS snapshot against the current NOAA revision.
+
+    Read-only by construction. The committed file is the canonical snapshot that
+    every clone shares, so this fetches upstream to a temporary file and reports
+    the difference. It never writes to the dataset path, whatever the outcome.
+    """
+    ds = next((d for d in manifest["datasets"] if d["name"] == "IBTrACS_NI"), None)
+    if ds is None:
+        print("IBTrACS_NI is not present in the manifest.", file=sys.stderr)
+        return 1
+
+    url = ds.get("upstream_url")
+    if not url:
+        print("IBTrACS_NI has no upstream_url in the manifest.", file=sys.stderr)
+        return 1
+
+    local = resolve_path(ds)
+    committed_sha = ds.get("snapshot_sha256")
+    print("IBTrACS_NI snapshot comparison")
+    print("=" * 70)
+    print(f"  committed : {local}")
+    print(f"  snapshot  : {ds.get('snapshot_date', 'unknown')}  {committed_sha}")
+    print(f"  upstream  : {url}")
+    print()
+
+    if not local.exists():
+        print(f"ERROR: committed snapshot is missing at {local}", file=sys.stderr)
+        print("       /cyclones, /hazards and /risk have no tracks to serve.", file=sys.stderr)
+        print("       Upstream no longer serves these bytes, so see data/README.md",
+              file=sys.stderr)
+        return 1
+
+    actual = sha256_of(local)
+    if committed_sha and actual != committed_sha:
+        print(f"WARNING: the committed file does not match its recorded checksum.", file=sys.stderr)
+        print(f"         recorded : {committed_sha}", file=sys.stderr)
+        print(f"         on disk  : {actual}", file=sys.stderr)
+        print("         The snapshot was modified outside its recorded provenance.",
+              file=sys.stderr)
+
+    print(f"Fetching current NOAA revision to a temporary file (~27 MB)...")
+    tmp_dir = tempfile.mkdtemp(prefix="oceanx-ibtracs-")
+    tmp = Path(tmp_dir) / Path(url).name
+    try:
+        if not download_file(url, tmp, ds.get("approx_size_bytes")):
+            print(f"ERROR: could not fetch {url}", file=sys.stderr)
+            return 1
+        upstream_sha = sha256_of(tmp)
+        upstream_rows = sum(1 for _ in open(tmp, "rb"))
+        local_rows = sum(1 for _ in open(local, "rb"))
+
+        print()
+        print(f"  committed : {actual}  ({human_size(local.stat().st_size)}, {local_rows:,} rows)")
+        print(f"  upstream  : {upstream_sha}  ({human_size(tmp.stat().st_size)}, {upstream_rows:,} rows)")
+        print()
+
+        if actual == upstream_sha:
+            print("MATCH: the committed snapshot is identical to the current NOAA revision.")
+            return 0
+
+        print("DIFFERENT: the committed snapshot and the current NOAA revision diverge.")
+        print()
+        print("  Nothing has been changed. The committed copy is the canonical one:")
+        print("  every clone gets these exact storms, and the same numbers on screen.")
+        print()
+        print("  NOAA revises IBTrACS in place, so this URL returns a newer revision")
+        print("  and no longer serves the committed bytes. The committed snapshot")
+        print("  therefore cannot be reproduced by re-downloading.")
+        print()
+        print("  Adopting the newer revision is a deliberate act, because it changes the")
+        print("  dataset the /cyclones, /hazards and /risk endpoints serve. To do it:")
+        print()
+        print(f"    1. cp {local} <backup>")
+        print(f"    2. cp {tmp} {local}")
+        print(f"    3. update snapshot_date and snapshot_sha256 in data/manifest.json")
+        print("       and the provenance table in data/README.md")
+        print("    4. re-run the backend test suite")
+        print()
+        print(f"  fetched copy kept for inspection: {tmp}")
+        return 0
+    finally:
+        if not tmp.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="OCEAN-X dataset setup tool",
@@ -156,6 +254,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="report status and exit (exit 1 if required data is missing)")
     parser.add_argument("--download", action="store_true", help="download datasets that have a configured public source (confirmation required)")
     parser.add_argument("--process", action="store_true", help="regenerate derived datasets (run the HYCOM extractor)")
+    parser.add_argument("--ibtracs", action="store_true", help="compare the committed IBTrACS snapshot against the current NOAA revision (never overwrites)")
     parser.add_argument(
         "--archive-runs",
         action="store_true",
@@ -176,6 +275,8 @@ def main():
         return subprocess.call(cmd, cwd=str(REPO_ROOT))
 
     manifest = load_manifest()
+    if args.ibtracs:
+        return cmd_ibtracs(manifest)
     datasets = manifest["datasets"]
     if args.dataset:
         names = set(args.dataset)

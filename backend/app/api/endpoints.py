@@ -1,3 +1,4 @@
+import functools
 import math
 import threading
 import time
@@ -19,7 +20,7 @@ from app.models.schemas import (
     ArgoMatchupResponse,
     StatusResponse,
 )
-from app.providers.ibtracs_provider import ibtracs_provider
+from app.providers.ibtracs_provider import IBTrACSDataMissing, ibtracs_provider
 from app.providers.incois_provider import (
     DepthSliceDatasetError,
     DepthSliceDepthError,
@@ -113,7 +114,38 @@ def get_status():
     )
 
 
+def _missing_cyclone_data(exc: IBTrACSDataMissing) -> HTTPException:
+    """Missing snapshot -> 503 with a remedy, never an empty list of cyclones."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "ibtracs_dataset_missing",
+            "message": str(exc),
+            "dataset": "IBTrACS_NI",
+            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
+            "see": "data/README.md#ibtracs-ni-provenance",
+        },
+    )
+
+
+def _cyclone_data_guard(func):
+    """Convert a missing IBTrACS snapshot into an explicit 503.
+
+    Applied below @router.get so FastAPI registers the guarded function.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except IBTrACSDataMissing as exc:
+            raise _missing_cyclone_data(exc) from exc
+
+    return wrapper
+
+
 @router.get("/summary/landing")
+@_cyclone_data_guard
 def get_landing_summary():
     """Return the small set of measured counts used by the landing page.
 
@@ -149,6 +181,7 @@ def get_landing_summary():
         return dict(_landing_summary_cache)
 
 @router.get("/datasets", response_model=List[DatasetInfo])
+@_cyclone_data_guard
 def get_datasets():
     meta = incois_provider.get_metadata()
     timestamps = incois_provider.get_available_timestamps()
@@ -212,11 +245,13 @@ def get_datasets():
     return [incois_ds, ibtracs_ds]
 
 @router.get("/cyclones", response_model=List[Cyclone])
+@_cyclone_data_guard
 def get_cyclones():
     cyclones = ibtracs_provider.load_cyclones()
     return cyclones
 
 @router.get("/cyclones/inspect")
+@_cyclone_data_guard
 def inspect_cyclone(
     lat: Optional[float] = Query(None, description="Latitude"),
     lon: Optional[float] = Query(None, description="Longitude"),
@@ -229,6 +264,7 @@ def inspect_cyclone(
     return res
 
 @router.get("/cyclones/{id}", response_model=Cyclone)
+@_cyclone_data_guard
 def get_cyclone_by_id(id: str):
     c = ibtracs_provider.get_cyclone_by_id(id)
     if not c:
@@ -236,6 +272,7 @@ def get_cyclone_by_id(id: str):
     return c
 
 @router.get("/observations")
+@_cyclone_data_guard
 def get_observations():
     timestamps = incois_provider.get_available_timestamps()
     cyclones = ibtracs_provider.load_cyclones()
@@ -272,6 +309,7 @@ def get_observations():
     }
 
 @router.get("/hazards", response_model=List[Hazard])
+@_cyclone_data_guard
 def get_hazards(
     cyclone_id: Optional[str] = Query(None, description="Cyclone id or name (default: first available)"),
     index: Optional[int] = Query(None, description="Cyclone track index"),
@@ -307,6 +345,7 @@ def get_hazards(
     ]
 
 @router.get("/risk/{hazard_id}", response_model=RiskAssessment)
+@_cyclone_data_guard
 def get_risk_assessment(
     hazard_id: str,
     index: Optional[int] = Query(None, description="Cyclone track index"),
