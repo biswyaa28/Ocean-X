@@ -76,16 +76,18 @@ export const Timeline: React.FC<TimelineProps> = ({
 
             <button
               onClick={() => onIndexChange(Math.max(0, currentIndex - 1))}
+              aria-label="Previous model time"
               className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
             >
-              <SkipBack className="w-3 h-3" />
+              <SkipBack className="w-3 h-3" aria-hidden="true" />
             </button>
 
             <button
               onClick={() => onIndexChange(Math.min(track.length - 1, currentIndex + 1))}
+              aria-label="Next model time"
               className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
             >
-              <SkipForward className="w-3 h-3" />
+              <SkipForward className="w-3 h-3" aria-hidden="true" />
             </button>
 
             <div className="flex items-center gap-1 text-[10px] ml-1">

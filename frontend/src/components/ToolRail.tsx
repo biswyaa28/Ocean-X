@@ -139,6 +139,11 @@ export const ToolRail: React.FC<ToolRailProps> = ({
                 <div key={tool.id} className="relative group">
                   <button
                     onClick={() => handleToolClick(tool.id)}
+                    // The visible label only renders while the tool is active or
+                    // hovered, so without these the control has no accessible
+                    // name and is announced as a bare "button".
+                    aria-label={tool.label}
+                    aria-pressed={isActive}
                     className={`relative p-2.5 rounded-xl transition-all duration-150 flex items-center gap-2.5 ${
                       isHazard
                         ? isActive
