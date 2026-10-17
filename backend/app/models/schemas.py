@@ -56,6 +56,11 @@ class StatusResponse(BaseModel):
         "DEMO SUBSET (real HYCOM, coarsened)" when the app is running on the
         committed coarsened subset. A subset is still REAL output, so this is
         reported separately from dataMode rather than degrading it.
+    dataHealth: per-dataset state, so a broken file is diagnosable without
+        turning /status itself into an error. Each entry is "ok" (readable),
+        "absent" (not installed, which is a normal state), or "corrupt"
+        (installed but unreadable, with the reason). /status never raises on a
+        corrupt dataset: it is the endpoint an operator uses to find out.
     """
     mode: str
     backendConnected: bool = True
@@ -64,6 +69,7 @@ class StatusResponse(BaseModel):
     dataMode: DataModeType
     datasetSynthetic: bool
     dataScope: str = "FULL"
+    dataHealth: Dict[str, Dict[str, Any]] = {}
 
 
 

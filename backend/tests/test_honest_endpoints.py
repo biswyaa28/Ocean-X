@@ -4,6 +4,9 @@ These exercise the HTTP surface (404s, response fields, derived statuses)
 rather than the providers/services in isolation.
 """
 
+import inspect
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -459,3 +462,192 @@ def test_inspect_failure_surfaces_as_503(monkeypatch):
     detail = response.json()["detail"]
     assert detail["error"] == "inspect_failed"
     assert detail["note"].startswith("The request could not be evaluated")
+
+
+# ---------------------------------------------------------------------------
+# Remaining swallowed-error sites: argo metadata, HYCOM surface/depth/metadata
+# ---------------------------------------------------------------------------
+
+def _corrupt_netcdf(path):
+    """A file that exists but is not a NetCDF, so open_dataset must fail."""
+    path.write_text("this is definitely not a NetCDF file\n", encoding="utf-8")
+    return path
+
+
+# -- argo metadata -----------------------------------------------------------
+
+def test_corrupt_argo_metadata_is_logged_not_raised(tmp_path):
+    """Provenance labels are non-critical: log + record, keep serving profiles."""
+    from app.providers.argo_provider import ArgoProvider
+
+    profiles = tmp_path / "argo.json"
+    profiles.write_text(json.dumps([{"profile_id": "P1", "float_id": "F1"}]),
+                        encoding="utf-8")
+    meta = tmp_path / "meta.json"
+    meta.write_text("{ not json", encoding="utf-8")
+
+    provider = ArgoProvider(data_path=profiles, meta_path=meta)
+
+    # The observations are unaffected, so this must not raise.
+    assert provider.get_metadata() == {}
+    assert provider.metadata_unavailable is True
+    # The profile still carries provenance, with the labels simply absent.
+    out = provider.get_profiles()
+    assert len(out) == 1
+    assert out[0]["provenance"]["dataset"] == "ARGO_PROFILES_BOB"
+
+
+def test_absent_argo_metadata_is_not_flagged_corrupt(tmp_path):
+    """A missing metadata file is 'absent', not a failure."""
+    from app.providers.argo_provider import ArgoProvider
+
+    provider = ArgoProvider(
+        data_path=tmp_path / "no.json", meta_path=tmp_path / "no-meta.json"
+    )
+    assert provider.get_metadata() == {}
+    assert provider.metadata_unavailable is False
+
+
+# -- HYCOM surface / depth NetCDF --------------------------------------------
+
+@pytest.mark.parametrize("kind", ["surface", "depth"])
+def test_corrupt_hycom_netcdf_raises_but_absent_does_not(tmp_path, monkeypatch, kind):
+    """Installed-but-unreadable raises; not-installed keeps its 503 semantics."""
+    from app.providers.incois_provider import IncoisDatasetUnreadable, incois_provider
+
+    corrupt = _corrupt_netcdf(tmp_path / "broken.nc")
+    absent = tmp_path / "not_installed.nc"
+    monkeypatch.setattr(incois_provider, "_dataset", None)
+    monkeypatch.setattr(incois_provider, "_depth_dataset", None)
+    monkeypatch.setattr(incois_provider, "_dataset_error", None)
+    monkeypatch.setattr(incois_provider, "_depth_dataset_error", None)
+    monkeypatch.setattr(incois_provider, "nc_path", corrupt)
+    monkeypatch.setattr(incois_provider, "_depth_nc_path", corrupt)
+
+    loader = (
+        incois_provider._get_dataset if kind == "surface"
+        else incois_provider._get_depth_dataset
+    )
+    with pytest.raises(IncoisDatasetUnreadable) as excinfo:
+        loader()
+    assert excinfo.value.__cause__ is not None
+    assert "installed but unreadable" in str(excinfo.value)
+
+    # Same accessor, path absent -> no raise, plain None.
+    monkeypatch.setattr(
+        incois_provider, "nc_path" if kind == "surface" else "_depth_nc_path", absent
+    )
+    monkeypatch.setattr(incois_provider, "_dataset_error", None)
+    monkeypatch.setattr(incois_provider, "_depth_dataset_error", None)
+    assert loader() is None
+
+
+# -- HYCOM metadata ----------------------------------------------------------
+
+def test_corrupt_incois_metadata_is_logged_not_raised(tmp_path, monkeypatch):
+    """Provenance labels are non-critical: log + record, keep serving."""
+    from app.providers.incois_provider import incois_provider
+
+    meta = tmp_path / "hycom_meta.json"
+    meta.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setattr(incois_provider, "meta_path", meta)
+    monkeypatch.setattr(incois_provider, "_metadata", None)
+    monkeypatch.setattr(incois_provider, "_metadata_error", None)
+
+    assert incois_provider.get_metadata() == {}
+    assert incois_provider.metadata_unavailable is True
+
+
+def test_absent_incois_metadata_is_not_flagged_corrupt(tmp_path, monkeypatch):
+    from app.providers.incois_provider import incois_provider
+
+    monkeypatch.setattr(incois_provider, "meta_path", tmp_path / "nope.json")
+    monkeypatch.setattr(incois_provider, "_metadata", None)
+    monkeypatch.setattr(incois_provider, "_metadata_error", None)
+
+    assert incois_provider.get_metadata() == {}
+    assert incois_provider.metadata_unavailable is False
+
+
+# -- the FIXTURE/REAL status typo --------------------------------------------
+
+def test_fixture_timestamp_unavailable_status_names_itself_simulated(monkeypatch):
+    """The FIXTURE branch claimed a timestamp was unavailable without saying
+    the dataset was simulated; it must not read as a real-dataset message."""
+    import app.providers.incois_provider as m
+
+    src = inspect.getsource(m.IncoisProvider.inspect_point)
+    assert "SIMULATED — TIMESTAMP UNAVAILABLE" not in src, (
+        "the FIXTURE branch still emits a message that reads as REAL"
+    )
+    assert "SIMULATED DATASET — TIMESTAMP UNAVAILABLE" in src
+
+
+# -- /status must stay up and report -----------------------------------------
+
+def test_status_reports_data_health_and_never_raises(tmp_path, monkeypatch):
+    """Every dataset corrupt at once: /status still answers, and says why."""
+    from app.providers.argo_provider import argo_provider
+    from app.providers.incois_provider import incois_provider
+
+    broken = _corrupt_netcdf(tmp_path / "b.nc")
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{ nope", encoding="utf-8")
+
+    monkeypatch.setattr(argo_provider, "data_path", bad_json)
+    monkeypatch.setattr(argo_provider, "meta_path", bad_json)
+    monkeypatch.setattr(argo_provider, "_profiles", None)
+    monkeypatch.setattr(argo_provider, "_metadata", None)
+    monkeypatch.setattr(argo_provider, "_load_error", None)
+    monkeypatch.setattr(argo_provider, "_metadata_error", None)
+    monkeypatch.setattr(incois_provider, "nc_path", broken)
+    monkeypatch.setattr(incois_provider, "_depth_nc_path", broken)
+    monkeypatch.setattr(incois_provider, "meta_path", bad_json)
+    monkeypatch.setattr(incois_provider, "_dataset", None)
+    monkeypatch.setattr(incois_provider, "_depth_dataset", None)
+    monkeypatch.setattr(incois_provider, "_metadata", None)
+    monkeypatch.setattr(incois_provider, "_dataset_error", None)
+    monkeypatch.setattr(incois_provider, "_depth_dataset_error", None)
+    monkeypatch.setattr(incois_provider, "_metadata_error", None)
+
+    response = client.get("/api/status")
+    assert response.status_code == 200, "/status must never 503 on a corrupt dataset"
+    health = response.json()["dataHealth"]
+
+    assert set(health) == {
+        "argo", "argo_metadata", "hycom_surface", "hycom_depth",
+        "hycom_metadata", "ibtracs",
+    }
+    assert health["argo"]["state"] == "corrupt"
+    assert health["argo"]["error"], "a corrupt dataset must carry its reason"
+    assert health["hycom_surface"]["state"] == "corrupt"
+    assert health["hycom_depth"]["state"] == "corrupt"
+    assert health["ibtracs"]["state"] == "ok", "the real snapshot is untouched here"
+
+
+def test_status_data_health_distinguishes_absent_from_corrupt(tmp_path, monkeypatch):
+    from app.providers.argo_provider import argo_provider
+
+    monkeypatch.setattr(argo_provider, "data_path", tmp_path / "not-there.json")
+    monkeypatch.setattr(argo_provider, "_profiles", None)
+    monkeypatch.setattr(argo_provider, "_load_error", None)
+    health = client.get("/api/status").json()["dataHealth"]
+    assert health["argo"]["state"] == "absent"
+    assert "error" not in health["argo"]
+
+
+def test_corrupt_hycom_surface_never_leaks_an_uncaught_exception(tmp_path, monkeypatch):
+    """Regression: /timeseries and /layers/{name} reach the HYCOM accessor, so an
+    installed-but-unreadable NetCDF must become a 503, not propagate out of the
+    endpoint as an unhandled exception."""
+    from app.providers.incois_provider import incois_provider
+
+    broken = _corrupt_netcdf(tmp_path / "broken_surface.nc")
+    monkeypatch.setattr(incois_provider, "nc_path", broken)
+    monkeypatch.setattr(incois_provider, "_dataset", None)
+    monkeypatch.setattr(incois_provider, "_dataset_error", None)
+
+    for route in ("/api/timeseries", "/api/layers/currents"):
+        response = client.get(route)
+        assert response.status_code == 503, f"{route} returned {response.status_code}"
+        assert response.json()["detail"]["error"] == "hycom_dataset_unreadable"

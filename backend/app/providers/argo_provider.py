@@ -41,6 +41,10 @@ class ArgoProvider:
         # Recorded rather than raised here, so importing the app never fails on
         # a bad data file. get_profiles() turns it back into an exception.
         self._load_error: Optional[ArgoDataCorrupt] = None
+        # Metadata is provenance labelling only: it supplies source, provider,
+        # dataset_name and source_url. A broken metadata file must not take the
+        # observations down with it, so it is recorded rather than raised.
+        self._metadata_error: Optional[Exception] = None
 
     def _load_data(self):
         if self._profiles is None and self._load_error is None:
@@ -62,16 +66,28 @@ class ArgoProvider:
             raise self._load_error
 
     def get_metadata(self) -> Dict[str, Any]:
-        if self._metadata is None:
+        if self._metadata is None and self._metadata_error is None:
             if self.meta_path.exists():
                 try:
                     with open(self.meta_path, "r", encoding="utf-8") as f:
                         self._metadata = json.load(f)
-                except Exception:
+                except Exception as e:
+                    logger.exception(
+                        "Failed to parse the Argo metadata JSON at %s. The profile "
+                        "observations are unaffected, but their provenance labels "
+                        "cannot be populated.",
+                        self.meta_path,
+                    )
+                    self._metadata_error = e
                     self._metadata = {}
             else:
                 self._metadata = {}
         return self._metadata or {}
+
+    @property
+    def metadata_unavailable(self) -> bool:
+        """True when provenance metadata could not be read (not merely absent)."""
+        return self._metadata_error is not None
 
     def get_profiles(self) -> List[Dict[str, Any]]:
         self._load_data()

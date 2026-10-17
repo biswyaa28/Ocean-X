@@ -1,5 +1,6 @@
 import functools
 import math
+from pathlib import Path
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -20,7 +21,7 @@ from app.models.schemas import (
     ArgoMatchupResponse,
     StatusResponse,
 )
-from app.providers.argo_provider import ArgoDataCorrupt
+from app.providers.argo_provider import ArgoDataCorrupt, argo_provider
 from app.providers.ibtracs_provider import (
     IBTrACSDataCorrupt,
     IBTrACSDataMissing,
@@ -32,6 +33,7 @@ from app.providers.incois_provider import (
     DepthSliceTimestampError,
     DepthSliceVariableError,
     DepthSliceVariableUnavailableError,
+    IncoisDatasetUnreadable,
     InspectPointFailed,
     LayerDataTimestampError,
     incois_provider,
@@ -121,9 +123,11 @@ def _dataset_guard(func):
     """Turn an unusable dataset into an explicit 503.
 
     Covers a missing or unparseable IBTrACS snapshot, an unparseable processed
-    Argo file, and an inspect request that raised. None of them may be answered
-    with an empty or fabricated payload. Applied below @router.get so FastAPI
-    registers the guarded function.
+    Argo file, an installed-but-unreadable HYCOM NetCDF, and an inspect request
+    that raised. None of them may be answered with an empty or fabricated
+    payload. Applied below @router.get so FastAPI registers the guarded function.
+    /status is deliberately not guarded: it reports on datasets rather than
+    serving their contents, and must stay up when one is broken.
     """
 
     @functools.wraps(func)
@@ -143,6 +147,16 @@ def _dataset_guard(func):
                     "dataset": "ARGO_PROFILES_BOB",
                     "cause": f"{type(exc.cause).__name__}: {exc.cause}",
                     "remedy": f"Restore the processed Argo JSON: git checkout -- {exc.path}",
+                },
+            ) from exc
+        except IncoisDatasetUnreadable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "hycom_dataset_unreadable",
+                    "message": str(exc),
+                    "cause": f"{type(exc.cause).__name__}: {exc.cause}",
+                    "remedy": f"Restore or re-fetch the NetCDF: git checkout -- {exc.path}",
                 },
             ) from exc
         except InspectPointFailed as exc:
@@ -165,6 +179,69 @@ def _dataset_guard(func):
             ) from exc
 
     return wrapper
+
+
+def _dataset_health() -> Dict[str, Dict[str, Any]]:
+    """Report every dataset as ok / absent / corrupt without raising.
+
+    /status is the endpoint an operator reaches for when something is wrong, so
+    it must answer even when a dataset is broken. Each probe is individually
+    guarded: a provider that raises is recorded as "corrupt" with its message
+    rather than taking the whole response down.
+    """
+
+    def probe(path: Path, loader, degraded=None) -> Dict[str, Any]:
+        """ok / absent / corrupt. `degraded` reports a failure that is recorded
+        rather than raised, so metadata corruption still shows up here."""
+        if not path.exists():
+            return {"state": "absent"}
+        try:
+            loader()
+        except Exception as exc:
+            return {"state": "corrupt", "error": f"{type(exc).__name__}: {exc}"}
+        if degraded is not None and degraded():
+            return {
+                "state": "corrupt",
+                "error": "metadata file is installed but unreadable",
+                "impact": "observations are served; provenance labels are absent",
+            }
+        return {"state": "ok"}
+
+    argo_p = argo_provider
+    incois_p = incois_provider
+
+    def _argo_profiles():
+        argo_p.get_profiles()
+
+    def _argo_metadata():
+        argo_p.get_metadata()
+
+    def _hycom_surface():
+        incois_p._get_dataset()
+
+    def _hycom_depth():
+        incois_p._get_depth_dataset()
+
+    def _hycom_metadata():
+        incois_p.get_metadata()
+
+    def _ibtracs():
+        ibtracs_provider.load_cyclones()
+
+    return {
+        "argo": probe(argo_p.data_path, _argo_profiles),
+        "argo_metadata": probe(
+            argo_p.meta_path, _argo_metadata, lambda: argo_p.metadata_unavailable
+        ),
+        "hycom_surface": probe(incois_p.nc_path, _hycom_surface),
+        "hycom_depth": probe(
+            incois_p._depth_nc_path or Path("/nonexistent"), _hycom_depth
+        ),
+        "hycom_metadata": probe(
+            incois_p.meta_path, _hycom_metadata, lambda: incois_p.metadata_unavailable
+        ),
+        "ibtracs": probe(ibtracs_provider.csv_path, _ibtracs),
+    }
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -199,6 +276,8 @@ def get_status():
         # A coarsened REAL subset stays REAL data; the scope says how much of
         # it is installed so a reader is never misled about the resolution.
         dataScope=settings.DATA_SCOPE,
+        # Never fatal: a broken dataset is reported here, not raised at /status.
+        dataHealth=_dataset_health(),
     )
 
 
@@ -432,6 +511,7 @@ def get_risk_assessment(
     return calculate_prototype_risk(c, timestamp=timestamp, track_index=index)
 
 @router.get("/timeseries")
+@_dataset_guard
 def get_timeseries():
     timestamps = incois_provider.get_available_timestamps()
     return {
@@ -546,6 +626,7 @@ def get_layers():
     ]
 
 @router.get("/layers/{layer_name}", response_model=LayerDataResponse)
+@_dataset_guard
 def get_layer_data(
     layer_name: str,
     timestamp: Optional[str] = Query(None, description="ISO timestamp matching dataset available times"),

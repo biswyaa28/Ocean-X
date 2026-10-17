@@ -58,6 +58,28 @@ DEPTH_VARIABLES: Dict[str, Dict[str, str]] = {
 }
 
 
+class IncoisDatasetUnreadable(Exception):
+    """A HYCOM NetCDF is installed at the configured path but will not open.
+
+    Distinct from a dataset that was never installed: the latter is a normal
+    state that the API already reports as NOT CURRENTLY INTEGRATED, so the raise
+    below is gated on the path existing.
+    """
+
+    def __init__(self, path: Path, cause: Exception):
+        self.path = path
+        self.cause = cause
+        super().__init__(
+            f"INCOIS HYCOM NetCDF at {path} could not be opened "
+            f"({type(cause).__name__}: {cause}). The file is installed but "
+            f"unreadable, so no value from it can be served. This is not the "
+            f"same as the dataset being absent."
+        )
+        # Stored at load time and raised later, so the chain must be attached
+        # explicitly or __cause__ is lost.
+        self.__cause__ = cause
+
+
 class InspectPointFailed(Exception):
     """Inspecting a point raised instead of returning a value.
 
@@ -144,6 +166,12 @@ class IncoisProvider:
         self._dataset: Optional[xr.Dataset] = None
         self._depth_dataset: Optional[xr.Dataset] = None
         self._metadata: Optional[Dict[str, Any]] = None
+        # Stored rather than raised here so importing the app never fails on a
+        # bad data file; the accessors below turn them into exceptions.
+        self._dataset_error: Optional[IncoisDatasetUnreadable] = None
+        self._depth_dataset_error: Optional[IncoisDatasetUnreadable] = None
+        # Provenance labels only, like the Argo metadata: recorded, not raised.
+        self._metadata_error: Optional[Exception] = None
 
     def _resolve_depth_nc_path(self) -> Optional[Path]:
         raw = settings.RAW_HYCOM_FILE
@@ -157,9 +185,19 @@ class IncoisProvider:
         if self._dataset is None and self.nc_path.exists():
             try:
                 self._dataset = xr.open_dataset(self.nc_path, engine="netcdf4", chunks={})
+                self._dataset_error = None
             except Exception as e:
-                print(f"Error opening processed INCOIS NetCDF: {e}")
+                logger.exception(
+                    "Failed to open the processed INCOIS NetCDF at %s. The file is "
+                    "installed but unreadable, so nothing from it can be served; "
+                    "this is not the same as the dataset being absent.",
+                    self.nc_path,
+                )
+                self._dataset_error = IncoisDatasetUnreadable(self.nc_path, e)
                 self._dataset = None
+        # Only ever non-None when the file exists but will not open.
+        if self._dataset_error is not None:
+            raise self._dataset_error
         return self._dataset
 
     def _get_depth_dataset(self) -> Optional[xr.Dataset]:
@@ -174,9 +212,21 @@ class IncoisProvider:
                 opened = xr.open_dataset(self._depth_nc_path, engine="netcdf4", chunks={})
                 # One depth axis for every consumer; see model_depth_axis.
                 self._depth_dataset, _rule = apply_model_depth_axis(opened)
+                self._depth_dataset_error = None
             except Exception as e:
-                print(f"Error opening depth-aware INCOIS HYCOM NetCDF: {e}")
+                logger.exception(
+                    "Failed to open the depth-aware INCOIS HYCOM NetCDF at %s. "
+                    "The file is installed but unreadable, so no depth layer can "
+                    "be served; this is not the same as it being absent.",
+                    self._depth_nc_path,
+                )
+                self._depth_dataset_error = IncoisDatasetUnreadable(
+                    self._depth_nc_path, e
+                )
                 self._depth_dataset = None
+        # Only ever non-None when the path was installed but would not open.
+        if self._depth_dataset_error is not None:
+            raise self._depth_dataset_error
         return self._depth_dataset
 
     def _require_depth_dataset(self) -> xr.Dataset:
@@ -205,14 +255,25 @@ class IncoisProvider:
         return ds
 
     def get_metadata(self) -> Dict[str, Any]:
-        if self._metadata is None and self.meta_path.exists():
+        if self._metadata is None and self._metadata_error is None and self.meta_path.exists():
             try:
                 with open(self.meta_path, 'r', encoding='utf-8') as f:
                     self._metadata = json.load(f)
             except Exception as e:
-                print(f"Error reading INCOIS metadata JSON: {e}")
-                self._metadata = {}
+                    logger.exception(
+                        "Failed to parse the INCOIS metadata JSON at %s. The model "
+                        "field is unaffected, but its provenance labels cannot be "
+                        "populated.",
+                        self.meta_path,
+                    )
+                    self._metadata_error = e
+                    self._metadata = {}
         return self._metadata or {}
+
+    @property
+    def metadata_unavailable(self) -> bool:
+        """True when provenance metadata could not be read (not merely absent)."""
+        return self._metadata_error is not None
 
     def get_available_timestamps(self) -> List[str]:
         ds = self._get_dataset()
@@ -673,7 +734,7 @@ class IncoisProvider:
                     return {
                         "status": "NO_REAL_MODEL_DATA",
                         "dataStatus": (
-                            "SIMULATED — TIMESTAMP UNAVAILABLE"
+                            "SIMULATED DATASET — TIMESTAMP UNAVAILABLE"
                             if settings.DATA_MODE == 'FIXTURE'
                             else "REAL DATASET — TIMESTAMP UNAVAILABLE"
                         ),
@@ -688,7 +749,7 @@ class IncoisProvider:
                 return {
                     "status": "NO_REAL_MODEL_DATA",
                     "dataStatus": (
-                        "SIMULATED — TIMESTAMP UNAVAILABLE"
+                        "SIMULATED DATASET — TIMESTAMP UNAVAILABLE"
                         if settings.DATA_MODE == 'FIXTURE'
                         else "REAL DATASET — TIMESTAMP UNAVAILABLE"
                     ),
