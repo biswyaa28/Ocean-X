@@ -309,3 +309,32 @@ def test_committed_snapshot_matches_its_recorded_checksum():
     )
     assert entry["committed"] is True
     assert entry["snapshot_date"]
+
+
+def test_unreadable_snapshot_surfaces_as_503_not_empty_200(tmp_path, monkeypatch):
+    """A file that is present but unparseable must not read as 'no cyclones'."""
+    from app.providers.ibtracs_provider import IBTrACSDataCorrupt
+
+    corrupt = tmp_path / "ibtracs.corrupt.csv"
+    # A truncated header: `next(reader)` for the units row raises StopIteration,
+    # which the parse loop cannot recover from.
+    corrupt.write_text("SID,SEASON,NAME\n", encoding="utf-8")
+
+    monkeypatch.setattr(ibtracs_provider, "csv_path", corrupt)
+    monkeypatch.setattr(ibtracs_provider, "_cached_cyclones", None)
+
+    with pytest.raises(IBTrACSDataCorrupt) as excinfo:
+        ibtracs_provider.load_cyclones()
+
+    # Chained from the original error, and it names a remedy.
+    assert excinfo.value.__cause__ is not None
+    assert "git checkout" in str(excinfo.value)
+
+    for route in ("/api/cyclones", "/api/hazards", "/api/summary/landing"):
+        response = client.get(route)
+        assert response.status_code == 503, f"{route} returned {response.status_code}"
+        detail = response.json()["detail"]
+        assert detail["error"] == "ibtracs_dataset_unreadable"
+        assert detail["cause"], "the underlying parse failure must be reported"
+        assert "git checkout" in detail["remedy"]
+        assert detail["see"] == "data/README.md#ibtracs-ni-provenance"

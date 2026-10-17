@@ -20,7 +20,11 @@ from app.models.schemas import (
     ArgoMatchupResponse,
     StatusResponse,
 )
-from app.providers.ibtracs_provider import IBTrACSDataMissing, ibtracs_provider
+from app.providers.ibtracs_provider import (
+    IBTrACSDataCorrupt,
+    IBTrACSDataMissing,
+    ibtracs_provider,
+)
 from app.providers.incois_provider import (
     DepthSliceDatasetError,
     DepthSliceDepthError,
@@ -128,10 +132,30 @@ def _missing_cyclone_data(exc: IBTrACSDataMissing) -> HTTPException:
     )
 
 
-def _cyclone_data_guard(func):
-    """Convert a missing IBTrACS snapshot into an explicit 503.
+def _unreadable_cyclone_data(exc: IBTrACSDataCorrupt) -> HTTPException:
+    """Unreadable snapshot -> 503, the same way a missing one is reported.
 
-    Applied below @router.get so FastAPI registers the guarded function.
+    The file is present, so an empty 200 would claim there were no cyclones.
+    """
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "ibtracs_dataset_unreadable",
+            "message": str(exc),
+            "dataset": "IBTrACS_NI",
+            "cause": f"{type(exc.cause).__name__}: {exc.cause}",
+            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
+            "see": "data/README.md#ibtracs-ni-provenance",
+        },
+    )
+
+
+def _cyclone_data_guard(func):
+    """Turn an unusable IBTrACS snapshot into an explicit 503.
+
+    Covers both a missing file and one that cannot be parsed; neither may be
+    answered with an empty list of cyclones. Applied below @router.get so
+    FastAPI registers the guarded function.
     """
 
     @functools.wraps(func)
@@ -140,6 +164,8 @@ def _cyclone_data_guard(func):
             return func(*args, **kwargs)
         except IBTrACSDataMissing as exc:
             raise _missing_cyclone_data(exc) from exc
+        except IBTrACSDataCorrupt as exc:
+            raise _unreadable_cyclone_data(exc) from exc
 
     return wrapper
 

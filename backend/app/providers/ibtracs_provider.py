@@ -128,6 +128,26 @@ def select_default_track_index(track: List[CycloneTrackPoint]) -> Tuple[int, str
     return best_idx, reason
 
 
+class IBTrACSDataCorrupt(RuntimeError):
+    """The committed IBTrACS snapshot is on disk but could not be parsed.
+
+    Distinct from IBTrACSDataMissing: the file is present, so its absence of
+    results says nothing about whether storms occurred. Reporting [] here would
+    turn a broken file into a finding about the ocean.
+    """
+
+    def __init__(self, path: Path, cause: Exception):
+        self.path = path
+        self.cause = cause
+        super().__init__(
+            f"IBTrACS snapshot at {path} could not be parsed ({type(cause).__name__}: "
+            f"{cause}). Every cyclone count, hazard and risk score served by this API "
+            f"is measured from this file, so it cannot be reported as an absence of "
+            f"cyclones. Restore the committed snapshot with: "
+            f"git checkout -- {path}. See data/README.md for provenance."
+        )
+
+
 class IBTrACSProvider:
     def __init__(self, csv_path: Path = settings.RAW_IBTRACS_CSV):
         self.csv_path = csv_path
@@ -258,8 +278,14 @@ class IBTrACSProvider:
                     )
 
         except Exception as e:
-            print(f"Error reading IBTrACS CSV: {e}")
-            return []
+            logger.exception(
+                "Failed to parse the IBTrACS snapshot at %s. Every cyclone count, "
+                "hazard and risk score served by this API is measured from this "
+                "file, so a parse failure cannot be reported as an absence of "
+                "cyclones.",
+                self.csv_path,
+            )
+            raise IBTrACSDataCorrupt(self.csv_path, e) from e
 
         cyclones: List[Cyclone] = []
         for sid, sdata in storms_by_id.items():
