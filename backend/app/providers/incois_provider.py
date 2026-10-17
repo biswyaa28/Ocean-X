@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import numpy as np
@@ -6,6 +7,8 @@ import pandas as pd
 import xarray as xr
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _hycom_data_status(ds=None) -> str:
@@ -53,6 +56,32 @@ DEPTH_VARIABLES: Dict[str, Dict[str, str]] = {
     "tchp": {"vars": ("TCHP",), "units": "KJ/cm2", "source": "INCOIS RSMC HYCOM"},
     "mld": {"vars": ("MLD",), "units": "m", "source": "INCOIS RSMC HYCOM"},
 }
+
+
+class InspectPointFailed(Exception):
+    """Inspecting a point raised instead of returning a value.
+
+    inspect_point returns NO_REAL_MODEL_DATA for three legitimate reasons (no
+    dataset installed, field absent, requested timestamp not in the record).
+    An exception escaping the indexing path is none of those: the request could
+    not be evaluated, so no claim about the model field has been measured.
+
+    Raised rather than returned as a new status string because the only consumer
+    of this payload branches on ``status`` and falls through to a "REAL" badge
+    for any value it does not recognise.
+    """
+
+    def __init__(self, lat: float, lon: float, timestamp: Optional[str], cause: Exception):
+        self.lat = lat
+        self.lon = lon
+        self.timestamp = timestamp
+        self.cause = cause
+        super().__init__(
+            f"Inspect failed at lat={lat}, lon={lon}"
+            + (f" for timestamp {timestamp}" if timestamp else "")
+            + f" ({type(cause).__name__}: {cause}). The request could not be "
+            f"evaluated, so this is not a statement about the model field."
+        )
 
 
 class DepthSliceError(Exception):
@@ -746,19 +775,16 @@ class IncoisProvider:
                 "provider": "Indian National Centre for Ocean Information Services (INCOIS)"
             }
         except Exception as e:
-            print(f"Error inspecting point ({lat}, {lon}): {e}")
-            return {
-                "status": "NO_REAL_MODEL_DATA",
-                "dataStatus": (
-                    "SIMULATED — TIMESTAMP UNAVAILABLE"
-                    if settings.DATA_MODE == 'FIXTURE'
-                    else "REAL DATASET — TIMESTAMP UNAVAILABLE"
-                ),
-                "message": f"Error indexing point at lat={lat}, lon={lon}: {e}",
-                "requestedTimestamp": timestamp or "",
-                "availableStart": str(available_start),
-                "availableEnd": str(available_end),
-                "source": "INCOIS RSMC HYCOM"
-            }
+            # A crash while indexing the field is not the same finding as "this
+            # timestamp is not in the record", which is what NO_REAL_MODEL_DATA
+            # means elsewhere in this method. Returning it here made the API
+            # assert something about the ocean that was never measured.
+            logger.exception(
+                "Inspect failed at lat=%s, lon=%s. The request could not be "
+                "evaluated, so no statement about the model field can be made.",
+                lat,
+                lon,
+            )
+            raise InspectPointFailed(lat, lon, timestamp, e) from e
 
 incois_provider = IncoisProvider()

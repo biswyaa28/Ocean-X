@@ -20,6 +20,7 @@ from app.models.schemas import (
     ArgoMatchupResponse,
     StatusResponse,
 )
+from app.providers.argo_provider import ArgoDataCorrupt
 from app.providers.ibtracs_provider import (
     IBTrACSDataCorrupt,
     IBTrACSDataMissing,
@@ -31,6 +32,7 @@ from app.providers.incois_provider import (
     DepthSliceTimestampError,
     DepthSliceVariableError,
     DepthSliceVariableUnavailableError,
+    InspectPointFailed,
     LayerDataTimestampError,
     incois_provider,
 )
@@ -83,6 +85,88 @@ def get_health():
         "version": "1.0.0"
     }
 
+def _missing_cyclone_data(exc: IBTrACSDataMissing) -> HTTPException:
+    """Missing snapshot -> 503 with a remedy, never an empty list of cyclones."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "ibtracs_dataset_missing",
+            "message": str(exc),
+            "dataset": "IBTrACS_NI",
+            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
+            "see": "data/README.md#ibtracs-ni-provenance",
+        },
+    )
+
+
+def _unreadable_cyclone_data(exc: IBTrACSDataCorrupt) -> HTTPException:
+    """Unreadable snapshot -> 503, the same way a missing one is reported.
+
+    The file is present, so an empty 200 would claim there were no cyclones.
+    """
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "ibtracs_dataset_unreadable",
+            "message": str(exc),
+            "dataset": "IBTrACS_NI",
+            "cause": f"{type(exc.cause).__name__}: {exc.cause}",
+            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
+            "see": "data/README.md#ibtracs-ni-provenance",
+        },
+    )
+
+
+def _dataset_guard(func):
+    """Turn an unusable dataset into an explicit 503.
+
+    Covers a missing or unparseable IBTrACS snapshot, an unparseable processed
+    Argo file, and an inspect request that raised. None of them may be answered
+    with an empty or fabricated payload. Applied below @router.get so FastAPI
+    registers the guarded function.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except IBTrACSDataMissing as exc:
+            raise _missing_cyclone_data(exc) from exc
+        except IBTrACSDataCorrupt as exc:
+            raise _unreadable_cyclone_data(exc) from exc
+        except ArgoDataCorrupt as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "argo_dataset_unreadable",
+                    "message": str(exc),
+                    "dataset": "ARGO_PROFILES_BOB",
+                    "cause": f"{type(exc.cause).__name__}: {exc.cause}",
+                    "remedy": f"Restore the processed Argo JSON: git checkout -- {exc.path}",
+                },
+            ) from exc
+        except InspectPointFailed as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "inspect_failed",
+                    "message": str(exc),
+                    "cause": f"{type(exc.cause).__name__}: {exc.cause}",
+                    "requested": {
+                        "lat": exc.lat,
+                        "lon": exc.lon,
+                        "timestamp": exc.timestamp,
+                    },
+                    "note": (
+                        "The request could not be evaluated. This is not a "
+                        "finding about the model field."
+                    ),
+                },
+            ) from exc
+
+    return wrapper
+
+
 @router.get("/status", response_model=StatusResponse)
 def get_status():
     """Return system status including explicit data mode information.
@@ -118,60 +202,8 @@ def get_status():
     )
 
 
-def _missing_cyclone_data(exc: IBTrACSDataMissing) -> HTTPException:
-    """Missing snapshot -> 503 with a remedy, never an empty list of cyclones."""
-    return HTTPException(
-        status_code=503,
-        detail={
-            "error": "ibtracs_dataset_missing",
-            "message": str(exc),
-            "dataset": "IBTrACS_NI",
-            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
-            "see": "data/README.md#ibtracs-ni-provenance",
-        },
-    )
-
-
-def _unreadable_cyclone_data(exc: IBTrACSDataCorrupt) -> HTTPException:
-    """Unreadable snapshot -> 503, the same way a missing one is reported.
-
-    The file is present, so an empty 200 would claim there were no cyclones.
-    """
-    return HTTPException(
-        status_code=503,
-        detail={
-            "error": "ibtracs_dataset_unreadable",
-            "message": str(exc),
-            "dataset": "IBTrACS_NI",
-            "cause": f"{type(exc.cause).__name__}: {exc.cause}",
-            "remedy": f"Restore the committed snapshot: git checkout -- {exc.path}",
-            "see": "data/README.md#ibtracs-ni-provenance",
-        },
-    )
-
-
-def _cyclone_data_guard(func):
-    """Turn an unusable IBTrACS snapshot into an explicit 503.
-
-    Covers both a missing file and one that cannot be parsed; neither may be
-    answered with an empty list of cyclones. Applied below @router.get so
-    FastAPI registers the guarded function.
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except IBTrACSDataMissing as exc:
-            raise _missing_cyclone_data(exc) from exc
-        except IBTrACSDataCorrupt as exc:
-            raise _unreadable_cyclone_data(exc) from exc
-
-    return wrapper
-
-
 @router.get("/summary/landing")
-@_cyclone_data_guard
+@_dataset_guard
 def get_landing_summary():
     """Return the small set of measured counts used by the landing page.
 
@@ -207,7 +239,7 @@ def get_landing_summary():
         return dict(_landing_summary_cache)
 
 @router.get("/datasets", response_model=List[DatasetInfo])
-@_cyclone_data_guard
+@_dataset_guard
 def get_datasets():
     meta = incois_provider.get_metadata()
     timestamps = incois_provider.get_available_timestamps()
@@ -271,13 +303,13 @@ def get_datasets():
     return [incois_ds, ibtracs_ds]
 
 @router.get("/cyclones", response_model=List[Cyclone])
-@_cyclone_data_guard
+@_dataset_guard
 def get_cyclones():
     cyclones = ibtracs_provider.load_cyclones()
     return cyclones
 
 @router.get("/cyclones/inspect")
-@_cyclone_data_guard
+@_dataset_guard
 def inspect_cyclone(
     lat: Optional[float] = Query(None, description="Latitude"),
     lon: Optional[float] = Query(None, description="Longitude"),
@@ -290,7 +322,7 @@ def inspect_cyclone(
     return res
 
 @router.get("/cyclones/{id}", response_model=Cyclone)
-@_cyclone_data_guard
+@_dataset_guard
 def get_cyclone_by_id(id: str):
     c = ibtracs_provider.get_cyclone_by_id(id)
     if not c:
@@ -298,7 +330,7 @@ def get_cyclone_by_id(id: str):
     return c
 
 @router.get("/observations")
-@_cyclone_data_guard
+@_dataset_guard
 def get_observations():
     timestamps = incois_provider.get_available_timestamps()
     cyclones = ibtracs_provider.load_cyclones()
@@ -335,7 +367,7 @@ def get_observations():
     }
 
 @router.get("/hazards", response_model=List[Hazard])
-@_cyclone_data_guard
+@_dataset_guard
 def get_hazards(
     cyclone_id: Optional[str] = Query(None, description="Cyclone id or name (default: first available)"),
     index: Optional[int] = Query(None, description="Cyclone track index"),
@@ -371,7 +403,7 @@ def get_hazards(
     ]
 
 @router.get("/risk/{hazard_id}", response_model=RiskAssessment)
-@_cyclone_data_guard
+@_dataset_guard
 def get_risk_assessment(
     hazard_id: str,
     index: Optional[int] = Query(None, description="Cyclone track index"),
@@ -546,6 +578,7 @@ def get_layer_data(
 # ============================================================
 
 @router.get("/model/depth-slice", response_model=DepthSliceResponse)
+@_dataset_guard
 def get_model_depth_slice(
     variable: str = Query(..., description="Variable to slice: temperature, salinity, currents, ssh, tchp, mld"),
     timestamp: Optional[str] = Query(None, description="ISO timestamp; defaults to the first available model time"),
@@ -588,18 +621,21 @@ def get_model_depth_slice(
 # ============================================================
 
 @router.get("/argo/floats", response_model=List[ArgoFloat])
+@_dataset_guard
 def get_argo_floats():
     floats = argo_provider.get_floats()
     return floats
 
 
 @router.get("/argo/profiles", response_model=List[ArgoProfile])
+@_dataset_guard
 def get_argo_profiles():
     profiles = argo_provider.get_profiles()
     return profiles
 
 
 @router.get("/argo/profiles/{profile_id}", response_model=ArgoProfile)
+@_dataset_guard
 def get_argo_profile_by_id(profile_id: str):
     profile = argo_provider.get_profile(profile_id)
     if not profile:
@@ -608,6 +644,7 @@ def get_argo_profile_by_id(profile_id: str):
 
 
 @router.get("/argo/nearest", response_model=ArgoProfile)
+@_dataset_guard
 def get_nearest_argo_profile(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
@@ -620,6 +657,7 @@ def get_nearest_argo_profile(
 
 
 @router.get("/argo/{profile_id}/observations", response_model=List[ArgoObservationPoint])
+@_dataset_guard
 def get_argo_observations(profile_id: str):
     obs = argo_provider.get_profile_observations(profile_id)
     if obs is None:
@@ -628,6 +666,7 @@ def get_argo_observations(profile_id: str):
 
 
 @router.get("/argo/{profile_id}/matchup", response_model=ArgoMatchupResponse)
+@_dataset_guard
 def get_argo_hycom_matchup(
     profile_id: str,
     matchMode: Optional[str] = Query(
@@ -686,6 +725,7 @@ def _exclusion_reason(matchup: Dict[str, Any]) -> str:
 
 
 @router.get("/argo/matchup/summary")
+@_dataset_guard
 def get_argo_matchup_summary():
     """Regional model-vs-observation summary across every ingested profile.
 
@@ -831,6 +871,7 @@ def get_argo_matchup_summary():
 
 
 @router.get("/inspect")
+@_dataset_guard
 def inspect_point(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),

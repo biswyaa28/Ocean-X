@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import math
@@ -7,6 +8,29 @@ from datetime import datetime
 from app.core.config import settings
 from app.models.schemas import ScientificProvenance
 
+logger = logging.getLogger(__name__)
+
+
+class ArgoDataCorrupt(RuntimeError):
+    """The processed Argo JSON is on disk but could not be parsed.
+
+    A failed load must not be cached as an empty profile list: that is
+    indistinguishable from "the array contained no profiles", which is a
+    different claim about the data.
+    """
+
+    def __init__(self, path: Path, cause: Exception):
+        self.path = path
+        self.cause = cause
+        super().__init__(
+            f"Processed Argo JSON at {path} could not be parsed "
+            f"({type(cause).__name__}: {cause}). Every Argo profile, float and "
+            f"observation served by this API is measured from this file, so the "
+            f"failure cannot be reported as an absence of profiles. Restore it "
+            f"with: git checkout -- {path}."
+        )
+        self.__cause__ = cause
+
 
 class ArgoProvider:
     def __init__(self, data_path: Path = None, meta_path: Path = None):
@@ -14,18 +38,28 @@ class ArgoProvider:
         self.meta_path = meta_path or settings.PROCESSED_ARGO_META
         self._profiles: Optional[List[Dict[str, Any]]] = None
         self._metadata: Optional[Dict[str, Any]] = None
+        # Recorded rather than raised here, so importing the app never fails on
+        # a bad data file. get_profiles() turns it back into an exception.
+        self._load_error: Optional[ArgoDataCorrupt] = None
 
     def _load_data(self):
-        if self._profiles is None:
+        if self._profiles is None and self._load_error is None:
             if self.data_path.exists():
                 try:
                     with open(self.data_path, "r", encoding="utf-8") as f:
                         self._profiles = json.load(f)
                 except Exception as e:
-                    print(f"Error reading processed Argo JSON: {e}")
-                    self._profiles = []
+                    logger.exception(
+                        "Failed to parse the processed Argo JSON at %s. Every Argo "
+                        "endpoint is measured from this file, so this cannot be "
+                        "reported as an absence of profiles.",
+                        self.data_path,
+                    )
+                    self._load_error = ArgoDataCorrupt(self.data_path, e)
             else:
                 self._profiles = []
+        if self._load_error is not None:
+            raise self._load_error
 
     def get_metadata(self) -> Dict[str, Any]:
         if self._metadata is None:
