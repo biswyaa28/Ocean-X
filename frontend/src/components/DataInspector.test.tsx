@@ -93,3 +93,79 @@ describe('DataInspector — close button', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+/**
+ * Badge honesty contract.
+ *
+ * The badge is driven by the `dataStatus` the backend reported, not by
+ * `status === 'NO_REAL_MODEL_DATA'` alone. Three different backend situations
+ * share that status, and rendering all of them as "REAL DATASET — TIMESTAMP
+ * UNAVAILABLE" claimed a real dataset was present when none was, including in
+ * FIXTURE mode. An unrecognised status must also never fall through to REAL.
+ */
+describe('DataInspector — data status badge', () => {
+  const base: InspectionData = {
+    latitude: 18.2247,
+    longitude: 88.4,
+    timestamp: '2026-10-08 18:00 UTC',
+  };
+
+  const renderWith = (inspection: Partial<InspectionData>, layerStatus: GISLayer['status'] = 'REAL') =>
+    render(
+      <DataInspector
+        activeLayer={{ ...layer, status: layerStatus }}
+        inspection={{ ...base, ...inspection }}
+        onClose={vi.fn()}
+      />
+    );
+
+  it('says so plainly when no model data is available, never "REAL DATASET"', () => {
+    // backend inspect_point "no dataset installed", REAL mode
+    renderWith({ status: 'NO_REAL_MODEL_DATA', dataStatus: 'NOT CURRENTLY INTEGRATED' });
+    expect(screen.getAllByText('NOT CURRENTLY INTEGRATED').length).toBeGreaterThan(0);
+    expect(screen.queryByText('REAL DATASET — TIMESTAMP UNAVAILABLE')).toBeNull();
+  });
+
+  it('shows the simulated state when no model data is available in FIXTURE mode', () => {
+    renderWith({ status: 'NO_REAL_MODEL_DATA', dataStatus: 'SIMULATED' }, 'SIMULATED');
+    expect(screen.getAllByText('SIMULATED').length).toBeGreaterThan(0);
+    expect(screen.queryByText('REAL DATASET — TIMESTAMP UNAVAILABLE')).toBeNull();
+  });
+
+  it('reports a simulated dataset as simulated, not real, when the timestamp is unavailable', () => {
+    renderWith({
+      status: 'NO_REAL_MODEL_DATA',
+      dataStatus: 'SIMULATED DATASET — TIMESTAMP UNAVAILABLE',
+    });
+    expect(
+      screen.getAllByText('SIMULATED DATASET — TIMESTAMP UNAVAILABLE').length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText('REAL DATASET — TIMESTAMP UNAVAILABLE')).toBeNull();
+  });
+
+  it('still reports a real dataset with an unavailable timestamp as real', () => {
+    renderWith({
+      status: 'NO_REAL_MODEL_DATA',
+      dataStatus: 'REAL DATASET — TIMESTAMP UNAVAILABLE',
+    });
+    expect(
+      screen.getAllByText('REAL DATASET — TIMESTAMP UNAVAILABLE').length
+    ).toBeGreaterThan(0);
+  });
+
+  it('shows REAL for a successful reading', () => {
+    renderWith({ status: 'OK', currentSpeedMS: 0.15 });
+    expect(screen.getAllByText('REAL').length).toBeGreaterThan(0);
+  });
+
+  it('never falls through to REAL for a status it does not recognise', () => {
+    renderWith({ status: 'INSPECT_FAILED' });
+    expect(screen.queryByText('REAL')).toBeNull();
+    expect(screen.getAllByText('UNKNOWN STATUS').length).toBeGreaterThan(0);
+  });
+
+  it('never renders REAL DATASET for an unrecognised status', () => {
+    renderWith({ status: 'SOMETHING_NEW', dataStatus: 'BRAND_NEW_STATUS' as never });
+    expect(screen.queryByText('REAL')).toBeNull();
+    expect(screen.queryByText('REAL DATASET — TIMESTAMP UNAVAILABLE')).toBeNull();
+  });
+});

@@ -63,19 +63,69 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
   const isSimulated = activeLayer.status === 'SIMULATED';
   const isDerived = layerId === 'risk_zones';
   const isPending = activeLayer.status === 'REAL SOURCE — INGESTION PENDING';
-  const isTimestampUnavailable = inspection?.status === 'NO_REAL_MODEL_DATA' || inspection?.dataStatus === 'REAL DATASET — TIMESTAMP UNAVAILABLE';
   const isCyclone = layerId === 'cyclone';
 
-  // Determine badge text and colors
+  /**
+   * Badge wording is driven by what the backend actually reported in
+   * `dataStatus`, not by `status` alone. `NO_REAL_MODEL_DATA` covers three
+   * different situations that must not share one label: no dataset installed
+   * at all, and a timestamp that is unavailable in a real or simulated
+   * dataset. Keying off `status` rendered all three as
+   * "REAL DATASET — TIMESTAMP UNAVAILABLE", including in FIXTURE mode.
+   *
+   * An unrecognised status falls through to a neutral badge rather than REAL,
+   * so a status this component does not know about fails visibly instead of
+   * looking like real observations.
+   */
+  const DATA_STATUS_BADGES: Record<string, { text: string; style: string }> = {
+    'SIMULATED': { text: 'SIMULATED', style: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30' },
+    'SIMULATED DATASET — TIMESTAMP UNAVAILABLE': {
+      text: 'SIMULATED DATASET — TIMESTAMP UNAVAILABLE',
+      style: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+    },
+    'REAL DATASET — TIMESTAMP UNAVAILABLE': {
+      text: 'REAL DATASET — TIMESTAMP UNAVAILABLE',
+      style: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
+    },
+    'NOT CURRENTLY INTEGRATED': {
+      text: 'NOT CURRENTLY INTEGRATED',
+      style: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    },
+  };
+
+  const reportedDataStatus = inspection?.dataStatus;
+  const dataStatusBadge = reportedDataStatus ? DATA_STATUS_BADGES[reportedDataStatus] : undefined;
+
+  // A NO_REAL_MODEL_DATA result with no recognised dataStatus is the
+  // "nothing installed to read" case: say so, never imply a real dataset.
+  const isNoModelData = inspection?.status === 'NO_REAL_MODEL_DATA';
+  const isTimestampUnavailable =
+    reportedDataStatus === 'REAL DATASET — TIMESTAMP UNAVAILABLE' ||
+    reportedDataStatus === 'SIMULATED DATASET — TIMESTAMP UNAVAILABLE';
+  const isUnknownInspectionStatus =
+    inspection !== null &&
+    inspection.status !== 'OK' &&
+    !isNoModelData &&
+    !dataStatusBadge &&
+    !isCyclone;
+
+  // Determine badge text and colors. The default is deliberately NOT REAL:
+  // it is reached whenever the status is one this component does not model.
   let badgeText = 'REAL';
   let badgeStyle = 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
 
   if (isNotIntegrated) {
     badgeText = 'NOT CURRENTLY INTEGRATED';
     badgeStyle = 'bg-amber-500/15 text-amber-300 border-amber-500/30';
-  } else if (isTimestampUnavailable) {
-    badgeText = 'REAL DATASET — TIMESTAMP UNAVAILABLE';
-    badgeStyle = 'bg-purple-500/15 text-purple-300 border-purple-500/30';
+  } else if (dataStatusBadge) {
+    badgeText = dataStatusBadge.text;
+    badgeStyle = dataStatusBadge.style;
+  } else if (isNoModelData) {
+    badgeText = isSimulated ? 'SIMULATED' : 'NO REAL MODEL DATA AVAILABLE';
+    badgeStyle = 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+  } else if (isUnknownInspectionStatus) {
+    badgeText = 'UNKNOWN STATUS';
+    badgeStyle = 'bg-amber-500/15 text-amber-300 border-amber-500/30';
   } else if (isSimulated) {
     badgeText = 'SIMULATED';
     badgeStyle = 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30';
@@ -326,16 +376,19 @@ export const DataInspector: React.FC<DataInspectorProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-slate-400 pt-0.5 border-t border-white/10">
-            <span>DATA STATUS:</span>
-            <span className={`font-bold ${
-              isNotIntegrated ? 'text-amber-400' :
-              isTimestampUnavailable ? 'text-purple-400' :
-              isSimulated ? 'text-yellow-400' :
-              isDerived ? 'text-cyan-400' :
-              'text-emerald-400'
-            }`}>
-              {isTimestampUnavailable ? 'REAL DATASET — TIMESTAMP UNAVAILABLE' : (inspection?.dataStatus || activeLayer.status)}
-            </span>
+              <span>DATA STATUS:</span>
+              <span className={`font-bold ${
+                isNotIntegrated ? 'text-amber-400' :
+                isUnknownInspectionStatus ? 'text-amber-400' :
+                isTimestampUnavailable ? 'text-purple-400' :
+                isSimulated ? 'text-yellow-400' :
+                isDerived ? 'text-cyan-400' :
+                'text-emerald-400'
+              }`}>
+                {isTimestampUnavailable
+                      ? (reportedDataStatus ?? 'TIMESTAMP UNAVAILABLE')
+                      : (reportedDataStatus || badgeText)}
+              </span>
           </div>
         </div>
 
