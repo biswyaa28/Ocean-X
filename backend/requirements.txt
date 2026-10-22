@@ -9,7 +9,7 @@ dask>=2024.2.0
 # TEOS-10 / GSW: pressure (dbar) -> geometric depth (m) for the Argo matchup.
 gsw>=3.6.20
 pytest>=9.1.1
-httpx>=0.27.0
+httpx>=0.28.1
 # Reference cross-check for bilinear interpolation against scipy.interpolate (NumPy >= 2.0 compatible)
 scipy>=1.18.1
 
